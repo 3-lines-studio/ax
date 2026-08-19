@@ -31,7 +31,7 @@ fn main() {
         let tui_cfg = ax::tui::TuiConfig {
             base: cfg.base.clone(),
             model: cfg.model.clone(),
-            system: cfg.system.clone(),
+            system: resolve_system(&cfg),
             dir: cfg.dir.clone(),
             api_key: api_key(),
             resume: cfg.resume.clone(),
@@ -205,11 +205,7 @@ fn one_shot(cfg: &Config, prompt: &[String]) {
 }
 
 fn build_agent(cfg: &Config, on: impl FnMut(Event) + 'static) -> Agent<OpenAI> {
-    let system = if cfg.system.is_empty() {
-        system_prompt(&work_dir(cfg))
-    } else {
-        cfg.system.clone()
-    };
+    let system = resolve_system(cfg);
     Agent::new(OpenAI::new(cfg.base.clone(), api_key()))
         .model(cfg.model.clone())
         .system(system)
@@ -233,6 +229,14 @@ fn work_dir(cfg: &Config) -> String {
     std::env::current_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_default()
+}
+
+fn resolve_system(cfg: &Config) -> String {
+    if cfg.system.is_empty() {
+        system_prompt(&work_dir(cfg))
+    } else {
+        cfg.system.clone()
+    }
 }
 
 fn system_prompt(dir: &str) -> String {
