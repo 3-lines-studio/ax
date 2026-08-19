@@ -59,11 +59,22 @@ fn curl() -> Result<&'static Curl, String> {
 }
 
 unsafe fn load() -> Result<Curl, String> {
-    let lib = c"libcurl.so.4".as_ptr();
-    let handle = libc::dlopen(lib, libc::RTLD_NOW | libc::RTLD_LOCAL);
-    if handle.is_null() {
-        return Err(dlerror_str().unwrap_or_else(|| "dlopen libcurl.so.4 failed".into()));
+    #[cfg(target_os = "macos")]
+    const LIBS: &[&[u8]] = &[b"libcurl.4.dylib\0", b"libcurl.dylib\0"];
+    #[cfg(not(target_os = "macos"))]
+    const LIBS: &[&[u8]] = &[b"libcurl.so.4\0", b"libcurl.so\0", b"libcurl.so.3\0"];
+    let mut last_err = String::new();
+    for lib in LIBS {
+        let handle = libc::dlopen(lib.as_ptr() as *const libc::c_char, libc::RTLD_NOW | libc::RTLD_LOCAL);
+        if !handle.is_null() {
+            return load_syms(handle);
+        }
+        last_err = dlerror_str().unwrap_or_else(|| "dlopen failed".into());
     }
+    Err(last_err)
+}
+
+unsafe fn load_syms(handle: *mut libc::c_void) -> Result<Curl, String> {
     let sym = |name: &[u8]| -> Result<*mut c_void, String> {
         let s = CString::new(name).unwrap();
         let p = libc::dlsym(handle, s.as_ptr());
