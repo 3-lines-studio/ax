@@ -4,7 +4,7 @@ A minimal LLM coding agent harness with the terminal UX of
 [fx.sh](https://fx.sh) (vercel-labs/fx): a transcript TUI with streamed
 markdown, tool status lines, and a shell-style input bar.
 
-Release binary: **~760 KB** (stripped, `x86_64-linux`, dynamically linked
+Release binary: **~768 KB** (stripped, `x86_64-linux`, dynamically linked
 against system libcurl). No TUI framework, no markdown library — both are
 hand-rolled ports of fx's presentation layer.
 
@@ -84,7 +84,7 @@ archived automatically, so nothing is lost:
   `ax --resume last` resumes the most recent session;
   `ax --resume <id>` resumes by id
 - sessions live in `~/.config/ax/sessions/` (or `$XDG_CONFIG_HOME/ax/sessions/`); the live transcript is
-  `~/.config/ax/session.jsonl` (snake_case field names)
+  `~/.config/ax/session.jsonl` (PascalCase field names)
 
 ### Slash commands
 
@@ -212,7 +212,7 @@ let msgs = agent.run(&[ax::Message { role: "user".into(), content: "fix the fail
 
 | Variant                                  | Size   | exec to first paint |
 |------------------------------------------|--------|--------------------|
-| stable + lazy libcurl + TUI (this)       | ~747 KB | ~0.6 ms            |
+| stable + lazy libcurl + TUI (this)       | ~768 KB | ~0.6 ms            |
 | stable + rustls/ring, no TUI             | ~1.48 MB | —                 |
 
 The pure-Rust TLS stack (rustls + ring) is the size floor for a self-contained

@@ -4,8 +4,8 @@
 //! repeat. No memory, sessions, retries, parallel tool execution, or
 //! streaming. `run` never mutates its input.
 //!
-//! Message/ToolCall serialize with snake_case field names (OpenAI wire
-//! format).
+//! Message/ToolCall serialize with PascalCase field names (session
+//! storage); the OpenAI provider maps them to the wire format.
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
