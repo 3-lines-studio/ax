@@ -160,14 +160,3 @@ pub fn set_live_title(dir: &str, title: &str) {
     let _ = std::fs::create_dir_all(path.parent().unwrap());
     let _ = std::fs::write(path, title);
 }
-
-pub fn live_title(dir: &str) -> Option<String> {
-    let path = Path::new(dir).join(".ax").join("session.title");
-    std::fs::read_to_string(path).ok()
-}
-
-pub fn delete_session(dir: &str, id: &str) {
-    let path = store_dir(dir).join(format!("{id}.jsonl"));
-    let _ = std::fs::remove_file(path);
-    let _ = std::fs::remove_file(title_path(dir, id));
-}

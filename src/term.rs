@@ -455,14 +455,6 @@ pub fn cursor_hidden() -> &'static str {
     "\x1b[?25l"
 }
 
-pub fn scroll_region(top: u16, bottom: u16) -> String {
-    format!("\x1b[{top};{bottom}r")
-}
-
-pub fn reset_scroll_region() -> &'static str {
-    "\x1b[r"
-}
-
 pub fn enter_alt() -> &'static str {
     "\x1b[?1049h"
 }
