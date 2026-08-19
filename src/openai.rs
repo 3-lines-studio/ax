@@ -191,19 +191,17 @@ fn run_request(
     };
 
     let mut acc = Rc::try_unwrap(acc).ok().unwrap().into_inner();
-    let resp = if stream {
-        let body = if status == 200 {
-            let body = acc.response()?.body;
-            acc.finish(tx);
-            body
-        } else {
-            std::mem::take(&mut acc.buf)
-        };
-        crate::http::Response { status, body }
+    if stream && status == 200 {
+        let response = acc.response();
+        acc.finish(tx);
+        return Ok(response);
+    }
+    let body = if stream {
+        std::mem::take(&mut acc.buf)
     } else {
-        let raw = Rc::try_unwrap(raw).ok().unwrap().into_inner();
-        crate::http::Response { status, body: raw }
+        Rc::try_unwrap(raw).ok().unwrap().into_inner()
     };
+    let resp = crate::http::Response { status, body };
 
     if resp.status != 200 {
         let mut msg = String::new();
@@ -367,13 +365,14 @@ impl StreamAcc {
                     entry.id = Some(id);
                 }
                 if let Some(f) = call.function {
+                    let func = entry.function.get_or_insert_with(Default::default);
                     if let Some(name) = f.name {
-                        let func = entry.function.get_or_insert_with(Default::default);
                         func.name = Some(name);
                     }
                     if let Some(args) = f.arguments {
-                        let func = entry.function.get_or_insert_with(Default::default);
-                        func.arguments = Some(func.arguments.take().unwrap_or_default() + &args);
+                        func.arguments
+                            .get_or_insert_with(String::new)
+                            .push_str(&args);
                     }
                 }
             }
@@ -399,7 +398,7 @@ impl StreamAcc {
         let _ = tx.send(StreamEvent::Done);
     }
 
-    fn response(&self) -> Result<crate::http::Response, Error> {
+    fn response(&self) -> Response {
         let mut calls = Vec::new();
         for call in &self.calls {
             calls.push(ToolCall {
@@ -416,42 +415,18 @@ impl StreamAcc {
                     .unwrap_or_default(),
             });
         }
-        let body = serde_json::to_vec(&OaResponse {
-            choices: vec![OaChoice {
-                message: OaMessage {
-                    role: "assistant".into(),
-                    content: if self.content.is_empty() {
-                        None
-                    } else {
-                        Some(self.content.clone())
-                    },
-                    tool_calls: if calls.is_empty() {
-                        None
-                    } else {
-                        Some(
-                            calls
-                                .iter()
-                                .map(|c| OaToolCall {
-                                    id: c.id.clone(),
-                                    r#type: "function".into(),
-                                    function: OaFunction {
-                                        name: c.name.clone(),
-                                        arguments: c.arguments.clone(),
-                                    },
-                                })
-                                .collect(),
-                        )
-                    },
-                    tool_call_id: None,
-                },
-            }],
-            usage: OaUsage {
-                prompt_tokens: self.usage.prompt_tokens,
-                completion_tokens: self.usage.completion_tokens,
+        Response {
+            message: Message {
+                role: "assistant".into(),
+                content: self.content.clone(),
+                tool_calls: calls,
+                tool_call_id: String::new(),
             },
-        })
-        .map_err(err)?;
-        Ok(crate::http::Response { status: 200, body })
+            usage: Usage {
+                input: self.usage.prompt_tokens,
+                output: self.usage.completion_tokens,
+            },
+        }
     }
 }
 
@@ -552,7 +527,7 @@ struct OaToolFunction {
     parameters: Value,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 struct OaResponse {
     #[serde(default)]
     choices: Vec<OaChoice>,
@@ -560,7 +535,7 @@ struct OaResponse {
     usage: OaUsage,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 struct OaChoice {
     message: OaMessage,
 }
@@ -570,7 +545,7 @@ struct OaErrorPayload {
     message: String,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Deserialize, Default)]
 struct OaUsage {
     #[serde(default, rename = "prompt_tokens")]
     prompt_tokens: usize,

@@ -1,9 +1,13 @@
 //! Wire format round trip against a local HTTP server (plain http, no TLS
 //! needed for the test).
 
+use ax::openai::StreamEvent;
 use ax::{Message, OpenAI, Provider, Request, ToolCall, new_tool};
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc;
 use std::thread;
 
 #[test]
@@ -130,6 +134,73 @@ fn openai_round_trip() {
     assert_eq!(c.arguments, r#"{"path":"b.txt"}"#);
     assert_eq!(resp.usage.input, 123);
     assert_eq!(resp.usage.output, 7);
+}
+
+#[test]
+fn openai_stream_round_trip() {
+    let server = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = server.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+        let (mut sock, _) = server.accept().unwrap();
+        let mut req = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = sock.read(&mut buf).unwrap();
+            req.extend_from_slice(&buf[..n]);
+            if req.windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"a\\\"}\"}}]}}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        write!(
+            sock,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+    });
+
+    let p = OpenAI::new(format!("http://{addr}"), "k1");
+    let req = Request {
+        model: "m1",
+        system: "",
+        messages: &[Message {
+            role: "user".into(),
+            content: "go".into(),
+            tool_calls: Vec::new(),
+            tool_call_id: String::new(),
+        }],
+        tools: &[],
+    };
+    let (tx, rx) = mpsc::channel();
+    let response = p
+        .complete_stream(&req, &Arc::new(AtomicBool::new(false)), tx)
+        .join()
+        .unwrap()
+        .unwrap();
+    handle.join().unwrap();
+
+    assert_eq!(response.message.content, "hi");
+    assert_eq!(response.message.tool_calls.len(), 1);
+    assert_eq!(response.message.tool_calls[0].arguments, r#"{"path":"a"}"#);
+    assert_eq!(response.usage.input, 4);
+    assert_eq!(response.usage.output, 2);
+    let events: Vec<_> = rx.into_iter().collect();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::Done))
+    );
+    assert!(events.iter().any(|event| {
+        matches!(event, StreamEvent::ToolCall(call) if call.arguments == r#"{"path":"a"}"#)
+    }));
 }
 
 #[test]
