@@ -65,9 +65,11 @@ unsafe fn load() -> Result<Curl, String> {
     const LIBS: &[&[u8]] = &[b"libcurl.so.4\0", b"libcurl.so\0", b"libcurl.so.3\0"];
     let mut last_err = String::new();
     for lib in LIBS {
-        let handle = libc::dlopen(lib.as_ptr() as *const libc::c_char, libc::RTLD_NOW | libc::RTLD_LOCAL);
+        let handle = unsafe {
+            libc::dlopen(lib.as_ptr() as *const libc::c_char, libc::RTLD_NOW | libc::RTLD_LOCAL)
+        };
         if !handle.is_null() {
-            return load_syms(handle);
+            return unsafe { load_syms(handle) };
         }
         last_err = dlerror_str().unwrap_or_else(|| "dlopen failed".into());
     }
@@ -77,27 +79,29 @@ unsafe fn load() -> Result<Curl, String> {
 unsafe fn load_syms(handle: *mut libc::c_void) -> Result<Curl, String> {
     let sym = |name: &[u8]| -> Result<*mut c_void, String> {
         let s = CString::new(name).unwrap();
-        let p = libc::dlsym(handle, s.as_ptr());
+        let p = unsafe { libc::dlsym(handle, s.as_ptr()) };
         if p.is_null() {
             return Err(dlerror_str().unwrap_or_else(|| format!("dlsym {name:?} failed")));
         }
         Ok(p)
     };
     let setopt = sym(b"curl_easy_setopt")?;
-    let c = Curl {
-        global_init: std::mem::transmute(sym(b"curl_global_init")?),
-        easy_init: std::mem::transmute(sym(b"curl_easy_init")?),
-        setopt_string: std::mem::transmute(setopt),
-        setopt_long: std::mem::transmute(setopt),
-        setopt_ptr: std::mem::transmute(setopt),
-        setopt_write_cb: std::mem::transmute(setopt),
-        setopt_progress_cb: std::mem::transmute(setopt),
-        perform: std::mem::transmute(sym(b"curl_easy_perform")?),
-        getinfo_long: std::mem::transmute(sym(b"curl_easy_getinfo")?),
-        cleanup: std::mem::transmute(sym(b"curl_easy_cleanup")?),
-        strerror: std::mem::transmute(sym(b"curl_easy_strerror")?),
-        slist_append: std::mem::transmute(sym(b"curl_slist_append")?),
-        slist_free_all: std::mem::transmute(sym(b"curl_slist_free_all")?),
+    let c = unsafe {
+        Curl {
+            global_init: std::mem::transmute(sym(b"curl_global_init")?),
+            easy_init: std::mem::transmute(sym(b"curl_easy_init")?),
+            setopt_string: std::mem::transmute(setopt),
+            setopt_long: std::mem::transmute(setopt),
+            setopt_ptr: std::mem::transmute(setopt),
+            setopt_write_cb: std::mem::transmute(setopt),
+            setopt_progress_cb: std::mem::transmute(setopt),
+            perform: std::mem::transmute(sym(b"curl_easy_perform")?),
+            getinfo_long: std::mem::transmute(sym(b"curl_easy_getinfo")?),
+            cleanup: std::mem::transmute(sym(b"curl_easy_cleanup")?),
+            strerror: std::mem::transmute(sym(b"curl_easy_strerror")?),
+            slist_append: std::mem::transmute(sym(b"curl_slist_append")?),
+            slist_free_all: std::mem::transmute(sym(b"curl_slist_free_all")?),
+        }
     };
     unsafe { (c.global_init)(CURL_GLOBAL_DEFAULT) };
     Ok(c)
