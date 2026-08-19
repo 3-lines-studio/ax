@@ -314,6 +314,7 @@ impl Tui {
     fn handle_key(&mut self, key: Key) -> Result<bool, String> {
         match key {
             Key::CtrlC | Key::Esc => {}
+            Key::Ctrl(c) if c as u8 == 3 => {}
             _ => {
                 self.ctrl_c_pending = false;
                 self.ctrl_c_armed_ms = None;

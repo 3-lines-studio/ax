@@ -260,7 +260,15 @@ impl Terminal {
                     Some(9) if mods & 1 != 0 => Key::ShiftTab,
                     Some(9) => Key::Tab,
                     Some(c) if c <= 0x7f && mods & 4 != 0 => {
-                        Key::Ctrl(char::from(c as u8))
+                        let b = c as u8;
+                        let ctrl = if (b'a'..=b'z').contains(&b) {
+                            b - b'a' + 1
+                        } else if (b'A'..=b'Z').contains(&b) {
+                            b - b'A' + 1
+                        } else {
+                            b
+                        };
+                        Key::Ctrl(char::from(ctrl))
                     }
                     Some(c) if c <= 0x7f && mods & 2 != 0 && mods & 4 == 0 => {
                         Key::Alt(char::from(c as u8))
