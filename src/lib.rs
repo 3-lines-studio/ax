@@ -11,6 +11,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod markdown;
+pub mod curlffi;
 pub mod session;
 pub mod term;
 pub mod tui;

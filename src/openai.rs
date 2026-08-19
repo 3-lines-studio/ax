@@ -3,6 +3,12 @@
 use crate::{Error, Message, Provider, Request, Response, ToolCall, Usage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cell::RefCell;
+use std::ffi::{c_char, c_int, c_void};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
 pub struct OpenAI {
     base_url: String,
@@ -143,57 +149,44 @@ fn run_request(
     headers: &[(String, String)],
     body: &[u8],
     stream: bool,
-    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
-    tx: &std::sync::mpsc::Sender<StreamEvent>,
+    cancel: &Arc<AtomicBool>,
+    tx: &Sender<StreamEvent>,
 ) -> Result<Response, Error> {
-    let mut easy = curl::easy::Easy::new();
+    let mut easy = crate::curlffi::Easy::new().map_err(err)?;
     easy.url(url).map_err(err)?;
-    easy.post(true).map_err(err)?;
-    easy.post_fields_copy(body).map_err(err)?;
+    easy.post().map_err(err)?;
+    easy.post_fields(body).map_err(err)?;
     easy.fail_on_error(false).map_err(err)?;
-    let mut list = curl::easy::List::new();
-    for (k, v) in headers {
-        list.append(&format!("{k}: {v}")).map_err(err)?;
-    }
-    easy.http_headers(list).map_err(err)?;
+    easy.headers(headers).map_err(err)?;
 
-    let raw = std::rc::Rc::new(std::cell::RefCell::new(Vec::<u8>::new()));
-    let acc = std::rc::Rc::new(std::cell::RefCell::new(StreamAcc::default()));
-    {
+    let acc = Rc::new(RefCell::new(StreamAcc::default()));
+    let raw = Rc::new(RefCell::new(Vec::<u8>::new()));
+    let sink = if stream {
+        Sink::Stream(acc.clone(), tx.clone())
+    } else {
+        Sink::Raw(raw.clone())
+    };
+    let status = {
+        let mut state = ReqState {
+            sink,
+            cancel: cancel.clone(),
+        };
         let mut transfer = easy.transfer();
+        transfer.write_function(write_cb, &mut state as *mut ReqState as *mut c_void);
         if stream {
-            let c2 = cancel.clone();
-            let tx2 = tx.clone();
-            let acc2 = acc.clone();
-            transfer
-                .progress_function(move |_, _, _, _| !c2.load(std::sync::atomic::Ordering::Relaxed))
-                .map_err(err)?;
-            transfer
-                .write_function(move |data| {
-                    acc2.borrow_mut().feed(data, &tx2);
-                    Ok(data.len())
-                })
-                .map_err(err)?;
-            transfer.perform().map_err(|e| {
-                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                    Error::Provider("interrupted".into())
-                } else {
-                    err(e)
-                }
-            })?;
-        } else {
-            let raw2 = raw.clone();
-            transfer
-                .write_function(move |data| {
-                    raw2.borrow_mut().extend_from_slice(data);
-                    Ok(data.len())
-                })
-                .map_err(err)?;
-            transfer.perform().map_err(err)?;
+            transfer.progress_function(progress_cb, &mut state as *mut ReqState as *mut c_void);
         }
-    }
-    let status = easy.response_code().map_err(err)? as u16;
-    let mut acc = std::rc::Rc::try_unwrap(acc).ok().unwrap().into_inner();
+        transfer.perform().map_err(|e| {
+            if cancel.load(Ordering::Relaxed) {
+                Error::Provider("interrupted".into())
+            } else {
+                err(e)
+            }
+        })?;
+        easy.response_code().map_err(err)? as u16
+    };
+
+    let mut acc = Rc::try_unwrap(acc).ok().unwrap().into_inner();
     let resp = if stream {
         let body = if status == 200 {
             let body = acc.response()?.body;
@@ -204,7 +197,7 @@ fn run_request(
         };
         crate::http::Response { status, body }
     } else {
-        let raw = std::rc::Rc::try_unwrap(raw).ok().unwrap().into_inner();
+        let raw = Rc::try_unwrap(raw).ok().unwrap().into_inner();
         crate::http::Response { status, body: raw }
     };
 
@@ -437,6 +430,46 @@ impl StreamAcc {
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+enum Sink {
+    Stream(Rc<RefCell<StreamAcc>>, Sender<StreamEvent>),
+    Raw(Rc<RefCell<Vec<u8>>>),
+}
+
+struct ReqState {
+    sink: Sink,
+    cancel: Arc<AtomicBool>,
+}
+
+unsafe extern "C" fn write_cb(
+    ptr: *mut c_char,
+    size: usize,
+    nmemb: usize,
+    userdata: *mut c_void,
+) -> usize {
+    let st = unsafe { &mut *(userdata as *mut ReqState) };
+    let data = unsafe { std::slice::from_raw_parts(ptr as *const u8, size * nmemb) };
+    match &st.sink {
+        Sink::Stream(acc, tx) => acc.borrow_mut().feed(data, tx),
+        Sink::Raw(buf) => buf.borrow_mut().extend_from_slice(data),
+    }
+    size * nmemb
+}
+
+unsafe extern "C" fn progress_cb(
+    userdata: *mut c_void,
+    _dltotal: f64,
+    _dlnow: f64,
+    _ultotal: f64,
+    _ulnow: f64,
+) -> c_int {
+    let st = unsafe { &mut *(userdata as *mut ReqState) };
+    if st.cancel.load(Ordering::Relaxed) {
+        1
+    } else {
+        0
+    }
 }
 
 fn err(e: impl std::fmt::Display) -> Error {

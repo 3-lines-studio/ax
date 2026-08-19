@@ -130,6 +130,7 @@ pub fn run(cfg: TuiConfig) -> Result<(), String> {
     if tui.entries.is_empty() {
         tui.entries.push(Entry::Welcome);
     }
+    tui.paint(&mut term);
     let result = tui.loop_forever(&mut term);
     term.restore();
     if result.is_ok() {

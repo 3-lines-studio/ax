@@ -155,14 +155,20 @@ let msgs = agent.run(&[ax::Message { role: "user".into(), content: "fix the fail
   archive + resume picker instead of auto-resume.
 - No in-run abort beyond ctrl+c (same behavior).
 - HTTP uses system libcurl instead of Go's net/http; session files are
-  byte-compatible with ax-go.
+  byte-compatible with ax-go. libcurl is `dlopen`'d lazily on the first
+  request, so the binary has no hard link-time dependency on libcurl's
+  dependency tree (openssl, krb5, zstd, brotli, nghttp2/3, ssh2, …).
 
-## Size notes
+## Size and cold start
 
-| Variant                                  | Size   |
-|------------------------------------------|--------|
-| stable + system libcurl + TUI (this)     | ~760 KB |
-| stable + rustls/ring, no TUI             | ~1.48 MB |
+| Variant                                  | Size   | exec to first paint |
+|------------------------------------------|--------|--------------------|
+| stable + lazy libcurl + TUI (this)       | ~747 KB | ~0.6 ms            |
+| stable + rustls/ring, no TUI             | ~1.48 MB | —                 |
 
 The pure-Rust TLS stack (rustls + ring) is the size floor for a self-contained
-binary; system libcurl is the pragmatic choice for a sub-1 MB target.
+binary; system libcurl is the pragmatic choice for a sub-1 MB target. The
+lazy `dlopen` keeps exec fast: the binary only loads libc at start
+(`ldd` shows libcurl and its 29-library tree only after the first request),
+and the first paint happens before the input loop's first poll, so the prompt
+renders in ~0.6 ms instead of waiting for the 40 ms poll tick.
