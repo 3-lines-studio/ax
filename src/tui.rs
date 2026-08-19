@@ -1319,6 +1319,19 @@ impl Tui {
         let new_vis = new.len().min(capacity);
         let old_scrolled = old.len().saturating_sub(old_vis);
         let new_scrolled = new.len().saturating_sub(new_vis);
+        let jump = new_scrolled.saturating_sub(old_scrolled);
+        let mut d = 0;
+        while d < old.len() && d < new.len() && old[d] == new[d] {
+            d += 1;
+        }
+        if jump > capacity && old.len().saturating_sub(d) <= 2 {
+            for line in &new[d..] {
+                let _ = write!(out, "{}", term::move_to(rows as u16, 1));
+                let _ = write!(out, "{}\n", line);
+            }
+            self.streamed = new.to_vec();
+            return;
+        }
         // Patch path: all differences inside the visible window and the
         // content did not shrink below the previous scroll point.
         if new_scrolled >= old_scrolled {
