@@ -120,6 +120,13 @@ Ollama, vLLM.
 With no prompt and a TTY, starts the TUI (fresh session). With no prompt
 and no TTY, reads the prompt from stdin.
 
+## System prompt
+
+Default is minimal: identity + tool list + working directory. A user-owned
+system prompt can be placed at `~/.config/ax/SYSTEM.md` (or
+`$XDG_CONFIG_HOME/ax/SYSTEM.md`); it is appended after the built-in
+preamble. `-system TEXT` replaces the prompt entirely for that run.
+
 ## Design
 
 - **The loop is the only logic.** messages -> LLM -> tool calls -> results ->

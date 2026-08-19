@@ -206,7 +206,7 @@ fn one_shot(cfg: &Config, prompt: &[String]) {
 
 fn build_agent(cfg: &Config, on: impl FnMut(Event) + 'static) -> Agent<OpenAI> {
     let system = if cfg.system.is_empty() {
-        default_system(&work_dir(cfg))
+        system_prompt(&work_dir(cfg))
     } else {
         cfg.system.clone()
     };
@@ -235,12 +235,38 @@ fn work_dir(cfg: &Config) -> String {
         .unwrap_or_default()
 }
 
-fn default_system(dir: &str) -> String {
-    format!(
+fn system_prompt(dir: &str) -> String {
+    let mut out = format!(
         "You are a coding agent with read, write, edit and bash tools. \
-         Working directory: {dir}. Read files before editing them, prefer edit over \
-         rewriting files, and verify changes by running commands. Be brief."
-    )
+         Working directory: {dir}."
+    );
+    if let Some(user) = user_system_prompt() {
+        out.push_str("\n\n");
+        out.push_str(&user);
+    }
+    out
+}
+
+fn user_system_prompt() -> Option<String> {
+    let path = config_dir()?.join("ax").join("SYSTEM.md");
+    let text = std::fs::read_to_string(path).ok()?;
+    let text = text.trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+fn config_dir() -> Option<std::path::PathBuf> {
+    if let Ok(x) = std::env::var("XDG_CONFIG_HOME") {
+        if !x.is_empty() {
+            return Some(std::path::PathBuf::from(x));
+        }
+    }
+    std::env::var("HOME")
+        .ok()
+        .map(|h| std::path::PathBuf::from(h).join(".config"))
 }
 
 fn render_args(call: &ToolCall) -> String {
