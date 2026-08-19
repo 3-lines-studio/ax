@@ -40,7 +40,7 @@ jobs:
           merge-multiple: true
       - run: |
           cd dist
-          sha256sum ax-linux-x86_64 ax-linux-aarch64 ax-darwin-arm64 > SHA256SUMS
+          sha256sum ax-linux-x86_64 ax-linux-aarch64 ax-darwin-aarch64 > SHA256SUMS
           cp "$GITHUB_WORKSPACE/scripts/install.sh" install.sh
           gh release create "$GITHUB_REF_NAME" ax-* SHA256SUMS install.sh \
             --repo "$GITHUB_REPOSITORY" --generate-notes
