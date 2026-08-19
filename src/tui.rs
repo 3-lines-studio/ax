@@ -127,6 +127,20 @@ pub struct UserCommand {
     pub content: String,
 }
 
+#[derive(PartialEq, Clone, Copy)]
+enum LoginStep {
+    ApiKey,
+    Base,
+    Model,
+}
+
+struct LoginWizard {
+    step: LoginStep,
+    api_key: String,
+    base: String,
+    model: String,
+}
+
 impl SlashItem {
     fn builtin(spec: &SlashSpec) -> SlashItem {
         SlashItem {
@@ -207,6 +221,12 @@ const SLASH: &[SlashSpec] = &[
         command: "/status",
         help: "/status",
         description: "show runtime configuration",
+        category: "General",
+    },
+    SlashSpec {
+        command: "/login",
+        help: "/login",
+        description: "set api key, base url and model in ~/.config/ax/config",
         category: "General",
     },
     SlashSpec {
@@ -327,6 +347,7 @@ struct Tui {
     picker: Option<Picker>,
     picker_dismissed: Option<PickerKind>,
     user_commands: Vec<UserCommand>,
+    login: Option<LoginWizard>,
 }
 
 impl Tui {
@@ -377,6 +398,7 @@ impl Tui {
             picker: None,
             picker_dismissed: None,
             user_commands,
+            login: None,
         }
     }
 
@@ -574,6 +596,10 @@ impl Tui {
             Key::Esc => {
                 if self.picker.is_some() {
                     self.picker_dismiss();
+                } else if self.login.is_some() {
+                    self.login = None;
+                    self.entries
+                        .push(Entry::Notice(format!("{DIM}login cancelled{RESET}")));
                 } else {
                     self.input.esc();
                 }
@@ -781,6 +807,14 @@ impl Tui {
 
     fn submit(&mut self) {
         let v = self.input.take();
+        if self.login.is_some() {
+            if let Some(rest) = v.strip_prefix('/') {
+                self.slash(rest);
+                return;
+            }
+            self.login_advance(v);
+            return;
+        }
         if v.is_empty() {
             return;
         }
@@ -1027,6 +1061,7 @@ impl Tui {
                     self.cfg.base, self.cfg.model, dir, key
                 )));
             }
+            "login" => self.login_start(),
             "stats" => {
                 let msg = format!(
                     "{DIM}session · {} in / {} out{RESET}",
@@ -1061,6 +1096,128 @@ impl Tui {
                         "{DIM}unknown command: /{name}{RESET}"
                     )));
                 }
+            }
+        }
+    }
+
+    fn login_start(&mut self) {
+        if self.running {
+            self.entries.push(Entry::Notice(format!(
+                "{DIM}busy: finish the current turn first{RESET}"
+            )));
+            return;
+        }
+        if self.login.is_some() {
+            self.entries.push(Entry::Notice(format!(
+                "{DIM}login already in progress{RESET}"
+            )));
+            return;
+        }
+        let env_key = std::env::var("OPENAI_API_KEY")
+            .map(|k| !k.is_empty())
+            .unwrap_or(false);
+        self.login = Some(LoginWizard {
+            step: LoginStep::ApiKey,
+            api_key: if env_key {
+                String::new()
+            } else {
+                self.cfg.api_key.clone()
+            },
+            base: self.cfg.base.clone(),
+            model: self.cfg.model.clone(),
+        });
+        self.entries.push(Entry::Notice(self.login_prompt()));
+    }
+
+    fn login_prompt(&self) -> String {
+        let w = self.login.as_ref().unwrap();
+        match w.step {
+            LoginStep::ApiKey => {
+                let cur = if std::env::var("OPENAI_API_KEY")
+                    .map(|k| !k.is_empty())
+                    .unwrap_or(false)
+                {
+                    "env set".to_string()
+                } else if self.cfg.api_key.is_empty() {
+                    "unset".to_string()
+                } else {
+                    "set".to_string()
+                };
+                format!("{DIM}login · api key (empty keeps current · current: {cur}){RESET}")
+            }
+            LoginStep::Base => format!(
+                "{DIM}login · base url (empty keeps current · current: {}){RESET}",
+                if w.base.is_empty() { "unset" } else { &w.base }
+            ),
+            LoginStep::Model => format!(
+                "{DIM}login · model (empty keeps current · current: {}){RESET}",
+                if w.model.is_empty() {
+                    "unset"
+                } else {
+                    &w.model
+                }
+            ),
+        }
+    }
+
+    fn login_advance(&mut self, v: String) {
+        let v = v.trim().to_string();
+        let Some(step) = self.login.as_ref().map(|w| w.step) else {
+            return;
+        };
+        match step {
+            LoginStep::ApiKey => {
+                let w = self.login.as_mut().unwrap();
+                if !v.is_empty() {
+                    w.api_key = v;
+                }
+                w.step = LoginStep::Base;
+            }
+            LoginStep::Base => {
+                let w = self.login.as_mut().unwrap();
+                if !v.is_empty() {
+                    w.base = v;
+                }
+                w.step = LoginStep::Model;
+            }
+            LoginStep::Model => {
+                let w = self.login.as_mut().unwrap();
+                if !v.is_empty() {
+                    w.model = v;
+                }
+            }
+        }
+        if step == LoginStep::Model {
+            let w = self.login.take().unwrap();
+            self.finish_login(w);
+        } else {
+            self.entries.push(Entry::Notice(self.login_prompt()));
+        }
+    }
+
+    fn finish_login(&mut self, w: LoginWizard) {
+        match write_login_config(&self.cfg.ax_root, &w.api_key, &w.base, &w.model) {
+            Ok(()) => {
+                self.cfg.api_key = w.api_key.clone();
+                self.cfg.base = w.base.clone();
+                self.cfg.model = w.model.clone();
+                self.model_display = compact_model_label(&w.model);
+                let key = if w.api_key.is_empty() { "unset" } else { "set" };
+                self.entries.push(Entry::Notice(format!(
+                    "{DIM}login saved to {}/config · key: {key} · base: {} · model: {}{RESET}",
+                    self.cfg.ax_root, w.base, w.model
+                )));
+                if std::env::var("OPENAI_API_KEY")
+                    .map(|k| !k.is_empty())
+                    .unwrap_or(false)
+                {
+                    self.entries.push(Entry::Notice(format!(
+                        "{DIM}note: OPENAI_API_KEY env overrides config{RESET}"
+                    )));
+                }
+            }
+            Err(e) => {
+                self.entries.push(Entry::Notice(format!("{DIM}{e}{RESET}")));
             }
         }
     }
@@ -1654,7 +1811,7 @@ impl Tui {
         }
         let mut segs: Vec<String> = Vec::new();
         if self.cfg.api_key.is_empty() {
-            segs.push(format!("{DIM}set OPENAI_API_KEY{RESET}"));
+            segs.push(format!("{DIM}no api key: /login or OPENAI_API_KEY{RESET}"));
         }
         segs.push(self.model_display.clone());
         if let Some(extra) = scroll_hint {
@@ -1663,12 +1820,25 @@ impl Tui {
         format!("{DIM}{}{RESET}", segs.join(" · "))
     }
 
+    fn composer_prefix(&self) -> String {
+        match &self.login {
+            Some(w) => match w.step {
+                LoginStep::ApiKey => format!("{USER_RAIL}api key> {RESET}"),
+                LoginStep::Base => format!("{USER_RAIL}base url> {RESET}"),
+                LoginStep::Model => format!("{USER_RAIL}model> {RESET}"),
+            },
+            None => format!("{USER_RAIL}┃{RESET} "),
+        }
+    }
+
     fn chrome_rows(&self) -> (Vec<String>, usize, usize) {
         self.chrome_rows_with_hint(None)
     }
 
     fn chrome_rows_with_hint(&self, scroll_hint: Option<&str>) -> (Vec<String>, usize, usize) {
-        let (input_rows, cursor_row, cursor_col) = self.input.render(self.cols as usize);
+        let (input_rows, cursor_row, cursor_col) = self
+            .input
+            .render_with(&self.composer_prefix(), self.cols as usize);
         let cap = (self.rows as usize / 2).max(4);
         let mut vis_start = input_rows.len().saturating_sub(cap);
         if cursor_row < vis_start {
@@ -2240,10 +2410,6 @@ impl Input {
         self.cursor = i;
     }
 
-    fn render(&self, width: usize) -> (Vec<String>, usize, usize) {
-        self.render_with(&format!("{USER_RAIL}┃{RESET} "), width)
-    }
-
     fn render_with(&self, prefix: &str, width: usize) -> (Vec<String>, usize, usize) {
         let pwidth = visible_width(prefix);
         let avail = width.saturating_sub(pwidth).max(1);
@@ -2305,6 +2471,56 @@ fn line_display_pos(chars: &[char], char_idx: usize, avail: usize) -> (usize, us
     } else {
         (w / a, w % a)
     }
+}
+
+fn write_login_config(ax_root: &str, api_key: &str, base: &str, model: &str) -> Result<(), String> {
+    let dir = std::path::Path::new(ax_root);
+    std::fs::create_dir_all(dir).map_err(|e| format!("login: create config dir: {e}"))?;
+    let path = dir.join("config");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut out = String::new();
+    let mut wrote = [false; 3];
+    for line in existing.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        let Some((k, _)) = trimmed.split_once('=') else {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        };
+        match k.trim() {
+            "api_key" => {
+                out.push_str(&format!("api_key = {api_key}\n"));
+                wrote[0] = true;
+            }
+            "base" => {
+                out.push_str(&format!("base = {base}\n"));
+                wrote[1] = true;
+            }
+            "model" => {
+                out.push_str(&format!("model = {model}\n"));
+                wrote[2] = true;
+            }
+            _ => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    for (i, line) in [
+        (0, format!("api_key = {api_key}\n")),
+        (1, format!("base = {base}\n")),
+        (2, format!("model = {model}\n")),
+    ] {
+        if !wrote[i] {
+            out.push_str(&line);
+        }
+    }
+    std::fs::write(&path, out).map_err(|e| format!("login: write config: {e}"))
 }
 
 pub fn load_user_commands(ax_root: &str) -> Vec<UserCommand> {
@@ -3047,4 +3263,71 @@ fn exec_tool(tools: &[Tool], call: &ToolCall) -> String {
         }
     }
     format!("error: unknown tool: {}", call.name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_login_config_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("ax-login-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config"),
+            "# comment\nother = 1\nmodel = \"old\"\n",
+        )
+        .unwrap();
+        let root = dir.to_str().unwrap();
+        write_login_config(root, "sk-new", "http://localhost:11434/v1", "glm-4.5").unwrap();
+        let text = std::fs::read_to_string(dir.join("config")).unwrap();
+        assert!(text.contains("# comment\n"));
+        assert!(text.contains("other = 1\n"));
+        assert!(text.contains("api_key = sk-new\n"));
+        assert!(text.contains("base = http://localhost:11434/v1\n"));
+        assert!(text.contains("model = glm-4.5\n"));
+        assert!(!text.contains("old"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_login_config_creates_file() {
+        let dir = std::env::temp_dir().join(format!("ax-login-new-{}", std::process::id()));
+        let root = dir.to_str().unwrap();
+        write_login_config(root, "sk-x", "https://api.openai.com/v1", "gpt-4.1-mini").unwrap();
+        let text = std::fs::read_to_string(dir.join("config")).unwrap();
+        assert!(text.contains("api_key = sk-x\n"));
+        assert!(text.contains("base = https://api.openai.com/v1\n"));
+        assert!(text.contains("model = gpt-4.1-mini\n"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn login_wizard_writes_config() {
+        let dir = std::env::temp_dir().join(format!("ax-login-wiz-{}", std::process::id()));
+        let cfg = TuiConfig {
+            base: "https://old.example/v1".into(),
+            model: "old-model".into(),
+            system: String::new(),
+            dir: String::new(),
+            ax_root: dir.to_str().unwrap().to_string(),
+            skills_root: String::new(),
+            api_key: String::new(),
+            resume: None,
+        };
+        let mut tui = Tui::new(cfg);
+        tui.login_start();
+        tui.login_advance("sk-abc".into());
+        tui.login_advance("https://new.example/v1".into());
+        tui.login_advance("new-model".into());
+        assert_eq!(tui.cfg.api_key, "sk-abc");
+        assert_eq!(tui.cfg.base, "https://new.example/v1");
+        assert_eq!(tui.cfg.model, "new-model");
+        assert!(tui.login.is_none());
+        let text = std::fs::read_to_string(dir.join("config")).unwrap();
+        assert!(text.contains("api_key = sk-abc\n"));
+        assert!(text.contains("base = https://new.example/v1\n"));
+        assert!(text.contains("model = new-model\n"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

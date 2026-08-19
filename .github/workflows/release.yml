@@ -17,8 +17,6 @@ jobs:
             target: linux-x86_64
           - os: ubuntu-24.04-arm
             target: linux-aarch64
-          - os: macos-13
-            target: darwin-x86_64
           - os: macos-14
             target: darwin-arm64
     runs-on: ${{ matrix.os }}
@@ -42,7 +40,7 @@ jobs:
           merge-multiple: true
       - run: |
           cd dist
-          sha256sum ax-linux-x86_64 ax-linux-aarch64 ax-darwin-x86_64 ax-darwin-arm64 > SHA256SUMS
+          sha256sum ax-linux-x86_64 ax-linux-aarch64 ax-darwin-arm64 > SHA256SUMS
           cp "$GITHUB_WORKSPACE/scripts/install.sh" install.sh
           gh release create "$GITHUB_REF_NAME" ax-* SHA256SUMS install.sh \
             --repo "$GITHUB_REPOSITORY" --generate-notes
