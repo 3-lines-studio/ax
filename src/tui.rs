@@ -133,6 +133,10 @@ pub fn run(cfg: TuiConfig) -> Result<(), String> {
     tui.paint(&mut term);
     let result = tui.loop_forever(&mut term);
     term.restore();
+    let mut out = std::io::stdout();
+    let _ = write!(out, "{}", term::move_to(tui.last_input_row, 1));
+    let _ = out.write_all(b"\x1b[J\n");
+    let _ = out.flush();
     if result.is_ok() {
         tui.on_exit();
     }
@@ -145,6 +149,8 @@ struct Tui {
     running: bool,
     cancel: Arc<AtomicBool>,
     ctrl_c_pending: bool,
+    ctrl_c_armed_ms: Option<Instant>,
+    last_input_row: u16,
     toggle_full_pending: bool,
     exit_alt_pending: bool,
     tx: Option<Sender<TurnEvent>>,
@@ -190,6 +196,8 @@ impl Tui {
             running: false,
             cancel: Arc::new(AtomicBool::new(false)),
             ctrl_c_pending: false,
+            ctrl_c_armed_ms: None,
+            last_input_row: 1,
             toggle_full_pending: false,
             exit_alt_pending: false,
             tx: None,
@@ -259,6 +267,12 @@ impl Tui {
                 self.exit_alt_pending = false;
                 self.leave_alt(term);
             }
+            if let Some(t) = self.ctrl_c_armed_ms {
+                if t.elapsed().as_millis() >= 3000 {
+                    self.ctrl_c_armed_ms = None;
+                    self.ctrl_c_pending = false;
+                }
+            }
             self.drain_events();
             self.paint(term);
         }
@@ -275,6 +289,13 @@ impl Tui {
     }
 
     fn handle_key(&mut self, key: Key) -> Result<bool, String> {
+        match key {
+            Key::CtrlC | Key::Esc => {}
+            _ => {
+                self.ctrl_c_pending = false;
+                self.ctrl_c_armed_ms = None;
+            }
+        }
         if self.screen != Screen::None {
             return self.handle_screen_key(key);
         }
@@ -323,16 +344,28 @@ impl Tui {
         }
         match key {
             Key::CtrlC => {
-                if self.running {
-                    if self.ctrl_c_pending {
+                let now = Instant::now();
+                let within = self
+                    .ctrl_c_armed_ms
+                    .map(|t| now.duration_since(t).as_millis() < 3000)
+                    .unwrap_or(false);
+                if within {
+                    if self.running {
                         self.cancel.store(true, Ordering::Relaxed);
-                        self.want_quit = true;
-                    } else {
-                        self.ctrl_c_pending = true;
                     }
-                    return Ok(true);
+                    self.want_quit = true;
+                } else {
+                    self.ctrl_c_armed_ms = Some(now);
+                    self.ctrl_c_pending = true;
+                    if self.running {
+                        self.cancel.store(true, Ordering::Relaxed);
+                    }
+                    if !self.input.buf.is_empty() {
+                        self.input.buf.clear();
+                        self.input.cursor = 0;
+                    }
                 }
-                return Ok(false);
+                return Ok(true);
             }
             Key::Ctrl(c) => {
                 let letter = Self::ctrl_letter(c).unwrap_or(c);
@@ -377,7 +410,18 @@ impl Tui {
     fn handle_screen_key(&mut self, key: Key) -> Result<bool, String> {
         match key {
             Key::CtrlC => {
-                self.close_screen();
+                let now = Instant::now();
+                let within = self
+                    .ctrl_c_armed_ms
+                    .map(|t| now.duration_since(t).as_millis() < 3000)
+                    .unwrap_or(false);
+                if within {
+                    self.want_quit = true;
+                } else {
+                    self.ctrl_c_armed_ms = Some(now);
+                    self.ctrl_c_pending = true;
+                    self.close_screen();
+                }
                 Ok(true)
             }
             Key::Ctrl(c) => {
@@ -569,6 +613,7 @@ impl Tui {
         self.running = true;
         self.cancel = Arc::new(AtomicBool::new(false));
         self.ctrl_c_pending = false;
+        self.ctrl_c_armed_ms = None;
         self.turn_start = Instant::now();
         self.activity = Activity::Thinking;
         self.cur_text = None;
@@ -673,7 +718,6 @@ impl Tui {
                         cancelled,
                     } => {
                         self.running = false;
-                        self.ctrl_c_pending = false;
                         self.sess_in += usage.input;
                         self.sess_out += usage.output;
                         if let Some(mut md) = self.md.take() {
@@ -681,16 +725,24 @@ impl Tui {
                             let tail = md.finish();
                             if let Some(pending) = pending {
                                 for (drained, block) in pending.borrow_mut().drain(..) {
-                                    if !drained.is_empty() {
+                                    if let Some(i) = cur.take() {
+                                        self.entries[i] = Entry::Text(drained);
+                                    } else if !drained.is_empty() {
                                         self.entries.push(Entry::Text(drained));
                                     }
                                     self.push_block(block);
+                                    cur = None;
                                 }
                             }
                             if !tail.is_empty() {
-                                self.entries.push(Entry::Text(tail));
+                                if let Some(i) = cur.take() {
+                                    self.entries[i] = Entry::Text(tail);
+                                } else {
+                                    self.entries.push(Entry::Text(tail));
+                                }
                             }
                         }
+                        cur = None;
                         self.cur_text = None;
                         self.msgs = messages.clone();
                         if cancelled {
@@ -1278,6 +1330,7 @@ impl Tui {
         let capacity = rows.saturating_sub(chrome.len()).max(1);
         self.update_content(out, &content, rows, capacity);
         let vis = content.len().min(capacity);
+        self.last_input_row = (vis + 1) as u16;
         for row in (vis + 1)..=rows {
             let _ = write!(out, "{}", term::move_to(row as u16, 1));
             let _ = out.write_all(term::clear_eol().as_bytes());
@@ -1381,7 +1434,7 @@ impl Tui {
     }
 
     fn hint_line(&self, scroll_hint: Option<&str>) -> String {
-        if self.running && self.ctrl_c_pending {
+        if self.ctrl_c_pending {
             return format!("{DIM}press ctrl+c again to exit{RESET}");
         }
         let mut segs: Vec<String> = Vec::new();

@@ -56,8 +56,11 @@ auto · gpt-4.1-mini
 - **enter** sends, **up/down** history, **left/right** edit,
   **Ctrl+a/e/b/f/p/n/w/u/k/d/l/o** edit words/lines, **Alt+left/right**
   word moves, **Tab** completes slash commands
-- **ctrl+c** during a run asks to confirm ("press ctrl+c again to exit");
-  a second ctrl+c quits
+- **ctrl+c** twice within 3s exits (fx contract): the first press cancels
+  any running turn, clears the draft, and shows "press ctrl+c again to
+  exit"; any other key disarms, and the prompt expires after 3s. On exit the
+  footer is cleared and a newline is printed so the shell prompt lands on a
+  fresh line
 
 ### Sessions
 
