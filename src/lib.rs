@@ -98,9 +98,12 @@ where
         name,
         description,
         parameters: serde_json::from_str(schema).unwrap_or(Value::Null),
-        run: Box::new(move |raw| match serde_json::from_str::<T>(raw) {
-            Ok(args) => run(args),
-            Err(e) => format!("error: invalid arguments: {e}"),
+        run: Box::new(move |raw| {
+            let raw = if raw.trim().is_empty() { "{}" } else { raw };
+            match serde_json::from_str::<T>(raw) {
+                Ok(args) => run(args),
+                Err(e) => format!("error: invalid arguments: {e}"),
+            }
         }),
     }
 }

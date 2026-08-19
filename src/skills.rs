@@ -76,11 +76,13 @@ fn first_line(s: &str) -> String {
 
 pub fn skill_tools(root: &str) -> Vec<Tool> {
     let root_list = root.to_string();
+    #[derive(serde::Deserialize)]
+    struct NoArgs {}
     let list = crate::new_tool(
         "skills",
         "List available skills with their names and descriptions.",
-        "{}",
-        move |_args: ()| {
+        "{\"type\":\"object\",\"properties\":{}}",
+        move |_args: NoArgs| {
             let skills = list_skills(&root_list);
             if skills.is_empty() {
                 return "No skills installed (see ~/.agents/skills).".to_string();
