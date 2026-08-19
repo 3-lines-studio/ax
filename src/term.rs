@@ -232,10 +232,6 @@ pub fn clear_eol() -> &'static str {
     "\x1b[K"
 }
 
-pub fn clear_screen() -> &'static str {
-    "\x1b[2J\x1b[H"
-}
-
 pub fn cursor_visible() -> &'static str {
     "\x1b[?25h"
 }

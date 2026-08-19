@@ -505,7 +505,6 @@ impl Tui {
             self.rows = rows;
             self.cols = cols;
             self.last_frame.clear();
-            let _ = term.out().write_all(crate::term::clear_screen().as_bytes());
         }
         let frame = self.compose();
         self.emit(term, &frame);
