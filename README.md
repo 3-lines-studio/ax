@@ -29,7 +29,8 @@ OPENAI_API_KEY=... ./target/release/ax -model gpt-4.1-mini
 𝒂x v0.1.0 · Run /help for commands
 
 ┃ fix the failing test
-  ● Ran go test ./...
+  ● 1 tool call · 1 command
+  └ Ran go test ./...
 
 fixed the test in ax_test.go
 
@@ -40,10 +41,12 @@ auto · gpt-4.1-mini
 
 - user prompts render as cards on a `┃` rail; assistant answers stream as
   markdown (headings, tables, task lists, blockquotes, highlighted code)
-- tool calls collapse to a single status line — `● Running …` while active,
-  `● Ran …` when done (fx-style; the raw output goes to the model, not the
-  transcript)
-- `• Thinking (Ns)` blinks while the model is working
+- tool calls collapse to an fx-style group — `● N tool calls · M kind` with
+  `├`/`└` branch statuses (`● Running …` shows live while a tool executes,
+  `● 1 tool call · 1 command` + `└ Ran …` once done; the raw output goes to
+  the model, not the transcript)
+- `• Thinking (Ns)` blinks while the model works; once content streams it
+  drops to a dim `(↑x ↓y)` counter row, then a `Ns (↑x ↓y)` summary
 - the transcript streams into the **terminal scrollback**: mouse wheel and
   Shift+PgUp scroll the whole session natively, exactly like fx — the chrome
   (title, input, status line) floats below the transcript at the top and pins

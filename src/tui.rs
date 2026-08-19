@@ -47,7 +47,7 @@ enum Entry {
     Code(String),
     Table(String),
     Rule,
-    Tool { active: bool, label: String },
+    Tool { label: String, kind: String },
     Notice(String),
     Summary { secs: u64, input: usize, output: usize },
 }
@@ -77,8 +77,8 @@ enum Screen {
 pub enum TurnEvent {
     AssistantDelta(String),
     AssistantDone,
-    ToolStart(String),
-    ToolResult { label: String },
+    ToolStart { label: String, kind: String },
+    ToolResult { label: String, kind: String },
     Tokens { input: usize, output: usize },
     Notice(String),
     End {
@@ -153,6 +153,7 @@ struct Tui {
     md_pending: Option<Rc<RefCell<Vec<(String, Block)>>>>,
     msgs: Vec<Message>,
     activity: Activity,
+    tool_running: Option<String>,
     turn_start: Instant,
     input: Input,
     model_display: String,
@@ -197,6 +198,7 @@ impl Tui {
             md_pending: None,
             msgs: Vec::new(),
             activity: Activity::Idle,
+            tool_running: None,
             turn_start: Instant::now(),
             input: Input::default(),
             model_display,
@@ -645,24 +647,15 @@ impl Tui {
                         cur = None;
                         self.activity = Activity::Thinking;
                     }
-                    TurnEvent::ToolStart(label) => {
-                        self.entries.push(Entry::Tool {
-                            active: true,
-                            label: label.clone(),
-                        });
+                    TurnEvent::ToolStart { label, .. } => {
+                        self.tool_running = Some(label.clone());
                     }
-                    TurnEvent::ToolResult { label } => {
-                        for e in self.entries.iter_mut().rev() {
-                            if let Entry::Tool { active, .. } = e {
-                                if *active {
-                                    *e = Entry::Tool {
-                                        active: false,
-                                        label: label.clone(),
-                                    };
-                                    break;
-                                }
-                            }
-                        }
+                    TurnEvent::ToolResult { label, kind } => {
+                        self.tool_running = None;
+                        self.entries.push(Entry::Tool {
+                            label: label.clone(),
+                            kind: kind.clone(),
+                        });
                         self.activity = Activity::Thinking;
                     }
                     TurnEvent::Tokens { input, output } => {
@@ -901,8 +894,8 @@ impl Tui {
                     }
                     for c in &m.tool_calls {
                         self.entries.push(Entry::Tool {
-                            active: false,
                             label: tool_label(c, false),
+                            kind: tool_kind(c),
                         });
                     }
                 }
@@ -1210,8 +1203,11 @@ impl Tui {
                     "{DIM}{}{RESET}",
                     "\u{2500}".repeat(markdown::ansi::HORIZONTAL_RULE_WIDTH)
                 )),
-                Entry::Tool { active: _, label } => {
-                    rows.push(format!("{USER_RAIL}●{RESET} {label}"));
+                Entry::Tool { label, kind } => {
+                    rows.push(format!(
+                        "{USER_RAIL}●{RESET} {DIM}1 tool call · 1 {kind}{RESET}"
+                    ));
+                    rows.push(format!("{DIM}└ {label}{RESET}"));
                 }
                 Entry::Notice(text) => rows.push(text.clone()),
                 Entry::Summary {
@@ -1229,20 +1225,41 @@ impl Tui {
             }
             rows.push(String::new());
         }
+        if let Some(label) = &self.tool_running {
+            let now = self.turn_start.elapsed();
+            let half = (now.as_millis() as i64 / 500) % 2 == 0;
+            let marker = if half { "●" } else { " " };
+            rows.push(format!("{PERMISSION_AUTO}{marker} {label}{RESET}"));
+        } else {
         match &self.activity {
-            Activity::Thinking | Activity::Streaming => {
-                let secs = self.turn_start.elapsed().as_secs();
-                let mut line = format!("{PERMISSION_AUTO}• Thinking ({secs}s){RESET}");
+            Activity::Thinking => {
+                let now = self.turn_start.elapsed();
+                let secs = now.as_secs();
+                let half = (now.as_millis() as i64 / 500) % 2 == 0;
+                let head = if half {
+                    format!("{PERMISSION_AUTO}• Thinking ({secs}s)")
+                } else {
+                    format!(" {PERMISSION_AUTO} Thinking ({secs}s)")
+                };
+                rows.push(format!(
+                    "{head}{DIM} (↑{} ↓{}){RESET}",
+                    tok(self.live_in),
+                    tok(self.live_out)
+                ));
+            }
+            Activity::Streaming => {
                 if self.live_in > 0 || self.live_out > 0 {
-                    line.push_str(&format!(
-                        " {DIM}(↑{} ↓{}){RESET}",
+                    rows.push(format!(
+                        "{DIM}  (↑{} ↓{}){RESET}",
                         tok(self.live_in),
                         tok(self.live_out)
                     ));
+                } else {
+                    rows.push(String::from("  "));
                 }
-                rows.push(line);
             }
             _ => {}
+        }
         }
         rows
     }
@@ -2020,6 +2037,16 @@ fn build_tools(dir: &str) -> Vec<Tool> {
     ]
 }
 
+fn tool_kind(call: &ToolCall) -> String {
+    match call.name.as_str() {
+        "bash" => "command".into(),
+        "read" => "read".into(),
+        "write" => "write".into(),
+        "edit" => "edit".into(),
+        _ => "command".into(),
+    }
+}
+
 fn tool_label(call: &ToolCall, running: bool) -> String {
     #[derive(serde::Deserialize)]
     struct Args {
@@ -2097,10 +2124,15 @@ fn run_turn(
                 break;
             }
             let label = tool_label(&call, true);
-            let _ = tx.send(TurnEvent::ToolStart(label.clone()));
+            let kind = tool_kind(&call);
+            let _ = tx.send(TurnEvent::ToolStart {
+                label: label.clone(),
+                kind: kind.clone(),
+            });
             let output = exec_tool(&tools, &call);
             let _ = tx.send(TurnEvent::ToolResult {
                 label: tool_label(&call, false),
+                kind,
             });
             h.push(Message {
                 role: "tool".into(),
