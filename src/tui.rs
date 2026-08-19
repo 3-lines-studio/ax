@@ -2211,12 +2211,7 @@ fn load_user_commands(ax_root: &str) -> Vec<UserCommand> {
         let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let description = content
-            .lines()
-            .map(|l| l.trim())
-            .find(|l| !l.is_empty())
-            .unwrap_or("")
-            .to_string();
+        let (description, content) = crate::skills::parse_frontmatter(&content);
         out.push(UserCommand {
             name: name.to_string(),
             description,

@@ -44,7 +44,7 @@ pub fn list_skills(root: &str) -> Vec<Skill> {
     out
 }
 
-fn parse_frontmatter(text: &str) -> (String, String) {
+pub fn parse_frontmatter(text: &str) -> (String, String) {
     if let Some(rest) = text.strip_prefix("---") {
         if let Some(end) = rest.find("\n---") {
             let fm = &rest[..end];

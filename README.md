@@ -99,7 +99,9 @@ archived automatically, so nothing is lost:
 **User commands** are prompt templates: `~/.config/ax/commands/<name>.md`
 (create the dir). `/name [args]` submits the file content as your message;
 `$ARGUMENTS` in the file is replaced by the args. They appear in the
-`/help` catalog and the picker under `User`.
+`/help` catalog and the picker under `User`. An optional YAML frontmatter
+`description:` names them in the catalog; without it, the first non-blank
+line is used.
 
 ### Skills
 
