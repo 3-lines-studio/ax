@@ -91,11 +91,9 @@ archived automatically, so nothing is lost:
 
 `/help` opens a searchable command catalog. Supported:
 `/help /clear /new /reset /resume /rename /status /stats /model /models
-/permissions /settings /appearance /copy /version /quit`.
+/copy /version /quit`.
 
 - `/models` browses models from `{base}/models`; Enter selects
-- `/permissions` cycles auto → ask → yolo (shown in the status line)
-- `/settings` and `/appearance` open the settings catalog
 - `/copy` copies the last assistant response (OSC 52)
 
 ### One-shot
@@ -159,7 +157,7 @@ let msgs = agent.run(&[ax::Message { role: "user".into(), content: "fix the fail
 - `src/tui.rs` — transcript TUI: top-anchored fx chrome (title, input,
   status line) with native-scroll streaming, user cards, streamed blocks,
   tool status, activity/summary lines, command catalog screens
-  (help/resume/models/settings), session store, full-transcript mode
+  (help/resume/models), session store, full-transcript mode
 - `src/term.rs` — raw terminal layer (termios, keys incl. CSI modifiers and
   SGR mouse, bracketed paste, alternate screen)
 
@@ -167,6 +165,8 @@ let msgs = agent.run(&[ax::Message { role: "user".into(), content: "fix the fail
 
 - Full transcript TUI instead of a scrolling REPL; fresh sessions with an
   archive + resume picker instead of auto-resume.
+- No permission system — tools always run (yolo). Sandboxing is expected to
+  live outside ax (containers, seccomp, etc.).
 - No in-run abort beyond ctrl+c (same behavior).
 - HTTP uses system libcurl instead of Go's net/http; session files are
   byte-compatible with ax-go. libcurl is `dlopen`'d lazily on the first

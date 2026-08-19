@@ -24,7 +24,7 @@ const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[38;5;245m";
 const DIVIDER: &str = "\x1b[38;5;240m";
-const PERMISSION_AUTO: &str = "\x1b[38;5;252m";
+const ACTIVITY: &str = "\x1b[38;5;252m";
 const HINT: &str = "\x1b[38;5;255m";
 const SELECTED: &str = "\x1b[1;38;5;255m";
 const USER_RAIL: &str = "\x1b[38;5;255m";
@@ -71,7 +71,6 @@ enum Screen {
     Help,
     Resume,
     Models,
-    Settings,
 }
 
 pub enum TurnEvent {
@@ -126,9 +125,6 @@ const SLASH: &[SlashSpec] = &[
     SlashSpec { command: "/stats", help: "/stats", description: "show token and turn statistics", category: "Account",  },
     SlashSpec { command: "/model", help: "/model <id-or-query>", description: "choose what model and reasoning effort to use", category: "Model",  },
     SlashSpec { command: "/models", help: "/models", description: "browse available models", category: "Model",  },
-    SlashSpec { command: "/permissions", help: "/permissions [ask|auto|yolo]", description: "choose what ax is allowed to do", category: "Security",  },
-    SlashSpec { command: "/settings", help: "/settings", description: "browse and update settings", category: "Appearance",  },
-    SlashSpec { command: "/appearance", help: "/appearance", description: "choose input and transcript presentation", category: "Appearance",  },
     SlashSpec { command: "/copy", help: "/copy", description: "copy the last assistant response", category: "Session",  },
     SlashSpec { command: "/version", help: "/version", description: "show the ax version", category: "General",  },
     SlashSpec { command: "/quit", help: "/quit (/exit)", description: "exit the interactive shell", category: "General",  },
@@ -203,7 +199,6 @@ struct Tui {
     models: Vec<String>,
     models_loading: bool,
     models_rx: Option<Receiver<Result<Vec<String>, String>>>,
-    permission: u8,
     picker: Option<Picker>,
     picker_dismissed: Option<PickerKind>,
 }
@@ -252,7 +247,6 @@ impl Tui {
             models: Vec::new(),
             models_loading: false,
             models_rx: None,
-            permission: 0,
             picker: None,
             picker_dismissed: None,
         }
@@ -523,12 +517,7 @@ impl Tui {
                 self.sel = (self.sel + 8).min(n.saturating_sub(1));
                 Ok(true)
             }
-            Key::Left | Key::Right => {
-                if self.screen == Screen::Settings {
-                    self.cycle_permission();
-                }
-                Ok(true)
-            }
+            Key::Left | Key::Right => Ok(true),
             Key::Tab => {
                 if self.screen == Screen::Models {
                     let n = self.catalog_item_count();
@@ -927,8 +916,6 @@ impl Tui {
                 self.open_screen(Screen::Models);
             }
             "models" => self.open_screen(Screen::Models),
-            "permissions" => self.cycle_permission(),
-            "settings" | "appearance" => self.open_screen(Screen::Settings),
             "copy" => self.copy_last(),
             "version" => {
                 self.entries
@@ -942,10 +929,6 @@ impl Tui {
                     .push(Entry::Notice(format!("{DIM}unknown command: /{name}{RESET}")));
             }
         }
-    }
-
-    fn cycle_permission(&mut self) {
-        self.permission = (self.permission + 1) % 3;
     }
 
     fn fresh_session(&mut self, archive: bool) {
@@ -1082,7 +1065,6 @@ impl Tui {
             Screen::Help => self.help_items().len(),
             Screen::Resume => self.filtered_sessions().len(),
             Screen::Models => self.filtered_models().len(),
-            Screen::Settings => self.settings_items().len(),
             _ => 0,
         }
     }
@@ -1114,20 +1096,6 @@ impl Tui {
             .iter()
             .filter(|m| q.is_empty() || m.to_lowercase().contains(&q))
             .collect()
-    }
-
-    fn settings_items(&self) -> Vec<(&'static str, String)> {
-        let q = self.input.buf().trim().to_lowercase();
-        let mode = match self.permission {
-            0 => "auto".to_string(),
-            1 => "ask".to_string(),
-            _ => "yolo".to_string(),
-        };
-        if q.is_empty() || "permission mode".contains(&q) || "permissions".contains(&q) {
-            vec![("Permission mode", mode)]
-        } else {
-            Vec::new()
-        }
     }
 
     fn catalog_activate(&mut self) {
@@ -1165,9 +1133,6 @@ impl Tui {
                         self.cfg.model
                     )));
                 }
-            }
-            Screen::Settings => {
-                self.close_screen();
             }
             Screen::None => {}
         }
@@ -1259,38 +1224,12 @@ impl Tui {
                     }
                 }
             }
-            Screen::Settings => {
-                let mode = match self.permission {
-                    0 => "auto".to_string(),
-                    1 => "ask".to_string(),
-                    _ => "yolo".to_string(),
-                };
-                let items: Vec<(&'static str, String)> =
-                    if q.is_empty() || "permission mode".contains(&q) || "permissions".contains(&q) {
-                        vec![("Permission mode", mode)]
-                    } else {
-                        Vec::new()
-                    };
-                out.push(format!("{SELECTED}Settings{RESET}"));
-                out.push(format!("{DIM}Interface{RESET}"));
-                push_catalog_items(&mut self.window_start, sel, &mut out, items.len(), rows, |i| {
-                    let (name, value) = &items[i];
-                    let style = if i == sel { SELECTED } else { DIM };
-                    let mut r = format!("{style}  {name}{RESET}");
-                    let desc_col = width * 2 / 3;
-                    let pad = desc_col.saturating_sub(visible_width(&r));
-                    r.push_str(&" ".repeat(pad));
-                    r.push_str(&format!("{DIM}{value}{RESET}"));
-                    r
-                });
-            }
             Screen::None => {}
         }
         let hint = match screen {
             Screen::Help => "↑↓ Navigate     Enter Open     Esc Close",
             Screen::Resume => "↑↓ Navigate     Enter Open     Esc Close",
             Screen::Models => "↑↓ Navigate     Enter Open     Esc Close",
-            Screen::Settings => "↑↓ Navigate     ←→ Change     Esc Close",
             Screen::None => "",
         };
         out.push(format!("{DIM}{hint}{RESET}"));
@@ -1363,7 +1302,7 @@ impl Tui {
             let now = self.turn_start.elapsed();
             let half = (now.as_millis() as i64 / 500) % 2 == 0;
             let marker = if half { "●" } else { " " };
-            rows.push(format!("{PERMISSION_AUTO}{marker} {label}{RESET}"));
+            rows.push(format!("{ACTIVITY}{marker} {label}{RESET}"));
         } else {
         match &self.activity {
             Activity::Thinking => {
@@ -1371,9 +1310,9 @@ impl Tui {
                 let secs = now.as_secs();
                 let half = (now.as_millis() as i64 / 500) % 2 == 0;
                 let head = if half {
-                    format!("{PERMISSION_AUTO}• Thinking ({secs}s)")
+                    format!("{ACTIVITY}• Thinking ({secs}s)")
                 } else {
-                    format!(" {PERMISSION_AUTO} Thinking ({secs}s)")
+                    format!(" {ACTIVITY} Thinking ({secs}s)")
                 };
                 rows.push(format!(
                     "{head}{DIM} (↑{} ↓{}){RESET}",
@@ -1521,13 +1460,6 @@ impl Tui {
         let mut segs: Vec<String> = Vec::new();
         if self.cfg.api_key.is_empty() {
             segs.push(format!("{DIM}set OPENAI_API_KEY{RESET}"));
-        }
-        match self.permission {
-            0 => segs.push(format!(
-                "{PERMISSION_AUTO}auto{RESET}"
-            )),
-            1 => segs.push("ask".into()),
-            _ => segs.push("YOLO".into()),
         }
         segs.push(self.model_display.clone());
         if let Some(extra) = scroll_hint {
