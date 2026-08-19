@@ -185,9 +185,10 @@ struct NeedsInt {
 
 #[test]
 fn new_tool_bad_arguments() {
-    let bad = new_tool("bad", "needs int", "{}", |_: NeedsInt| {
-        "unreachable".to_string()
+    let tool = new_tool("bad", "needs int", "{}", |args: NeedsInt| {
+        args.n.to_string()
     });
-    let got = (bad.run)(r#"{"n":"x"}"#);
+    let got = (tool.run)(r#"{"n":"x"}"#);
     assert!(got.contains("invalid arguments"), "got: {got}");
+    assert_eq!((tool.run)(r#"{"n":42}"#), "42");
 }

@@ -1572,9 +1572,11 @@ pub enum Block {
     Rule,
 }
 
+type BlockHandler = Box<dyn FnMut(Block, &mut String)>;
+
 pub struct Markdown {
     out: String,
-    on_block: Option<Box<dyn FnMut(Block, &mut String)>>,
+    on_block: Option<BlockHandler>,
     line_buf: Vec<u8>,
     pending_top_level_line: Vec<u8>,
     pipe_buf: Vec<u8>,
@@ -2569,7 +2571,7 @@ mod block_render {
             }
             let mut register = super::register_fn(footnotes, next);
             inline_render::write_inline(
-                body[start..end].as_bytes(),
+                &body.as_bytes()[start..end],
                 out,
                 false,
                 link_id,
@@ -2830,6 +2832,7 @@ pub mod highlight {
         };
     }
 
+    #[allow(clippy::needless_update)]
     pub static PROFILES: &[Profile] = &[
         p!(
             line_comments = &["//"],

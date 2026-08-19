@@ -281,6 +281,8 @@ pub fn run(cfg: TuiConfig) -> Result<(), String> {
     result
 }
 
+type PendingBlocks = Rc<RefCell<Vec<(String, Block)>>>;
+
 struct Tui {
     cfg: TuiConfig,
     entries: Vec<Entry>,
@@ -295,7 +297,7 @@ struct Tui {
     rx: Option<Receiver<TurnEvent>>,
     cur_text: Option<usize>,
     md: Option<Markdown>,
-    md_pending: Option<Rc<RefCell<Vec<(String, Block)>>>>,
+    md_pending: Option<PendingBlocks>,
     msgs: Vec<Message>,
     activity: Activity,
     tool_running: Option<String>,
@@ -1734,11 +1736,9 @@ impl Tui {
         self.sync_picker();
         let scroll_hint = if self.full_scroll > 0 {
             let max_scroll = self.full_max_scroll();
-            let pct = if max_scroll > 0 {
-                (self.full_scroll * 100) / max_scroll
-            } else {
-                0
-            };
+            let pct = (self.full_scroll * 100)
+                .checked_div(max_scroll)
+                .unwrap_or(0);
             format!(" · {pct}%")
         } else {
             String::new()
@@ -1754,8 +1754,8 @@ impl Tui {
         }
         let start = total.saturating_sub(view_h + self.full_scroll);
         let mut frame = Vec::new();
-        for i in start..total.min(start + view_h) {
-            frame.push(all[i].clone());
+        for item in &all[start..total.min(start + view_h)] {
+            frame.push(item.clone());
         }
         while frame.len() < view_h {
             frame.push(String::new());
@@ -2111,16 +2111,18 @@ impl Input {
 
     fn line_bounds(&self) -> (usize, usize) {
         let chars: Vec<char> = self.buf.chars().collect();
+        let n = chars.len();
+        let cur = self.cursor.min(n);
         let mut start = 0;
-        for i in 0..self.cursor.min(chars.len()) {
-            if chars[i] == '\n' {
+        for (i, &c) in chars[..cur].iter().enumerate() {
+            if c == '\n' {
                 start = i + 1;
             }
         }
         let mut end = chars.len();
-        for i in self.cursor..chars.len() {
-            if chars[i] == '\n' {
-                end = i;
+        for (i, &c) in chars[cur..].iter().enumerate() {
+            if c == '\n' {
+                end = cur + i;
                 break;
             }
         }
@@ -2162,9 +2164,9 @@ impl Input {
         }
         let next_start = end + 1;
         let mut next_end = chars.len();
-        for i in next_start..chars.len() {
-            if chars[i] == '\n' {
-                next_end = i;
+        for (i, &c) in chars[next_start..].iter().enumerate() {
+            if c == '\n' {
+                next_end = next_start + i;
                 break;
             }
         }
@@ -2221,6 +2223,7 @@ impl Input {
         let s = String::from_utf8_lossy(bytes);
         for c in s.chars() {
             if c == '\r' {
+                self.insert('\n');
                 continue;
             }
             self.insert(c);

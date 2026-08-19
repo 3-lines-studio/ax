@@ -112,7 +112,7 @@ pub fn list_sessions(dir: &str) -> Vec<SessionMeta> {
             path,
         });
     }
-    out.sort_by(|a, b| b.updated.cmp(&a.updated));
+    out.sort_by_key(|m| std::cmp::Reverse(m.updated));
     out
 }
 

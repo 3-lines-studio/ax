@@ -15,6 +15,8 @@ pub struct OpenAI {
     api_key: String,
 }
 
+type BuiltRequest = (String, Vec<(String, String)>, Vec<u8>);
+
 pub enum StreamEvent {
     Content(String),
     ToolCall(ToolCall),
@@ -72,11 +74,7 @@ impl OpenAI {
         }
     }
 
-    fn build_request(
-        &self,
-        req: &Request,
-        stream: bool,
-    ) -> Result<(String, Vec<(String, String)>, Vec<u8>), Error> {
+    fn build_request(&self, req: &Request, stream: bool) -> Result<BuiltRequest, Error> {
         let mut msgs = Vec::with_capacity(req.messages.len() + 1);
         if !req.system.is_empty() {
             msgs.push(OaMessage {

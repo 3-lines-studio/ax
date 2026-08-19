@@ -19,10 +19,10 @@ cargo clippy --fix --allow-dirty && cargo fmt && cargo test
 
 ## Known exceptions
 
-- `src/markdown.rs` is a byte-exact port of fx's markdown renderer. Clippy
-  reports ~16 style nits there (`type_complexity`, redundant `as_bytes`).
-  Leave them. Do not refactor the port's code or add allow-attributes unless
-  explicitly asked.
+- `src/markdown.rs` is a byte-exact port of fx's markdown renderer. It has
+  one targeted `#[allow(clippy::needless_update)]` on the `PROFILES` table:
+  the `p!` macro legitimately fills partial field sets from `Profile::empty()`.
+  Do not remove it or refactor the port's code beyond lint fixes.
 - `src/curlffi.rs` dlopens libcurl at runtime. The dlsym→fn-pointer
   transmutes are deliberate and annotated with explicit types. Do not
   "simplify" them.
