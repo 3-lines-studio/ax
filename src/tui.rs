@@ -371,27 +371,12 @@ impl Tui {
         }
         match key {
             Key::CtrlC => {
-                let now = Instant::now();
-                let within = self
-                    .ctrl_c_armed_ms
-                    .map(|t| now.duration_since(t).as_millis() < 3000)
-                    .unwrap_or(false);
-                if within {
-                    if self.running {
-                        self.cancel.store(true, Ordering::Relaxed);
-                    }
-                    self.want_quit = true;
-                } else {
-                    self.ctrl_c_armed_ms = Some(now);
-                    self.ctrl_c_pending = true;
-                    if self.running {
-                        self.cancel.store(true, Ordering::Relaxed);
-                    }
-                    if !self.input.buf.is_empty() {
-                        self.input.buf.clear();
-                        self.input.cursor = 0;
-                    }
-                }
+                self.ctrl_c();
+                return Ok(true);
+            }
+            Key::Ctrl(c) if c as u8 == 3 => {
+                // Ctrl+C via modifyOtherKeys (ESC[27;5;99~)
+                self.ctrl_c();
                 return Ok(true);
             }
             Key::Ctrl(c) => {
@@ -615,6 +600,30 @@ impl Tui {
             self.leave_alt(term);
             self.mode = Mode::Inline;
             self.streamed.clear();
+        }
+    }
+
+    fn ctrl_c(&mut self) {
+        let now = Instant::now();
+        let within = self
+            .ctrl_c_armed_ms
+            .map(|t| now.duration_since(t).as_millis() < 3000)
+            .unwrap_or(false);
+        if within {
+            if self.running {
+                self.cancel.store(true, Ordering::Relaxed);
+            }
+            self.want_quit = true;
+        } else {
+            self.ctrl_c_armed_ms = Some(now);
+            self.ctrl_c_pending = true;
+            if self.running {
+                self.cancel.store(true, Ordering::Relaxed);
+            }
+            if !self.input.buf.is_empty() {
+                self.input.buf.clear();
+                self.input.cursor = 0;
+            }
         }
     }
 

@@ -28,6 +28,10 @@ impl Terminal {
             return Err("tcsetattr failed".into());
         }
         let mut out = std::io::stdout();
+        let _ = out.write_all(b"\x1b[>4;2m"); // xterm modifyOtherKeys: encode modified keys
+        if std::env::var_os("TMUX").is_none() {
+            let _ = out.write_all(b"\x1b[>1u"); // kitty keyboard push: CSI-u for modified keys
+        }
         let _ = out.write_all(b"\x1b[?2004h"); // bracketed paste on
         let _ = out.write_all(b"\x1b[?25l"); // hide cursor (we draw it)
         let _ = out.flush();
@@ -35,6 +39,10 @@ impl Terminal {
     }
 
     pub fn restore(&mut self) {
+        if std::env::var_os("TMUX").is_none() {
+            let _ = self.out.write_all(b"\x1b[<u"); // kitty keyboard pop
+        }
+        let _ = self.out.write_all(b"\x1b[>4;0m"); // modifyOtherKeys off
         let _ = self.out.write_all(b"\x1b[?2004l");
         let _ = self.out.write_all(b"\x1b[?25h");
         let _ = self.out.write_all(b"\x1b[0m\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1049l\x1b[?25h");
@@ -244,14 +252,19 @@ impl Terminal {
             }
             b'Z' => return Ok(Key::ShiftTab),
             b'u' => {
-                // Kitty CSI-u: ESC [ <key> ; <mod> u
-                return Ok(match (num(0), mods) {
-                    (Some(13), 2) | (Some(13), 3) => Key::ShiftEnter,
-                    (Some(13), _) => Key::Enter,
-                    (Some(127), 2) => Key::Backspace,
-                    (Some(127), _) => Key::Backspace,
-                    (Some(9), 2) => Key::ShiftTab,
-                    (Some(9), _) => Key::Tab,
+                // Kitty CSI-u: ESC [ <key> ; <mod> u — mods bitmask: 1=shift 2=alt 4=ctrl
+                return Ok(match num(0) {
+                    Some(13) if mods & 3 != 0 => Key::ShiftEnter,
+                    Some(13) => Key::Enter,
+                    Some(127) => Key::Backspace,
+                    Some(9) if mods & 1 != 0 => Key::ShiftTab,
+                    Some(9) => Key::Tab,
+                    Some(c) if c <= 0x7f && mods & 4 != 0 => {
+                        Key::Ctrl(char::from(c as u8))
+                    }
+                    Some(c) if c <= 0x7f && mods & 2 != 0 && mods & 4 == 0 => {
+                        Key::Alt(char::from(c as u8))
+                    }
                     _ => Key::Esc,
                 });
             }
@@ -263,11 +276,31 @@ impl Terminal {
                     Some(5) => Key::PageUp,
                     Some(6) => Key::PageDown,
                     Some(15) => Key::Ctrl(char::from(15)), // F5 -> toggle (Ctrl+O)
-                    Some(27) => match (num(1), num(2)) {
-                        (Some(2), Some(13)) | (Some(3), Some(13)) => Key::ShiftEnter,
-                        (_, Some(13)) => Key::Enter,
-                        _ => Key::Esc,
-                    },
+                    Some(27) => {
+                        // modifyOtherKeys: ESC [ 27 ; <mod> ; <code> ~
+                        // mod bits (xterm value minus 1): 1=shift 2=alt 4=ctrl
+                        let mx = num(1).unwrap_or(1);
+                        let code = num(2).unwrap_or(0);
+                        let ctrl = mx & 4 != 0;
+                        let alt = mx & 2 != 0;
+                        let shift = mx & 1 != 0;
+                        return Ok(match code {
+                            13 if shift && !ctrl || alt && !ctrl => Key::ShiftEnter,
+                            13 => Key::Enter,
+                            9 if shift && !ctrl => Key::ShiftTab,
+                            9 => Key::Tab,
+                            127 | 8 => Key::Backspace,
+                            27 => Key::Esc,
+                            c if ctrl && (b'a'..=b'z').contains(&(c as u8)) => {
+                                Key::Ctrl(char::from(c as u8 - b'a' + 1))
+                            }
+                            c if ctrl && (b'A'..=b'Z').contains(&(c as u8)) => {
+                                Key::Ctrl(char::from(c as u8 - b'A' + 1))
+                            }
+                            c if alt && !ctrl && c <= 0x7f => Key::Alt(c as u8 as char),
+                            _ => Key::Esc,
+                        });
+                    }
                     _ => Key::Esc,
                 })
             }
