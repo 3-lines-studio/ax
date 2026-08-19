@@ -1,6 +1,6 @@
 //! Built-in tools: bash, read, write, edit.
 
-use crate::{new_tool, Tool};
+use crate::{Tool, new_tool};
 use serde::Deserialize;
 
 const MAX_OUTPUT: usize = 16 * 1024;

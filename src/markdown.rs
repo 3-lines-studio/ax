@@ -168,7 +168,7 @@ mod text_util {
         }
     }
 
-    pub fn without_terminal_hard_break_marker<'a>(line: &'a [u8], line_has_lf: bool) -> &'a [u8] {
+    pub fn without_terminal_hard_break_marker(line: &[u8], line_has_lf: bool) -> &[u8] {
         if !line_has_lf || line.is_empty() || line[line.len() - 1] != b'\\' {
             return line;
         }
@@ -176,7 +176,7 @@ mod text_util {
         while slash_start > 0 && line[slash_start - 1] == b'\\' {
             slash_start -= 1;
         }
-        if (line.len() - slash_start) % 2 == 0 {
+        if (line.len() - slash_start).is_multiple_of(2) {
             return line;
         }
         &line[..line.len() - 1]
@@ -435,7 +435,6 @@ mod display_width {
             _ => bytes[0] as u32,
         }
     }
-
 }
 
 mod block_parse {
@@ -475,8 +474,7 @@ mod block_parse {
     }
 
     pub fn has_indented_code_prefix(line: &[u8]) -> bool {
-        !line.is_empty()
-            && (line[0] == b'\t' || (line.len() >= 4 && &line[..4] == b"    "))
+        !line.is_empty() && (line[0] == b'\t' || (line.len() >= 4 && &line[..4] == b"    "))
     }
 
     pub fn deindent_code_line(line: &[u8]) -> &[u8] {
@@ -773,7 +771,7 @@ mod block_parse {
 
 mod inline_render {
     use super::ansi;
-        use super::text_util;
+    use super::text_util;
 
     pub fn write_inline_no_bold(
         text: &[u8],
@@ -793,17 +791,23 @@ mod inline_render {
                 i += 1;
                 continue;
             }
-            if !in_code && c == b'\\' && i + 1 < text.len() && text_util::is_escaped_punctuation_at(text, i + 1) {
+            if !in_code
+                && c == b'\\'
+                && i + 1 < text.len()
+                && text_util::is_escaped_punctuation_at(text, i + 1)
+            {
                 stripped.extend_from_slice(&text[i..i + 2]);
                 i += 2;
                 continue;
             }
-            if !in_code && c == b'_' && text_util::is_valid_underscore_open(text, i, 2) {
-                if let Some(closer) = text_util::find_underscore_closer(text, i + 2, 2) {
-                    stripped.extend_from_slice(&text[i + 2..closer]);
-                    i = closer + 2;
-                    continue;
-                }
+            if !in_code
+                && c == b'_'
+                && text_util::is_valid_underscore_open(text, i, 2)
+                && let Some(closer) = text_util::find_underscore_closer(text, i + 2, 2)
+            {
+                stripped.extend_from_slice(&text[i + 2..closer]);
+                i = closer + 2;
+                continue;
             }
             if !in_code && i + 1 < text.len() && c == b'*' && text[i + 1] == b'*' {
                 i += 2;
@@ -812,7 +816,13 @@ mod inline_render {
             stripped.push(c);
             i += 1;
         }
-        write_inline(&stripped, out, restore_underline_after_link, link_id, footnotes);
+        write_inline(
+            &stripped,
+            out,
+            restore_underline_after_link,
+            link_id,
+            footnotes,
+        );
     }
 
     pub fn write_inline(
@@ -853,49 +863,64 @@ mod inline_render {
                 continue;
             }
 
-            if c == b'\\' && i + 1 < text.len() && text_util::is_escaped_punctuation_at(text, i + 1) {
+            if c == b'\\' && i + 1 < text.len() && text_util::is_escaped_punctuation_at(text, i + 1)
+            {
                 if text[i + 1] == b'<' {
+                    link_admission_suppressed_until = link_admission_suppressed_until
+                        .max(angle_autolink_candidate_end(text, i + 1));
+                }
+                if text[i + 1] == b'!'
+                    && i + 2 < text.len()
+                    && text[i + 2] == b'['
+                    && let Some(candidate_end) = malformed_inline_link_candidate_end(text, i + 2)
+                {
+                    push_slice(out, &text[i + 1..candidate_end]);
                     link_admission_suppressed_until =
-                        link_admission_suppressed_until.max(angle_autolink_candidate_end(text, i + 1));
+                        link_admission_suppressed_until.max(candidate_end);
+                    i = candidate_end;
+                    continue;
                 }
-                if text[i + 1] == b'!' && i + 2 < text.len() && text[i + 2] == b'[' {
-                    if let Some(candidate_end) = malformed_inline_link_candidate_end(text, i + 2) {
-                        push_slice(out, &text[i + 1..candidate_end]);
-                        link_admission_suppressed_until = link_admission_suppressed_until.max(candidate_end);
-                        i = candidate_end;
-                        continue;
-                    }
-                }
-                if text[i + 1] == b'[' {
-                    if let Some(candidate_end) = malformed_inline_link_candidate_end(text, i + 1) {
-                        link_admission_suppressed_until = link_admission_suppressed_until.max(candidate_end);
-                    }
+                if text[i + 1] == b'['
+                    && let Some(candidate_end) = malformed_inline_link_candidate_end(text, i + 1)
+                {
+                    link_admission_suppressed_until =
+                        link_admission_suppressed_until.max(candidate_end);
                 }
                 out.push(text[i + 1] as char);
                 i += 2;
                 continue;
             }
 
-            if i >= link_admission_suppressed_until && c == b'!' && i + 1 < text.len() && text[i + 1] == b'[' {
+            if i >= link_admission_suppressed_until
+                && c == b'!'
+                && i + 1 < text.len()
+                && text[i + 1] == b'['
+            {
                 if let Some(image) = parse_inline_image(text, i) {
-                    emit_inline_link(out, &image, restore_underline_after_link, Some("\u{25a7} "), link_id);
+                    emit_inline_link(
+                        out,
+                        &image,
+                        restore_underline_after_link,
+                        Some("\u{25a7} "),
+                        link_id,
+                    );
                     i = image.end;
                     continue;
                 }
                 if let Some(candidate_end) = malformed_inline_link_candidate_end(text, i + 1) {
-                    link_admission_suppressed_until = link_admission_suppressed_until.max(candidate_end);
+                    link_admission_suppressed_until =
+                        link_admission_suppressed_until.max(candidate_end);
                 }
             }
 
-            if c == b'[' {
-                if let Some(sink) = footnotes.as_mut() {
-                    if let Some(reference) = parse_footnote_reference(text, i) {
-                        let number = sink(std::str::from_utf8(reference.label).unwrap_or(""));
-                        write_footnote_marker(out, number);
-                        i = reference.end;
-                        continue;
-                    }
-                }
+            if c == b'['
+                && let Some(sink) = footnotes.as_mut()
+                && let Some(reference) = parse_footnote_reference(text, i)
+            {
+                let number = sink(std::str::from_utf8(reference.label).unwrap_or(""));
+                write_footnote_marker(out, number);
+                i = reference.end;
+                continue;
             }
 
             if i >= link_admission_suppressed_until && c == b'[' {
@@ -905,7 +930,8 @@ mod inline_render {
                     continue;
                 }
                 if let Some(candidate_end) = malformed_inline_link_candidate_end(text, i) {
-                    link_admission_suppressed_until = link_admission_suppressed_until.max(candidate_end);
+                    link_admission_suppressed_until =
+                        link_admission_suppressed_until.max(candidate_end);
                 }
             }
 
@@ -919,8 +945,8 @@ mod inline_render {
                     link_admission_suppressed_until.max(angle_autolink_candidate_end(text, i));
             }
 
-            if i >= link_admission_suppressed_until {
-                if let Some(link) = parse_bare_url(
+            if i >= link_admission_suppressed_until
+                && let Some(link) = parse_bare_url(
                     text,
                     i,
                     in_bold,
@@ -928,11 +954,11 @@ mod inline_render {
                     in_underscore_bold,
                     in_underscore_italic,
                     in_strike,
-                ) {
-                    emit_inline_link(out, &link, restore_underline_after_link, None, link_id);
-                    i = link.end;
-                    continue;
-                }
+                )
+            {
+                emit_inline_link(out, &link, restore_underline_after_link, None, link_id);
+                i = link.end;
+                continue;
             }
 
             if c == b'~' && i + 1 < text.len() && text[i + 1] == b'~' {
@@ -1106,7 +1132,10 @@ mod inline_render {
         if start + 4 > text.len() || text[start] != b'[' || text[start + 1] != b'^' {
             return None;
         }
-        let close = text[start + 2..].iter().position(|&c| c == b']').map(|p| p + start + 2)?;
+        let close = text[start + 2..]
+            .iter()
+            .position(|&c| c == b']')
+            .map(|p| p + start + 2)?;
         if close == start + 2 {
             return None;
         }
@@ -1236,7 +1265,8 @@ mod inline_render {
                 ..Default::default()
             });
         }
-        if is_valid_angle_autolink_email(value) && is_valid_link_url_with_prefix(b"mailto:", value) {
+        if is_valid_angle_autolink_email(value) && is_valid_link_url_with_prefix(b"mailto:", value)
+        {
             return Some(InlineLink {
                 text: value,
                 url: value,
@@ -1280,11 +1310,18 @@ mod inline_render {
         while colon < value.len() && value[colon] != b':' {
             colon += 1;
         }
-        if colon < 2 || colon > 32 || colon == value.len() || !text_util::is_ascii_alpha(value[0]) {
+        if !(2..=32).contains(&colon)
+            || colon == value.len()
+            || !text_util::is_ascii_alpha(value[0])
+        {
             return false;
         }
         for &byte in &value[1..colon] {
-            if !text_util::is_ascii_alphanumeric(byte) && byte != b'+' && byte != b'-' && byte != b'.' {
+            if !text_util::is_ascii_alphanumeric(byte)
+                && byte != b'+'
+                && byte != b'-'
+                && byte != b'.'
+            {
                 return false;
             }
         }
@@ -1440,7 +1477,10 @@ mod inline_render {
             return None;
         }
         let mut candidate_end = label_end + 2;
-        while candidate_end < text.len() && text[candidate_end] != b')' && text[candidate_end] != b'\n' {
+        while candidate_end < text.len()
+            && text[candidate_end] != b')'
+            && text[candidate_end] != b'\n'
+        {
             candidate_end += 1;
         }
         if candidate_end < text.len() && text[candidate_end] == b')' {
@@ -1480,7 +1520,10 @@ mod inline_render {
         if !text_util::is_ascii_word_byte(previous) && previous != b'<' {
             return true;
         }
-        if in_underscore_italic && start >= 1 && text_util::is_valid_underscore_open(text, start - 1, 1) {
+        if in_underscore_italic
+            && start >= 1
+            && text_util::is_valid_underscore_open(text, start - 1, 1)
+        {
             return true;
         }
         in_underscore_bold && start >= 2 && text_util::is_valid_underscore_open(text, start - 2, 2)
@@ -1516,7 +1559,6 @@ mod inline_render {
         }
         in_italic
     }
-
 }
 
 pub struct CodeBlock {
@@ -1587,6 +1629,12 @@ macro_rules! reg {
     };
 }
 
+impl Default for Markdown {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Markdown {
     pub fn new() -> Self {
         Markdown {
@@ -1619,7 +1667,7 @@ impl Markdown {
         for &byte in input.as_bytes() {
             if byte == b'\n' {
                 let mut line_end = self.line_buf.len();
-                if self.line_buf.len() > 0 && self.line_buf[self.line_buf.len() - 1] == b'\r' {
+                if !self.line_buf.is_empty() && self.line_buf[self.line_buf.len() - 1] == b'\r' {
                     line_end -= 1;
                 }
                 let line = self.line_buf[..line_end].to_vec();
@@ -1690,17 +1738,20 @@ impl Markdown {
                     self.previous_line_was_blank = text_util::is_blank_markdown_line(line);
                     return;
                 }
-            } else if !text_util::is_blank_markdown_line(line) && !block_parse::has_indented_code_prefix(line) {
+            } else if !text_util::is_blank_markdown_line(line)
+                && !block_parse::has_indented_code_prefix(line)
+            {
                 self.finalize_code_block();
                 self.in_code_block = false;
                 self.handle_line(line, line_has_lf);
                 return;
             }
-            let code_line = if self.code_fence_marker.is_none() && !text_util::is_blank_markdown_line(line) {
-                block_parse::deindent_code_line(line).to_vec()
-            } else {
-                line.to_vec()
-            };
+            let code_line =
+                if self.code_fence_marker.is_none() && !text_util::is_blank_markdown_line(line) {
+                    block_parse::deindent_code_line(line).to_vec()
+                } else {
+                    line.to_vec()
+                };
             self.append_code_line(&code_line, line_has_lf);
             self.previous_line_was_blank = text_util::is_blank_markdown_line(line);
             return;
@@ -1709,7 +1760,7 @@ impl Markdown {
         if self.in_pipe_block {
             self.active_definition = false;
             if block_parse::is_pipe_line(line)
-                && self.pipe_buf.len() + line.len() + 1 <= ansi::MAX_PIPE_BUFFER_BYTES
+                && self.pipe_buf.len() + line.len() < ansi::MAX_PIPE_BUFFER_BYTES
             {
                 self.pipe_buf.extend_from_slice(line);
                 self.pipe_buf.push(b'\n');
@@ -1720,17 +1771,17 @@ impl Markdown {
             self.finalize_pipe_block();
         }
 
-        if let Some(active) = self.active_footnote.take() {
-            if let Some(body) = block_parse::footnote_continuation_body(line) {
-                if active.append_body {
-                    let note = &mut self.footnotes[active.index];
-                    note.body.push('\n');
-                    note.body.push_str(std::str::from_utf8(body).unwrap_or(""));
-                }
-                self.active_footnote = Some(active);
-                self.previous_line_was_blank = text_util::is_blank_markdown_line(line);
-                return;
+        if let Some(active) = self.active_footnote.take()
+            && let Some(body) = block_parse::footnote_continuation_body(line)
+        {
+            if active.append_body {
+                let note = &mut self.footnotes[active.index];
+                note.body.push('\n');
+                note.body.push_str(std::str::from_utf8(body).unwrap_or(""));
             }
+            self.active_footnote = Some(active);
+            self.previous_line_was_blank = text_util::is_blank_markdown_line(line);
+            return;
         }
 
         if let Some((label, body)) = block_parse::parse_footnote_definition(line) {
@@ -1744,8 +1795,18 @@ impl Markdown {
         if !self.pending_top_level_line.is_empty() {
             if let Some(level) = block_parse::parse_setext_underline(line) {
                 self.active_definition = false;
-                let content = text_util::without_terminal_hard_break_marker(&self.pending_top_level_line, true);
-                block_render::write_heading(level, content, &mut self.out, &mut self.footnotes, &mut self.next_footnote_number, &mut self.link_id_counter);
+                let content = text_util::without_terminal_hard_break_marker(
+                    &self.pending_top_level_line,
+                    true,
+                );
+                block_render::write_heading(
+                    level,
+                    content,
+                    &mut self.out,
+                    &mut self.footnotes,
+                    &mut self.next_footnote_number,
+                    &mut self.link_id_counter,
+                );
                 self.out.push('\n');
                 self.pending_top_level_line.clear();
                 self.previous_line_was_blank = text_util::is_blank_markdown_line(line);
@@ -1753,7 +1814,14 @@ impl Markdown {
             }
             if let Some(body) = block_parse::definition_marker_body(line) {
                 self.flush_pending_top_level_line();
-                block_render::write_definition_line(body, line_has_lf, &mut self.out, &mut self.footnotes, &mut self.next_footnote_number, &mut self.link_id_counter);
+                block_render::write_definition_line(
+                    body,
+                    line_has_lf,
+                    &mut self.out,
+                    &mut self.footnotes,
+                    &mut self.next_footnote_number,
+                    &mut self.link_id_counter,
+                );
                 self.active_definition = true;
                 self.previous_line_was_blank = text_util::is_blank_markdown_line(line);
                 return;
@@ -1765,7 +1833,15 @@ impl Markdown {
         if let Some(blockquote) = self.active_blockquote.take() {
             self.active_definition = false;
             if block_parse::is_lazy_blockquote_continuation(line) {
-                block_render::write_blockquote_line(blockquote, line, line_has_lf, &mut self.out, &mut self.footnotes, &mut self.next_footnote_number, &mut self.link_id_counter);
+                block_render::write_blockquote_line(
+                    blockquote,
+                    line,
+                    line_has_lf,
+                    &mut self.out,
+                    &mut self.footnotes,
+                    &mut self.next_footnote_number,
+                    &mut self.link_id_counter,
+                );
                 self.out.push('\n');
                 self.active_blockquote = Some(blockquote);
                 self.previous_line_was_blank = text_util::is_blank_markdown_line(line);
@@ -1774,7 +1850,8 @@ impl Markdown {
         }
 
         if block_parse::has_indented_code_prefix(line)
-            && (block_parse::parse_unordered_list(line).is_some() || block_parse::parse_ordered_list(line).is_some())
+            && (block_parse::parse_unordered_list(line).is_some()
+                || block_parse::parse_ordered_list(line).is_some())
         {
             self.active_definition = false;
             self.process_line(line, line_has_lf);
@@ -1815,12 +1892,19 @@ impl Markdown {
             return;
         }
 
-        if self.active_definition {
-            if let Some(body) = block_parse::definition_marker_body(line) {
-                block_render::write_definition_line(body, line_has_lf, &mut self.out, &mut self.footnotes, &mut self.next_footnote_number, &mut self.link_id_counter);
-                self.previous_line_was_blank = text_util::is_blank_markdown_line(line);
-                return;
-            }
+        if self.active_definition
+            && let Some(body) = block_parse::definition_marker_body(line)
+        {
+            block_render::write_definition_line(
+                body,
+                line_has_lf,
+                &mut self.out,
+                &mut self.footnotes,
+                &mut self.next_footnote_number,
+                &mut self.link_id_counter,
+            );
+            self.previous_line_was_blank = text_util::is_blank_markdown_line(line);
+            return;
         }
         self.active_definition = false;
 
@@ -1870,7 +1954,14 @@ impl Markdown {
 
         if let Some((level, content)) = block_parse::parse_header(line) {
             let content = text_util::without_terminal_hard_break_marker(content, line_has_lf);
-            block_render::write_heading(level, content, &mut self.out, &mut self.footnotes, &mut self.next_footnote_number, &mut self.link_id_counter);
+            block_render::write_heading(
+                level,
+                content,
+                &mut self.out,
+                &mut self.footnotes,
+                &mut self.next_footnote_number,
+                &mut self.link_id_counter,
+            );
             return;
         }
 
@@ -1881,7 +1972,15 @@ impl Markdown {
             } else {
                 None
             };
-            block_render::write_blockquote_line(blockquote, content, line_has_lf, &mut self.out, &mut self.footnotes, &mut self.next_footnote_number, &mut self.link_id_counter);
+            block_render::write_blockquote_line(
+                blockquote,
+                content,
+                line_has_lf,
+                &mut self.out,
+                &mut self.footnotes,
+                &mut self.next_footnote_number,
+                &mut self.link_id_counter,
+            );
             return;
         }
 
@@ -1889,15 +1988,28 @@ impl Markdown {
             push_spaces(&mut self.out, indent);
             if let Some(task) = block_parse::parse_task_list_item(content) {
                 block_render::write_task_list_marker(&task, &mut self.out);
-                let task_content = text_util::without_terminal_hard_break_marker(task.2, line_has_lf);
+                let task_content =
+                    text_util::without_terminal_hard_break_marker(task.2, line_has_lf);
                 let mut register = reg!(self);
-                inline_render::write_inline(task_content, &mut self.out, false, &mut self.link_id_counter, Some(&mut register));
+                inline_render::write_inline(
+                    task_content,
+                    &mut self.out,
+                    false,
+                    &mut self.link_id_counter,
+                    Some(&mut register),
+                );
                 return;
             }
             ansi::write_dim(&mut self.out, ansi::BULLET_MARKER.as_bytes());
             let content = text_util::without_terminal_hard_break_marker(content, line_has_lf);
             let mut register = reg!(self);
-            inline_render::write_inline(content, &mut self.out, false, &mut self.link_id_counter, Some(&mut register));
+            inline_render::write_inline(
+                content,
+                &mut self.out,
+                false,
+                &mut self.link_id_counter,
+                Some(&mut register),
+            );
             return;
         }
 
@@ -1907,20 +2019,39 @@ impl Markdown {
             self.out.push(' ');
             if let Some(task) = block_parse::parse_task_list_item(content) {
                 block_render::write_task_list_marker(&task, &mut self.out);
-                let task_content = text_util::without_terminal_hard_break_marker(task.2, line_has_lf);
+                let task_content =
+                    text_util::without_terminal_hard_break_marker(task.2, line_has_lf);
                 let mut register = reg!(self);
-                inline_render::write_inline(task_content, &mut self.out, false, &mut self.link_id_counter, Some(&mut register));
+                inline_render::write_inline(
+                    task_content,
+                    &mut self.out,
+                    false,
+                    &mut self.link_id_counter,
+                    Some(&mut register),
+                );
                 return;
             }
             let content = text_util::without_terminal_hard_break_marker(content, line_has_lf);
             let mut register = reg!(self);
-            inline_render::write_inline(content, &mut self.out, false, &mut self.link_id_counter, Some(&mut register));
+            inline_render::write_inline(
+                content,
+                &mut self.out,
+                false,
+                &mut self.link_id_counter,
+                Some(&mut register),
+            );
             return;
         }
 
         let content = text_util::without_terminal_hard_break_marker(line, line_has_lf);
         let mut register = reg!(self);
-        inline_render::write_inline(content, &mut self.out, false, &mut self.link_id_counter, Some(&mut register));
+        inline_render::write_inline(
+            content,
+            &mut self.out,
+            false,
+            &mut self.link_id_counter,
+            Some(&mut register),
+        );
     }
 
     fn finalize_pipe_block(&mut self) {
@@ -1928,7 +2059,12 @@ impl Markdown {
         self.in_pipe_block = false;
         self.pipe_last_line_has_lf = false;
         if block_parse::is_valid_table(&buf) {
-            let table = block_render::render_table(&buf, &mut self.footnotes, &mut self.next_footnote_number, &mut self.link_id_counter);
+            let table = block_render::render_table(
+                &buf,
+                &mut self.footnotes,
+                &mut self.next_footnote_number,
+                &mut self.link_id_counter,
+            );
             self.deliver_block(Block::Table(table));
             return;
         }
@@ -2013,7 +2149,6 @@ impl Markdown {
         self.footnotes.len() - 1
     }
 
-
     fn flush_footnotes(&mut self) {
         let has_note = self
             .footnotes
@@ -2057,7 +2192,6 @@ impl Markdown {
         self.footnotes.clear();
         self.next_footnote_number = 0;
     }
-
 }
 
 pub(crate) fn register_fn<'a>(
@@ -2096,11 +2230,10 @@ fn push_spaces(out: &mut String, n: usize) {
 }
 
 mod block_render {
+    use super::Footnote;
     use super::ansi;
     use super::inline_render;
-        use super::text_util;
-    use super::Footnote;
-    
+    use super::text_util;
 
     pub fn write_heading(
         level: usize,
@@ -2129,7 +2262,13 @@ mod block_render {
             _ => {}
         }
         let mut register = super::register_fn(footnotes, next);
-        inline_render::write_inline_no_bold(content, out, level == 1 || level == 3 || level == 5, link_id, Some(&mut register));
+        inline_render::write_inline_no_bold(
+            content,
+            out,
+            level == 1 || level == 3 || level == 5,
+            link_id,
+            Some(&mut register),
+        );
         match level {
             1 => {
                 out.push_str(ansi::UNDERLINE_CLOSE);
@@ -2206,13 +2345,18 @@ mod block_render {
         while !rest.is_empty() && (rest[rest.len() - 1] == b' ' || rest[rest.len() - 1] == b'\t') {
             rest = &rest[..rest.len() - 1];
         }
-        if !rest.is_empty() && rest[rest.len() - 1] == b'|' && !text_util::is_escaped_punctuation_at(rest, rest.len() - 1) {
+        if !rest.is_empty()
+            && rest[rest.len() - 1] == b'|'
+            && !text_util::is_escaped_punctuation_at(rest, rest.len() - 1)
+        {
             rest = &rest[..rest.len() - 1];
         }
         let mut cell_start = 0usize;
         let mut i = 0usize;
         while i <= rest.len() {
-            if i == rest.len() || (rest[i] == b'|' && !text_util::is_escaped_punctuation_at(rest, i)) {
+            if i == rest.len()
+                || (rest[i] == b'|' && !text_util::is_escaped_punctuation_at(rest, i))
+            {
                 let mut start = cell_start;
                 let mut end = i;
                 while start < end && (rest[start] == b' ' || rest[start] == b'\t') {
@@ -2255,7 +2399,13 @@ mod block_render {
                 for cell in raw {
                     let mut bytes = String::new();
                     let mut register = super::register_fn(footnotes, next);
-                    inline_render::write_inline(cell, &mut bytes, false, link_id, Some(&mut register));
+                    inline_render::write_inline(
+                        cell,
+                        &mut bytes,
+                        false,
+                        link_id,
+                        Some(&mut register),
+                    );
                     let width = super::display_width::visible_width_ignoring_ansi(bytes.as_bytes());
                     row.push(RenderedCell { bytes, width });
                 }
@@ -2308,7 +2458,11 @@ mod block_render {
                 if col > 0 {
                     out.push_str(ansi::TABLE_COLUMN_SEP);
                 }
-                let col_align = if is_header { Align::Left } else { alignments[col] };
+                let col_align = if is_header {
+                    Align::Left
+                } else {
+                    alignments[col]
+                };
                 if col < row.len() {
                     let cell = &row[col];
                     let pad = widths[col].saturating_sub(cell.width);
@@ -2354,7 +2508,9 @@ mod block_render {
         while !bytes.is_empty() && (bytes[0] == b' ' || bytes[0] == b'\t') {
             bytes = &bytes[1..];
         }
-        while !bytes.is_empty() && (bytes[bytes.len() - 1] == b' ' || bytes[bytes.len() - 1] == b'\t') {
+        while !bytes.is_empty()
+            && (bytes[bytes.len() - 1] == b' ' || bytes[bytes.len() - 1] == b'\t')
+        {
             bytes = &bytes[..bytes.len() - 1];
         }
         bytes
@@ -2412,7 +2568,13 @@ mod block_render {
                 ansi::write_dim(out, spaces.as_bytes());
             }
             let mut register = super::register_fn(footnotes, next);
-            inline_render::write_inline(body[start..end].as_bytes(), out, false, link_id, Some(&mut register));
+            inline_render::write_inline(
+                body[start..end].as_bytes(),
+                out,
+                false,
+                link_id,
+                Some(&mut register),
+            );
             if end == body.len() {
                 break;
             }
@@ -2494,7 +2656,9 @@ pub mod highlight {
             return false;
         }
         if insensitive {
-            a.iter().zip(b.bytes()).all(|(x, y)| x.eq_ignore_ascii_case(&y))
+            a.iter()
+                .zip(b.bytes())
+                .all(|(x, y)| x.eq_ignore_ascii_case(&y))
         } else {
             a == b.as_bytes()
         }
@@ -2569,7 +2733,9 @@ pub mod highlight {
     fn is_number_start(source: &[u8], index: usize) -> bool {
         let c = source[index];
         c.is_ascii_digit()
-            || ((c == b'-' || c == b'+') && index + 1 < source.len() && source[index + 1].is_ascii_digit())
+            || ((c == b'-' || c == b'+')
+                && index + 1 < source.len()
+                && source[index + 1].is_ascii_digit())
             || (c == b'.' && index + 1 < source.len() && source[index + 1].is_ascii_digit())
     }
 
@@ -2610,19 +2776,19 @@ pub mod highlight {
                 index += 1;
                 continue;
             }
-            if let Some(comment) = profile.block_comment {
-                if let Some(end) = block_comment_end(source, index, comment) {
-                    append_styled(&mut styled, DARK_COMMENT, &source[index..end]);
-                    index = end;
-                    continue;
-                }
+            if let Some(comment) = profile.block_comment
+                && let Some(end) = block_comment_end(source, index, comment)
+            {
+                append_styled(&mut styled, DARK_COMMENT, &source[index..end]);
+                index = end;
+                continue;
             }
-            if !profile.line_comments.is_empty() {
-                if let Some(end) = line_comment_end(source, index, profile.line_comments) {
-                    append_styled(&mut styled, DARK_COMMENT, &source[index..end]);
-                    index = end;
-                    continue;
-                }
+            if !profile.line_comments.is_empty()
+                && let Some(end) = line_comment_end(source, index, profile.line_comments)
+            {
+                append_styled(&mut styled, DARK_COMMENT, &source[index..end]);
+                index = end;
+                continue;
             }
             if profile.quotes.contains(&source[index]) {
                 let end = quoted_end(source, index);
@@ -2650,7 +2816,9 @@ pub mod highlight {
                 continue;
             }
             let len = super::text_util::utf8_seq_len(source[index]);
-            styled.push_str(std::str::from_utf8(&source[index..(index + len).min(source.len())]).unwrap_or(""));
+            styled.push_str(
+                std::str::from_utf8(&source[index..(index + len).min(source.len())]).unwrap_or(""),
+            );
             index += len;
         }
         styled
@@ -2666,14 +2834,42 @@ pub mod highlight {
         p!(
             line_comments = &["//"],
             quotes = b"\"",
-            keywords = &["const", "var", "fn", "pub", "return", "if", "else", "while", "for", "struct", "enum", "union", "try", "catch", "comptime", "defer", "errdefer", "async", "await", "anytype", "void"],
+            keywords = &[
+                "const", "var", "fn", "pub", "return", "if", "else", "while", "for", "struct",
+                "enum", "union", "try", "catch", "comptime", "defer", "errdefer", "async", "await",
+                "anytype", "void"
+            ],
             aliases = &["zig"]
         ),
         p!(
             line_comments = &["//"],
             block_comment = Some(("/*", "*/")),
             quotes = b"\"'`",
-            keywords = &["const", "let", "var", "function", "class", "interface", "type", "export", "import", "from", "return", "if", "else", "for", "while", "async", "await", "new", "extends", "implements", "public", "private", "readonly"],
+            keywords = &[
+                "const",
+                "let",
+                "var",
+                "function",
+                "class",
+                "interface",
+                "type",
+                "export",
+                "import",
+                "from",
+                "return",
+                "if",
+                "else",
+                "for",
+                "while",
+                "async",
+                "await",
+                "new",
+                "extends",
+                "implements",
+                "public",
+                "private",
+                "readonly"
+            ],
             literals = &["true", "false", "null", "undefined"],
             aliases = &["js", "jsx", "javascript", "ts", "tsx", "typescript"]
         ),
@@ -2685,14 +2881,21 @@ pub mod highlight {
         p!(
             line_comments = &["#"],
             quotes = b"\"'`",
-            keywords = &["if", "then", "fi", "for", "do", "done", "in", "case", "esac", "function", "local", "export", "readonly", "return"],
+            keywords = &[
+                "if", "then", "fi", "for", "do", "done", "in", "case", "esac", "function", "local",
+                "export", "readonly", "return"
+            ],
             literals = &["true", "false", "null"],
             aliases = &["sh", "bash", "zsh", "shell"]
         ),
         p!(
             line_comments = &["#"],
             quotes = b"\"'",
-            keywords = &["def", "class", "return", "if", "elif", "else", "for", "while", "in", "import", "from", "as", "try", "except", "with", "lambda", "async", "await", "pass", "raise", "yield", "match", "case"],
+            keywords = &[
+                "def", "class", "return", "if", "elif", "else", "for", "while", "in", "import",
+                "from", "as", "try", "except", "with", "lambda", "async", "await", "pass", "raise",
+                "yield", "match", "case"
+            ],
             literals = &["True", "False", "None"],
             aliases = &["python", "py"]
         ),
@@ -2712,7 +2915,12 @@ pub mod highlight {
             line_comments = &["--"],
             block_comment = Some(("/*", "*/")),
             quotes = b"\"'",
-            keywords = &["select", "from", "where", "join", "left", "right", "inner", "outer", "on", "insert", "into", "values", "update", "set", "delete", "create", "alter", "drop", "table", "index", "group", "by", "order", "having", "limit", "as", "and", "or", "not", "distinct", "union"],
+            keywords = &[
+                "select", "from", "where", "join", "left", "right", "inner", "outer", "on",
+                "insert", "into", "values", "update", "set", "delete", "create", "alter", "drop",
+                "table", "index", "group", "by", "order", "having", "limit", "as", "and", "or",
+                "not", "distinct", "union"
+            ],
             literals = &["true", "false", "null"],
             case_insensitive = true,
             aliases = &["sql"]
@@ -2720,7 +2928,26 @@ pub mod highlight {
         p!(
             line_comments = &["#"],
             quotes = b"\"'",
-            keywords = &["from", "run", "cmd", "entrypoint", "copy", "add", "workdir", "env", "arg", "expose", "volume", "user", "label", "onbuild", "stopsignal", "healthcheck", "shell", "maintainer"],
+            keywords = &[
+                "from",
+                "run",
+                "cmd",
+                "entrypoint",
+                "copy",
+                "add",
+                "workdir",
+                "env",
+                "arg",
+                "expose",
+                "volume",
+                "user",
+                "label",
+                "onbuild",
+                "stopsignal",
+                "healthcheck",
+                "shell",
+                "maintainer"
+            ],
             case_insensitive = true,
             aliases = &["dockerfile", "docker"]
         ),
@@ -2728,7 +2955,11 @@ pub mod highlight {
             line_comments = &["//"],
             block_comment = Some(("/*", "*/")),
             quotes = b"\"'",
-            keywords = &["fn", "let", "mut", "pub", "struct", "enum", "impl", "trait", "use", "mod", "crate", "return", "if", "else", "match", "for", "while", "loop", "async", "await", "move", "where", "self", "super"],
+            keywords = &[
+                "fn", "let", "mut", "pub", "struct", "enum", "impl", "trait", "use", "mod",
+                "crate", "return", "if", "else", "match", "for", "while", "loop", "async", "await",
+                "move", "where", "self", "super"
+            ],
             literals = &["true", "false", "None", "Some"],
             aliases = &["rust", "rs"]
         ),
@@ -2736,7 +2967,28 @@ pub mod highlight {
             line_comments = &["//"],
             block_comment = Some(("/*", "*/")),
             quotes = b"\"`",
-            keywords = &["package", "import", "func", "var", "const", "type", "struct", "interface", "return", "if", "else", "for", "range", "switch", "case", "go", "defer", "select", "chan", "map"],
+            keywords = &[
+                "package",
+                "import",
+                "func",
+                "var",
+                "const",
+                "type",
+                "struct",
+                "interface",
+                "return",
+                "if",
+                "else",
+                "for",
+                "range",
+                "switch",
+                "case",
+                "go",
+                "defer",
+                "select",
+                "chan",
+                "map"
+            ],
             literals = &["true", "false", "nil"],
             aliases = &["go"]
         ),
@@ -2744,7 +2996,12 @@ pub mod highlight {
             line_comments = &["//"],
             block_comment = Some(("/*", "*/")),
             quotes = b"\"'",
-            keywords = &["auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern", "float", "for", "goto", "if", "int", "long", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while"],
+            keywords = &[
+                "auto", "break", "case", "char", "const", "continue", "default", "do", "double",
+                "else", "enum", "extern", "float", "for", "goto", "if", "int", "long", "return",
+                "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union",
+                "unsigned", "void", "volatile", "while"
+            ],
             literals = &["true", "false", "NULL"],
             aliases = &["c", "h"]
         ),
@@ -2752,7 +3009,31 @@ pub mod highlight {
             line_comments = &["//"],
             block_comment = Some(("/*", "*/")),
             quotes = b"\"'",
-            keywords = &["auto", "bool", "class", "const", "constexpr", "decltype", "delete", "enum", "explicit", "friend", "inline", "namespace", "new", "nullptr", "private", "protected", "public", "template", "this", "typename", "using", "virtual", "void"],
+            keywords = &[
+                "auto",
+                "bool",
+                "class",
+                "const",
+                "constexpr",
+                "decltype",
+                "delete",
+                "enum",
+                "explicit",
+                "friend",
+                "inline",
+                "namespace",
+                "new",
+                "nullptr",
+                "private",
+                "protected",
+                "public",
+                "template",
+                "this",
+                "typename",
+                "using",
+                "virtual",
+                "void"
+            ],
             literals = &["true", "false", "nullptr", "NULL"],
             aliases = &["cpp", "c++", "cc", "cxx", "hpp"]
         ),
@@ -2760,7 +3041,33 @@ pub mod highlight {
             line_comments = &["//"],
             block_comment = Some(("/*", "*/")),
             quotes = b"\"'",
-            keywords = &["class", "namespace", "using", "public", "private", "protected", "internal", "static", "void", "string", "int", "var", "new", "return", "if", "else", "for", "foreach", "while", "async", "await", "interface", "record", "get", "set"],
+            keywords = &[
+                "class",
+                "namespace",
+                "using",
+                "public",
+                "private",
+                "protected",
+                "internal",
+                "static",
+                "void",
+                "string",
+                "int",
+                "var",
+                "new",
+                "return",
+                "if",
+                "else",
+                "for",
+                "foreach",
+                "while",
+                "async",
+                "await",
+                "interface",
+                "record",
+                "get",
+                "set"
+            ],
             literals = &["true", "false", "null"],
             aliases = &["csharp", "cs"]
         ),
@@ -2768,7 +3075,31 @@ pub mod highlight {
             line_comments = &["//"],
             block_comment = Some(("/*", "*/")),
             quotes = b"\"'",
-            keywords = &["class", "interface", "package", "import", "public", "private", "protected", "static", "final", "void", "new", "return", "if", "else", "for", "while", "try", "catch", "throws", "extends", "implements", "record", "var"],
+            keywords = &[
+                "class",
+                "interface",
+                "package",
+                "import",
+                "public",
+                "private",
+                "protected",
+                "static",
+                "final",
+                "void",
+                "new",
+                "return",
+                "if",
+                "else",
+                "for",
+                "while",
+                "try",
+                "catch",
+                "throws",
+                "extends",
+                "implements",
+                "record",
+                "var"
+            ],
             literals = &["true", "false", "null"],
             aliases = &["java"]
         ),
@@ -2776,14 +3107,55 @@ pub mod highlight {
             line_comments = &["//"],
             block_comment = Some(("/*", "*/")),
             quotes = b"\"'",
-            keywords = &["function", "class", "public", "private", "protected", "namespace", "use", "return", "if", "else", "foreach", "for", "while", "try", "catch", "new", "static", "const", "echo", "yield"],
+            keywords = &[
+                "function",
+                "class",
+                "public",
+                "private",
+                "protected",
+                "namespace",
+                "use",
+                "return",
+                "if",
+                "else",
+                "foreach",
+                "for",
+                "while",
+                "try",
+                "catch",
+                "new",
+                "static",
+                "const",
+                "echo",
+                "yield"
+            ],
             literals = &["true", "false", "null"],
             aliases = &["php"]
         ),
         p!(
             line_comments = &["#"],
             quotes = b"\"'",
-            keywords = &["def", "class", "module", "end", "return", "if", "elsif", "else", "unless", "case", "when", "do", "while", "for", "in", "begin", "rescue", "require", "attr_reader"],
+            keywords = &[
+                "def",
+                "class",
+                "module",
+                "end",
+                "return",
+                "if",
+                "elsif",
+                "else",
+                "unless",
+                "case",
+                "when",
+                "do",
+                "while",
+                "for",
+                "in",
+                "begin",
+                "rescue",
+                "require",
+                "attr_reader"
+            ],
             literals = &["true", "false", "nil"],
             aliases = &["ruby", "rb"]
         ),
@@ -2791,7 +3163,31 @@ pub mod highlight {
             line_comments = &["//"],
             block_comment = Some(("/*", "*/")),
             quotes = b"\"'",
-            keywords = &["func", "let", "var", "class", "struct", "enum", "protocol", "extension", "import", "public", "private", "return", "if", "else", "guard", "for", "while", "switch", "case", "async", "await", "throws", "try"],
+            keywords = &[
+                "func",
+                "let",
+                "var",
+                "class",
+                "struct",
+                "enum",
+                "protocol",
+                "extension",
+                "import",
+                "public",
+                "private",
+                "return",
+                "if",
+                "else",
+                "guard",
+                "for",
+                "while",
+                "switch",
+                "case",
+                "async",
+                "await",
+                "throws",
+                "try"
+            ],
             literals = &["true", "false", "nil"],
             aliases = &["swift"]
         ),
@@ -2799,7 +3195,11 @@ pub mod highlight {
             line_comments = &["#"],
             block_comment = Some(("<#", "#>")),
             quotes = b"\"'",
-            keywords = &["function", "param", "if", "else", "elseif", "foreach", "for", "while", "switch", "return", "throw", "try", "catch", "finally", "begin", "process", "end", "filter", "class", "enum"],
+            keywords = &[
+                "function", "param", "if", "else", "elseif", "foreach", "for", "while", "switch",
+                "return", "throw", "try", "catch", "finally", "begin", "process", "end", "filter",
+                "class", "enum"
+            ],
             literals = &["true", "false", "null"],
             case_insensitive = true,
             aliases = &["powershell", "ps1", "pwsh", "ps"]
@@ -2808,14 +3208,22 @@ pub mod highlight {
             line_comments = &["--"],
             block_comment = Some(("--[[", "]]")),
             quotes = b"\"'",
-            keywords = &["and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while"],
+            keywords = &[
+                "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto",
+                "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true",
+                "until", "while"
+            ],
             literals = &["true", "false", "nil"],
             aliases = &["lua"]
         ),
         p!(
             block_comment = Some(("<!--", "-->")),
             quotes = b"\"'",
-            keywords = &["html", "head", "body", "main", "header", "footer", "section", "article", "div", "span", "a", "p", "script", "style", "link", "meta", "title", "button", "input", "form", "img", "ul", "li"],
+            keywords = &[
+                "html", "head", "body", "main", "header", "footer", "section", "article", "div",
+                "span", "a", "p", "script", "style", "link", "meta", "title", "button", "input",
+                "form", "img", "ul", "li"
+            ],
             aliases = &["html", "htm"]
         ),
         p!(
@@ -2827,14 +3235,45 @@ pub mod highlight {
         p!(
             block_comment = Some(("/*", "*/")),
             quotes = b"\"'",
-            keywords = &["color", "background", "display", "position", "margin", "padding", "border", "font", "width", "height", "flex", "grid", "align", "justify", "transition", "transform", "animation", "media"],
+            keywords = &[
+                "color",
+                "background",
+                "display",
+                "position",
+                "margin",
+                "padding",
+                "border",
+                "font",
+                "width",
+                "height",
+                "flex",
+                "grid",
+                "align",
+                "justify",
+                "transition",
+                "transform",
+                "animation",
+                "media"
+            ],
             aliases = &["css"]
         ),
         p!(
             line_comments = &["#", "//"],
             block_comment = Some(("/*", "*/")),
             quotes = b"\"'",
-            keywords = &["resource", "module", "variable", "output", "provider", "terraform", "locals", "data", "dynamic", "for_each", "count"],
+            keywords = &[
+                "resource",
+                "module",
+                "variable",
+                "output",
+                "provider",
+                "terraform",
+                "locals",
+                "data",
+                "dynamic",
+                "for_each",
+                "count"
+            ],
             literals = &["true", "false", "null"],
             aliases = &["hcl", "terraform", "tf"]
         ),
@@ -2842,7 +3281,29 @@ pub mod highlight {
             line_comments = &["//"],
             block_comment = Some(("/*", "*/")),
             quotes = b"\"'",
-            keywords = &["fun", "val", "var", "class", "object", "interface", "package", "import", "public", "private", "return", "if", "else", "when", "for", "while", "try", "catch", "data", "sealed", "suspend"],
+            keywords = &[
+                "fun",
+                "val",
+                "var",
+                "class",
+                "object",
+                "interface",
+                "package",
+                "import",
+                "public",
+                "private",
+                "return",
+                "if",
+                "else",
+                "when",
+                "for",
+                "while",
+                "try",
+                "catch",
+                "data",
+                "sealed",
+                "suspend"
+            ],
             literals = &["true", "false", "null"],
             aliases = &["kotlin", "kt", "kts"]
         ),
@@ -2864,7 +3325,10 @@ mod tests {
 
     #[test]
     fn bold_italic_and_code() {
-        assert_eq!(render("a **bold** *it* `code` b\n"), "a \x1b[1mbold\x1b[22m \x1b[3mit\x1b[23m \x1b[38;5;245mcode\x1b[39m b\n");
+        assert_eq!(
+            render("a **bold** *it* `code` b\n"),
+            "a \x1b[1mbold\x1b[22m \x1b[3mit\x1b[23m \x1b[38;5;245mcode\x1b[39m b\n"
+        );
     }
 
     #[test]
@@ -2886,14 +3350,20 @@ mod tests {
     #[test]
     fn blockquote_uses_rail() {
         assert_eq!(render("> hi\n"), "\x1b[2m│ \x1b[22mhi\n");
-        assert_eq!(render("> > nested\n"), "\x1b[2m│ \x1b[22m\x1b[2m│ \x1b[22mnested\n");
+        assert_eq!(
+            render("> > nested\n"),
+            "\x1b[2m│ \x1b[22m\x1b[2m│ \x1b[22mnested\n"
+        );
     }
 
     #[test]
     fn task_lists() {
         assert_eq!(render("- [ ] todo\n"), "\x1b[2m☐ \x1b[22mtodo\n");
         assert_eq!(render("- [x] done\n"), "\x1b[38;5;252m✓\x1b[39m done\n");
-        assert_eq!(render("1. [ ] item\n"), "\x1b[2m1.\x1b[22m \x1b[2m☐ \x1b[22mitem\n");
+        assert_eq!(
+            render("1. [ ] item\n"),
+            "\x1b[2m1.\x1b[22m \x1b[2m☐ \x1b[22mitem\n"
+        );
     }
 
     #[test]
@@ -2907,7 +3377,10 @@ mod tests {
     #[test]
     fn horizontal_rule() {
         let out = render("---\n");
-        assert_eq!(out, "\x1b[2m".to_string() + &"\u{2500}".repeat(60) + "\x1b[22m\n");
+        assert_eq!(
+            out,
+            "\x1b[2m".to_string() + &"\u{2500}".repeat(60) + "\x1b[22m\n"
+        );
     }
 
     #[test]

@@ -9,7 +9,7 @@
 //! pair for streaming, plus the getinfo/strerror plumbing. All CURLOPT and
 //! CURLINFO values are stable public ABI from curl.h.
 
-use std::ffi::{c_char, c_int, c_long, c_void, CStr, CString};
+use std::ffi::{CStr, CString, c_char, c_int, c_long, c_void};
 use std::sync::OnceLock;
 
 const CURL_GLOBAL_DEFAULT: c_long = 3;
@@ -55,7 +55,9 @@ struct Curl {
 
 fn curl() -> Result<&'static Curl, String> {
     static C: OnceLock<Result<Curl, String>> = OnceLock::new();
-    C.get_or_init(|| unsafe { load() }).as_ref().map_err(|e| e.clone())
+    C.get_or_init(|| unsafe { load() })
+        .as_ref()
+        .map_err(|e| e.clone())
 }
 
 unsafe fn load() -> Result<Curl, String> {
@@ -66,7 +68,10 @@ unsafe fn load() -> Result<Curl, String> {
     let mut last_err = String::new();
     for lib in LIBS {
         let handle = unsafe {
-            libc::dlopen(lib.as_ptr() as *const libc::c_char, libc::RTLD_NOW | libc::RTLD_LOCAL)
+            libc::dlopen(
+                lib.as_ptr() as *const libc::c_char,
+                libc::RTLD_NOW | libc::RTLD_LOCAL,
+            )
         };
         if !handle.is_null() {
             return unsafe { load_syms(handle) };
@@ -88,19 +93,37 @@ unsafe fn load_syms(handle: *mut libc::c_void) -> Result<Curl, String> {
     let setopt = sym(b"curl_easy_setopt")?;
     let c = unsafe {
         Curl {
-            global_init: std::mem::transmute(sym(b"curl_global_init")?),
-            easy_init: std::mem::transmute(sym(b"curl_easy_init")?),
-            setopt_string: std::mem::transmute(setopt),
-            setopt_long: std::mem::transmute(setopt),
-            setopt_ptr: std::mem::transmute(setopt),
-            setopt_write_cb: std::mem::transmute(setopt),
-            setopt_progress_cb: std::mem::transmute(setopt),
-            perform: std::mem::transmute(sym(b"curl_easy_perform")?),
-            getinfo_long: std::mem::transmute(sym(b"curl_easy_getinfo")?),
-            cleanup: std::mem::transmute(sym(b"curl_easy_cleanup")?),
-            strerror: std::mem::transmute(sym(b"curl_easy_strerror")?),
-            slist_append: std::mem::transmute(sym(b"curl_slist_append")?),
-            slist_free_all: std::mem::transmute(sym(b"curl_slist_free_all")?),
+            global_init: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(c_long) -> c_int>(
+                sym(b"curl_global_init")?,
+            ),
+            easy_init: std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> *mut c_void>(
+                sym(b"curl_easy_init")?,
+            ),
+            setopt_string: std::mem::transmute::<*mut c_void, SetoptString>(setopt),
+            setopt_long: std::mem::transmute::<*mut c_void, SetoptLong>(setopt),
+            setopt_ptr: std::mem::transmute::<*mut c_void, SetoptPtr>(setopt),
+            setopt_write_cb: std::mem::transmute::<*mut c_void, SetoptWriteCb>(setopt),
+            setopt_progress_cb: std::mem::transmute::<*mut c_void, SetoptProgressCb>(setopt),
+            perform: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> c_int>(
+                sym(b"curl_easy_perform")?,
+            ),
+            getinfo_long: std::mem::transmute::<*mut c_void, GetinfoLong>(sym(
+                b"curl_easy_getinfo",
+            )?),
+            cleanup: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void)>(sym(
+                b"curl_easy_cleanup",
+            )?),
+            strerror: std::mem::transmute::<
+                *mut c_void,
+                unsafe extern "C" fn(c_int) -> *const c_char,
+            >(sym(b"curl_easy_strerror")?),
+            slist_append: std::mem::transmute::<
+                *mut c_void,
+                unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
+            >(sym(b"curl_slist_append")?),
+            slist_free_all: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void)>(
+                sym(b"curl_slist_free_all")?,
+            ),
         }
     };
     unsafe { (c.global_init)(CURL_GLOBAL_DEFAULT) };
@@ -158,8 +181,8 @@ impl Easy {
     pub fn headers(&mut self, headers: &[(String, String)]) -> Result<(), String> {
         let c = curl()?;
         for (k, v) in headers {
-            let line = CString::new(format!("{k}: {v}"))
-                .map_err(|_| "header contains NUL".to_string())?;
+            let line =
+                CString::new(format!("{k}: {v}")).map_err(|_| "header contains NUL".to_string())?;
             let p = unsafe { (c.slist_append)(self.headers, line.as_ptr()) };
             if p.is_null() {
                 return Err("curl_slist_append failed".into());

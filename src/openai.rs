@@ -6,9 +6,9 @@ use serde_json::Value;
 use std::cell::RefCell;
 use std::ffi::{c_char, c_int, c_void};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 
 pub struct OpenAI {
     base_url: String,
@@ -32,8 +32,11 @@ impl OpenAI {
 
     pub fn list_models(&self) -> Result<Vec<String>, Error> {
         let url = format!("{}/models", self.base_url);
-        let headers = vec![("Authorization".to_string(), format!("Bearer {}", self.api_key))];
-        let resp = crate::http::get(&url, &headers).map_err(|e| Error::Provider(e))?;
+        let headers = vec![(
+            "Authorization".to_string(),
+            format!("Bearer {}", self.api_key),
+        )];
+        let resp = crate::http::get(&url, &headers).map_err(Error::Provider)?;
         if resp.status != 200 {
             return Err(Error::Provider(format!(
                 "openai: models: unexpected status {}",
@@ -139,7 +142,10 @@ impl OpenAI {
         let url = format!("{}/chat/completions", self.base_url);
         let mut headers = Vec::new();
         headers.push(("Content-Type".to_string(), "application/json".to_string()));
-        headers.push(("Authorization".to_string(), format!("Bearer {}", self.api_key)));
+        headers.push((
+            "Authorization".to_string(),
+            format!("Bearer {}", self.api_key),
+        ));
         Ok((url, headers, body))
     }
 }
@@ -193,7 +199,7 @@ fn run_request(
             acc.finish(tx);
             body
         } else {
-            std::mem::take(&mut acc.buf.into())
+            std::mem::take(&mut acc.buf)
         };
         crate::http::Response { status, body }
     } else {
@@ -209,7 +215,10 @@ fn run_request(
         if !msg.is_empty() {
             return Err(Error::Provider(format!("openai: {}: {}", resp.status, msg)));
         }
-        return Err(Error::Provider(format!("openai: unexpected status {}", resp.status)));
+        return Err(Error::Provider(format!(
+            "openai: unexpected status {}",
+            resp.status
+        )));
     }
 
     let parsed: OaResponse = serde_json::from_slice(&resp.body).map_err(err)?;
@@ -243,7 +252,14 @@ fn run_request(
 impl Provider for OpenAI {
     fn complete(&self, req: &Request) -> Result<Response, Error> {
         let (url, headers, body) = self.build_request(req, false)?;
-        run_request(&url, &headers, &body, false, &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), &std::sync::mpsc::channel().0)
+        run_request(
+            &url,
+            &headers,
+            &body,
+            false,
+            &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            &std::sync::mpsc::channel().0,
+        )
     }
 }
 
@@ -331,16 +347,16 @@ impl StreamAcc {
         let Some(choice) = chunk.choices.into_iter().next() else {
             return;
         };
-        if let Some(content) = choice.delta.content {
-            if !content.is_empty() {
-                self.content.push_str(&content);
-                self.out_tokens += 1;
-                let _ = tx.send(StreamEvent::Content(content));
-                let _ = tx.send(StreamEvent::Tokens {
-                    input: self.usage.prompt_tokens,
-                    output: self.out_tokens,
-                });
-            }
+        if let Some(content) = choice.delta.content
+            && !content.is_empty()
+        {
+            self.content.push_str(&content);
+            self.out_tokens += 1;
+            let _ = tx.send(StreamEvent::Content(content));
+            let _ = tx.send(StreamEvent::Tokens {
+                input: self.usage.prompt_tokens,
+                output: self.out_tokens,
+            });
         }
         if let Some(calls) = choice.delta.tool_calls {
             for call in calls {
@@ -370,8 +386,16 @@ impl StreamAcc {
         for call in std::mem::take(&mut self.calls) {
             let _ = tx.send(StreamEvent::ToolCall(ToolCall {
                 id: call.id.unwrap_or_default(),
-                name: call.function.as_ref().and_then(|f| f.name.clone()).unwrap_or_default(),
-                arguments: call.function.as_ref().and_then(|f| f.arguments.clone()).unwrap_or_default(),
+                name: call
+                    .function
+                    .as_ref()
+                    .and_then(|f| f.name.clone())
+                    .unwrap_or_default(),
+                arguments: call
+                    .function
+                    .as_ref()
+                    .and_then(|f| f.arguments.clone())
+                    .unwrap_or_default(),
             }));
         }
         let _ = tx.send(StreamEvent::Done);
@@ -382,8 +406,16 @@ impl StreamAcc {
         for call in &self.calls {
             calls.push(ToolCall {
                 id: call.id.clone().unwrap_or_default(),
-                name: call.function.as_ref().and_then(|f| f.name.clone()).unwrap_or_default(),
-                arguments: call.function.as_ref().and_then(|f| f.arguments.clone()).unwrap_or_default(),
+                name: call
+                    .function
+                    .as_ref()
+                    .and_then(|f| f.name.clone())
+                    .unwrap_or_default(),
+                arguments: call
+                    .function
+                    .as_ref()
+                    .and_then(|f| f.arguments.clone())
+                    .unwrap_or_default(),
             });
         }
         let body = serde_json::to_vec(&OaResponse {
@@ -421,10 +453,7 @@ impl StreamAcc {
             },
         })
         .map_err(err)?;
-        Ok(crate::http::Response {
-            status: 200,
-            body,
-        })
+        Ok(crate::http::Response { status: 200, body })
     }
 }
 

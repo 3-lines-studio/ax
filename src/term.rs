@@ -19,7 +19,8 @@ impl Terminal {
         }
         let mut raw = original;
         raw.c_lflag &= !(libc::ECHO | libc::ICANON | libc::ISIG | libc::IEXTEN);
-        raw.c_iflag &= !(libc::IXON | libc::ICRNL | libc::INLCR | libc::IGNCR | libc::BRKINT | libc::PARMRK);
+        raw.c_iflag &=
+            !(libc::IXON | libc::ICRNL | libc::INLCR | libc::IGNCR | libc::BRKINT | libc::PARMRK);
         raw.c_oflag &= !libc::OPOST;
         raw.c_cflag |= libc::CS8;
         raw.c_cc[libc::VMIN] = 1;
@@ -45,7 +46,9 @@ impl Terminal {
         let _ = self.out.write_all(b"\x1b[>4;0m"); // modifyOtherKeys off
         let _ = self.out.write_all(b"\x1b[?2004l");
         let _ = self.out.write_all(b"\x1b[?25h");
-        let _ = self.out.write_all(b"\x1b[0m\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1049l\x1b[?25h");
+        let _ = self
+            .out
+            .write_all(b"\x1b[0m\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1049l\x1b[?25h");
         let _ = self.out.flush();
         let fd = std::io::stdout().as_raw_fd();
         unsafe {
@@ -202,17 +205,9 @@ impl Terminal {
         let shift = mods & 1 != 0;
         let arrow = |up: bool| -> Key {
             if ctrl {
-                if up {
-                    Key::CtrlUp
-                } else {
-                    Key::CtrlDown
-                }
+                if up { Key::CtrlUp } else { Key::CtrlDown }
             } else if alt {
-                if up {
-                    Key::AltUp
-                } else {
-                    Key::AltDown
-                }
+                if up { Key::AltUp } else { Key::AltDown }
             } else if up {
                 Key::Up
             } else {
@@ -220,40 +215,36 @@ impl Terminal {
             }
         };
         match final_byte {
-            b'A' => return Ok(arrow(true)),
-            b'B' => return Ok(arrow(false)),
-            b'C' => {
-                return Ok(match (ctrl, alt, shift) {
-                    (true, _, _) => Key::CtrlRight,
-                    (_, true, _) => Key::AltRight,
-                    (false, false, true) => Key::Right,
-                    _ => Key::Right,
-                })
-            }
-            b'D' => {
-                return Ok(match (ctrl, alt, shift) {
-                    (true, _, _) => Key::CtrlLeft,
-                    (_, true, _) => Key::AltLeft,
-                    (false, false, true) => Key::Left,
-                    _ => Key::Left,
-                })
-            }
+            b'A' => Ok(arrow(true)),
+            b'B' => Ok(arrow(false)),
+            b'C' => Ok(match (ctrl, alt, shift) {
+                (true, _, _) => Key::CtrlRight,
+                (_, true, _) => Key::AltRight,
+                (false, false, true) => Key::Right,
+                _ => Key::Right,
+            }),
+            b'D' => Ok(match (ctrl, alt, shift) {
+                (true, _, _) => Key::CtrlLeft,
+                (_, true, _) => Key::AltLeft,
+                (false, false, true) => Key::Left,
+                _ => Key::Left,
+            }),
             b'H' => {
                 if ctrl {
                     return Ok(Key::CtrlHome);
                 }
-                return Ok(Key::Home);
+                Ok(Key::Home)
             }
             b'F' => {
                 if ctrl {
                     return Ok(Key::CtrlEnd);
                 }
-                return Ok(Key::End);
+                Ok(Key::End)
             }
-            b'Z' => return Ok(Key::ShiftTab),
+            b'Z' => Ok(Key::ShiftTab),
             b'u' => {
                 // Kitty CSI-u: ESC [ <key> ; <mod> u — mods bitmask: 1=shift 2=alt 4=ctrl
-                return Ok(match num(0) {
+                Ok(match num(0) {
                     Some(13) if mods & 3 != 0 => Key::ShiftEnter,
                     Some(13) => Key::Enter,
                     Some(127) => Key::Backspace,
@@ -261,9 +252,9 @@ impl Terminal {
                     Some(9) => Key::Tab,
                     Some(c) if c <= 0x7f && mods & 4 != 0 => {
                         let b = c as u8;
-                        let ctrl = if (b'a'..=b'z').contains(&b) {
+                        let ctrl = if b.is_ascii_lowercase() {
                             b - b'a' + 1
-                        } else if (b'A'..=b'Z').contains(&b) {
+                        } else if b.is_ascii_uppercase() {
                             b - b'A' + 1
                         } else {
                             b
@@ -274,10 +265,10 @@ impl Terminal {
                         Key::Alt(char::from(c as u8))
                     }
                     _ => Key::Esc,
-                });
+                })
             }
             b'~' => {
-                return Ok(match num(0) {
+                Ok(match num(0) {
                     Some(1) | Some(7) => Key::Home,
                     Some(3) => Key::Delete,
                     Some(4) | Some(8) => Key::End,
@@ -299,10 +290,10 @@ impl Terminal {
                             9 => Key::Tab,
                             127 | 8 => Key::Backspace,
                             27 => Key::Esc,
-                            c if ctrl && (b'a'..=b'z').contains(&(c as u8)) => {
+                            c if ctrl && (c as u8).is_ascii_lowercase() => {
                                 Key::Ctrl(char::from(c as u8 - b'a' + 1))
                             }
-                            c if ctrl && (b'A'..=b'Z').contains(&(c as u8)) => {
+                            c if ctrl && (c as u8).is_ascii_uppercase() => {
                                 Key::Ctrl(char::from(c as u8 - b'A' + 1))
                             }
                             c if alt && !ctrl && c <= 0x7f => Key::Alt(c as u8 as char),

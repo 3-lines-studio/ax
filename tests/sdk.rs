@@ -1,6 +1,6 @@
 //! Agent loop against a fake provider.
 
-use ax::{new_tool, Agent, Error, Message, Provider, Request, Response, ToolCall, Usage};
+use ax::{Agent, Error, Message, Provider, Request, Response, ToolCall, Usage, new_tool};
 use serde::Deserialize;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -15,7 +15,11 @@ struct Fake {
 impl Provider for Fake {
     fn complete(&self, req: &Request) -> Result<Response, Error> {
         self.requests.borrow_mut().push(req.messages.to_vec());
-        Ok(self.responses.borrow_mut().pop_front().expect("no fake response"))
+        Ok(self
+            .responses
+            .borrow_mut()
+            .pop_front()
+            .expect("no fake response"))
     }
 }
 
@@ -64,11 +68,17 @@ fn run_executes_tools_and_returns_transcript() {
         responses: RefCell::new(VecDeque::from([
             Response {
                 message: call_tool("c1", "upper", r#"{"s":"hi"}"#),
-                usage: Usage { input: 10, output: 5 },
+                usage: Usage {
+                    input: 10,
+                    output: 5,
+                },
             },
             Response {
                 message: assistant("done"),
-                usage: Usage { input: 20, output: 2 },
+                usage: Usage {
+                    input: 20,
+                    output: 2,
+                },
             },
         ])),
         ..Default::default()
@@ -175,7 +185,9 @@ struct NeedsInt {
 
 #[test]
 fn new_tool_bad_arguments() {
-    let bad = new_tool("bad", "needs int", "{}", |_: NeedsInt| "unreachable".to_string());
+    let bad = new_tool("bad", "needs int", "{}", |_: NeedsInt| {
+        "unreachable".to_string()
+    });
     let got = (bad.run)(r#"{"n":"x"}"#);
     assert!(got.contains("invalid arguments"), "got: {got}");
 }

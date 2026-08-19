@@ -1,7 +1,7 @@
 //! Wire format round trip against a local HTTP server (plain http, no TLS
 //! needed for the test).
 
-use ax::{new_tool, Message, OpenAI, Provider, Request, ToolCall};
+use ax::{Message, OpenAI, Provider, Request, ToolCall, new_tool};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
@@ -45,7 +45,8 @@ fn openai_round_trip() {
             let n = sock.read(&mut buf).unwrap();
             req.extend_from_slice(&buf[..n]);
         }
-        let body: serde_json::Value = serde_json::from_slice(&req[header_end..header_end + cl]).unwrap();
+        let body: serde_json::Value =
+            serde_json::from_slice(&req[header_end..header_end + cl]).unwrap();
         assert_eq!(body["model"], "m1");
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 4);

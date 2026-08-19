@@ -7,18 +7,18 @@
 //! Message/ToolCall serialize with snake_case field names (OpenAI wire
 //! format).
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-pub mod markdown;
 pub mod curlffi;
-pub mod session;
-pub mod term;
-pub mod tui;
 mod http;
+pub mod markdown;
 pub mod openai;
+pub mod session;
 pub mod skills;
+pub mod term;
 pub mod tools;
+pub mod tui;
 
 pub use openai::OpenAI;
 
@@ -40,7 +40,11 @@ pub struct Message {
     pub content: String,
     #[serde(rename = "ToolCalls", default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
-    #[serde(rename = "ToolCallID", default, skip_serializing_if = "String::is_empty")]
+    #[serde(
+        rename = "ToolCallID",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
     pub tool_call_id: String,
 }
 

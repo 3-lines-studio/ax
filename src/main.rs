@@ -93,12 +93,12 @@ fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>),
         }
         if a == "--resume" || a == "resume" {
             // Bare resume opens the picker; a following non-flag names the target.
-            if let Some(next) = args.get(i + 1) {
-                if !next.starts_with('-') {
-                    cfg.resume = Some(next.clone());
-                    i += 2;
-                    continue;
-                }
+            if let Some(next) = args.get(i + 1)
+                && !next.starts_with('-')
+            {
+                cfg.resume = Some(next.clone());
+                i += 2;
+                continue;
             }
             cfg.resume = Some(String::new());
             i += 1;
@@ -242,10 +242,10 @@ fn skills_root() -> String {
 }
 
 fn api_key(fc: &FileConfig) -> String {
-    if let Ok(k) = std::env::var("OPENAI_API_KEY") {
-        if !k.is_empty() {
-            return k;
-        }
+    if let Ok(k) = std::env::var("OPENAI_API_KEY")
+        && !k.is_empty()
+    {
+        return k;
     }
     fc.api_key.clone()
 }
@@ -291,10 +291,10 @@ fn user_system_prompt() -> Option<String> {
 }
 
 fn config_dir() -> Option<std::path::PathBuf> {
-    if let Ok(x) = std::env::var("XDG_CONFIG_HOME") {
-        if !x.is_empty() {
-            return Some(std::path::PathBuf::from(x));
-        }
+    if let Ok(x) = std::env::var("XDG_CONFIG_HOME")
+        && !x.is_empty()
+    {
+        return Some(std::path::PathBuf::from(x));
     }
     std::env::var("HOME")
         .ok()
@@ -358,28 +358,28 @@ fn render_args(call: &ToolCall) -> String {
     if let Ok(a) = serde_json::from_str::<A>(&call.arguments) {
         match call.name.as_str() {
             "bash" => {
-                if let Some(c) = a.command {
-                    if !c.is_empty() {
-                        return c;
-                    }
+                if let Some(c) = a.command
+                    && !c.is_empty()
+                {
+                    return c;
                 }
             }
             "read" | "edit" => {
-                if let Some(p) = a.path {
-                    if !p.is_empty() {
-                        return p;
-                    }
+                if let Some(p) = a.path
+                    && !p.is_empty()
+                {
+                    return p;
                 }
             }
             "write" => {
-                if let Some(p) = a.path {
-                    if !p.is_empty() {
-                        return format!(
-                            "{} ({} bytes)",
-                            p,
-                            a.content.as_deref().map(|c| c.len()).unwrap_or(0)
-                        );
-                    }
+                if let Some(p) = a.path
+                    && !p.is_empty()
+                {
+                    return format!(
+                        "{} ({} bytes)",
+                        p,
+                        a.content.as_deref().map(|c| c.len()).unwrap_or(0)
+                    );
                 }
             }
             _ => {}

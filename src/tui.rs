@@ -13,9 +13,9 @@ use crate::{Message, Tool, ToolCall, Usage};
 use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::Arc;
 use std::time::Instant;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -49,9 +49,16 @@ enum Entry {
     Code(String),
     Table(String),
     Rule,
-    Tool { label: String, kind: String },
+    Tool {
+        label: String,
+        kind: String,
+    },
     Notice(String),
-    Summary { secs: u64, input: usize, output: usize },
+    Summary {
+        secs: u64,
+        input: usize,
+        output: usize,
+    },
 }
 
 #[derive(PartialEq, Clone)]
@@ -78,9 +85,18 @@ enum Screen {
 pub enum TurnEvent {
     AssistantDelta(String),
     AssistantDone,
-    ToolStart { label: String, kind: String },
-    ToolResult { label: String, kind: String },
-    Tokens { input: usize, output: usize },
+    ToolStart {
+        label: String,
+        kind: String,
+    },
+    ToolResult {
+        label: String,
+        kind: String,
+    },
+    Tokens {
+        input: usize,
+        output: usize,
+    },
     Notice(String),
     End {
         messages: Vec<Message>,
@@ -151,20 +167,90 @@ struct Picker {
 const PICKER_VISIBLE: usize = 6;
 
 const SLASH: &[SlashSpec] = &[
-    SlashSpec { command: "/help", help: "/help", description: "show available slash commands", category: "General",  },
-    SlashSpec { command: "/clear", help: "/clear", description: "start a fresh session", category: "General",  },
-    SlashSpec { command: "/new", help: "/new", description: "start a fresh session", category: "Session",  },
-    SlashSpec { command: "/reset", help: "/reset", description: "reset the current session context", category: "Session",  },
-    SlashSpec { command: "/resume", help: "/resume", description: "resume a saved session", category: "Session",  },
-    SlashSpec { command: "/rename", help: "/rename <title>", description: "rename the current session", category: "Session",  },
-    SlashSpec { command: "/status", help: "/status", description: "show runtime configuration", category: "General",  },
-    SlashSpec { command: "/stats", help: "/stats", description: "show token and turn statistics", category: "Account",  },
-    SlashSpec { command: "/model", help: "/model <id-or-query>", description: "choose what model and reasoning effort to use", category: "Model",  },
-    SlashSpec { command: "/models", help: "/models", description: "browse available models", category: "Model",  },
-    SlashSpec { command: "/copy", help: "/copy", description: "copy the last assistant response", category: "Session",  },
-    SlashSpec { command: "/skills", help: "/skills", description: "list installed skills", category: "Skills",  },
-    SlashSpec { command: "/version", help: "/version", description: "show the ax version", category: "General",  },
-    SlashSpec { command: "/quit", help: "/quit (/exit)", description: "exit the interactive shell", category: "General",  },
+    SlashSpec {
+        command: "/help",
+        help: "/help",
+        description: "show available slash commands",
+        category: "General",
+    },
+    SlashSpec {
+        command: "/clear",
+        help: "/clear",
+        description: "start a fresh session",
+        category: "General",
+    },
+    SlashSpec {
+        command: "/new",
+        help: "/new",
+        description: "start a fresh session",
+        category: "Session",
+    },
+    SlashSpec {
+        command: "/reset",
+        help: "/reset",
+        description: "reset the current session context",
+        category: "Session",
+    },
+    SlashSpec {
+        command: "/resume",
+        help: "/resume",
+        description: "resume a saved session",
+        category: "Session",
+    },
+    SlashSpec {
+        command: "/rename",
+        help: "/rename <title>",
+        description: "rename the current session",
+        category: "Session",
+    },
+    SlashSpec {
+        command: "/status",
+        help: "/status",
+        description: "show runtime configuration",
+        category: "General",
+    },
+    SlashSpec {
+        command: "/stats",
+        help: "/stats",
+        description: "show token and turn statistics",
+        category: "Account",
+    },
+    SlashSpec {
+        command: "/model",
+        help: "/model <id-or-query>",
+        description: "choose what model and reasoning effort to use",
+        category: "Model",
+    },
+    SlashSpec {
+        command: "/models",
+        help: "/models",
+        description: "browse available models",
+        category: "Model",
+    },
+    SlashSpec {
+        command: "/copy",
+        help: "/copy",
+        description: "copy the last assistant response",
+        category: "Session",
+    },
+    SlashSpec {
+        command: "/skills",
+        help: "/skills",
+        description: "list installed skills",
+        category: "Skills",
+    },
+    SlashSpec {
+        command: "/version",
+        help: "/version",
+        description: "show the ax version",
+        category: "General",
+    },
+    SlashSpec {
+        command: "/quit",
+        help: "/quit (/exit)",
+        description: "exit the interactive shell",
+        category: "General",
+    },
 ];
 
 pub fn run(cfg: TuiConfig) -> Result<(), String> {
@@ -308,10 +394,8 @@ impl Tui {
             unsafe {
                 libc::poll(fds.as_mut_ptr(), 1, 40);
             }
-            if fds[0].revents & libc::POLLIN != 0 {
-                if !self.handle_key(term.read_key()?)? {
-                    break;
-                }
+            if fds[0].revents & libc::POLLIN != 0 && !self.handle_key(term.read_key()?)? {
+                break;
             }
             if self.want_quit {
                 break;
@@ -324,11 +408,11 @@ impl Tui {
                 self.exit_alt_pending = false;
                 self.leave_alt(term);
             }
-            if let Some(t) = self.ctrl_c_armed_ms {
-                if t.elapsed().as_millis() >= 3000 {
-                    self.ctrl_c_armed_ms = None;
-                    self.ctrl_c_pending = false;
-                }
+            if let Some(t) = self.ctrl_c_armed_ms
+                && t.elapsed().as_millis() >= 3000
+            {
+                self.ctrl_c_armed_ms = None;
+                self.ctrl_c_pending = false;
             }
             self.drain_events();
             self.paint(term);
@@ -394,14 +478,11 @@ impl Tui {
                 _ => {}
             }
         } else {
-            match key {
-                Key::Ctrl(c) => {
-                    if Self::ctrl_letter(c) == Some('o') {
-                        self.toggle_full_pending = true;
-                        return Ok(true);
-                    }
-                }
-                _ => {}
+            if let Key::Ctrl(c) = key
+                && Self::ctrl_letter(c) == Some('o')
+            {
+                self.toggle_full_pending = true;
+                return Ok(true);
             }
         }
         match key {
@@ -477,7 +558,12 @@ impl Tui {
             }
             Key::AltLeft => self.input.move_word_left(),
             Key::AltRight => self.input.move_word_right(),
-            Key::AltUp | Key::AltDown | Key::CtrlUp | Key::CtrlDown | Key::CtrlLeft | Key::CtrlRight => {}
+            Key::AltUp
+            | Key::AltDown
+            | Key::CtrlUp
+            | Key::CtrlDown
+            | Key::CtrlLeft
+            | Key::CtrlRight => {}
             Key::PageUp | Key::PageDown => {}
             Key::WheelUp | Key::WheelDown | Key::WheelLeft | Key::WheelRight => {}
             Key::MousePress(_, _) | Key::MouseRelease | Key::MouseOther => {}
@@ -916,13 +1002,11 @@ impl Tui {
             "rename" => {
                 if !rest.is_empty() {
                     session::set_live_title(&self.cfg.ax_root, rest);
-                    self.entries.push(Entry::Notice(format!(
-                        "{DIM}renamed: {rest}{RESET}"
-                    )));
+                    self.entries
+                        .push(Entry::Notice(format!("{DIM}renamed: {rest}{RESET}")));
                 } else {
-                    self.entries.push(Entry::Notice(format!(
-                        "{DIM}usage: /rename <title>{RESET}"
-                    )));
+                    self.entries
+                        .push(Entry::Notice(format!("{DIM}usage: /rename <title>{RESET}")));
                 }
             }
             "status" => {
@@ -1076,9 +1160,8 @@ impl Tui {
         match msgs {
             Some(msgs) => self.load_messages(msgs),
             None => {
-                self.entries.push(Entry::Notice(format!(
-                    "{DIM}no such session: {id}{RESET}"
-                )));
+                self.entries
+                    .push(Entry::Notice(format!("{DIM}no such session: {id}{RESET}")));
             }
         }
     }
@@ -1089,9 +1172,7 @@ impl Tui {
         self.entries.push(Entry::Welcome);
         for m in &self.msgs {
             match m.role.as_str() {
-                "user" => self
-                    .entries
-                    .push(Entry::User(m.content.clone())),
+                "user" => self.entries.push(Entry::User(m.content.clone())),
                 "assistant" => {
                     if !m.content.is_empty() {
                         self.entries
@@ -1217,9 +1298,8 @@ impl Tui {
                     let title = s.title.clone();
                     self.close_screen();
                     self.load_messages(msgs);
-                    self.entries.push(Entry::Notice(format!(
-                        "{DIM}resumed: {title}{RESET}"
-                    )));
+                    self.entries
+                        .push(Entry::Notice(format!("{DIM}resumed: {title}{RESET}")));
                 }
             }
             Screen::Models => {
@@ -1253,19 +1333,26 @@ impl Tui {
             Screen::Help => {
                 let items = self.help_items();
                 out.push(format!("{SELECTED}Commands {}{RESET}", items.len()));
-                push_catalog_items(&mut self.window_start, sel, &mut out, items.len(), rows, |i| {
-                    let s = &items[i];
-                    let style = if i == sel { SELECTED } else { DIM };
-                    let mut r = format!("{style}  {}{RESET}", s.help);
-                    let desc_col = width * 2 / 3;
-                    let pad = desc_col.saturating_sub(visible_width(&r));
-                    r.push_str(&" ".repeat(pad));
-                    r.push_str(&format!(
-                        "{DIM}{}{RESET}",
-                        clip(&s.description, width.saturating_sub(desc_col))
-                    ));
-                    r
-                });
+                push_catalog_items(
+                    &mut self.window_start,
+                    sel,
+                    &mut out,
+                    items.len(),
+                    rows,
+                    |i| {
+                        let s = &items[i];
+                        let style = if i == sel { SELECTED } else { DIM };
+                        let mut r = format!("{style}  {}{RESET}", s.help);
+                        let desc_col = width * 2 / 3;
+                        let pad = desc_col.saturating_sub(visible_width(&r));
+                        r.push_str(&" ".repeat(pad));
+                        r.push_str(&format!(
+                            "{DIM}{}{RESET}",
+                            clip(&s.description, width.saturating_sub(desc_col))
+                        ));
+                        r
+                    },
+                );
             }
             Screen::Resume => {
                 let items: Vec<(String, i64, usize)> = self
@@ -1275,25 +1362,34 @@ impl Tui {
                     .map(|s| (s.title.clone(), s.updated, s.turns))
                     .collect();
                 out.push(format!("{SELECTED}Sessions {}{RESET}", items.len()));
-                push_catalog_items(&mut self.window_start, sel, &mut out, items.len(), rows, |i| {
-                    let (title, updated, turns) = &items[i];
-                    let age = age_str(*updated);
-                    let meta = format!(
-                        "{} · {} · {} turn{}",
-                        workspace_label(&dir),
-                        age,
-                        turns,
-                        if *turns == 1 { "" } else { "s" }
-                    );
-                    let desc_col = width * 2 / 3;
-                    let style = if i == sel { SELECTED } else { DIM };
-                    let mut r =
-                        format!("{style}  {}{RESET}", clip(title, desc_col.saturating_sub(4)));
-                    let pad = desc_col.saturating_sub(visible_width(&r));
-                    r.push_str(&" ".repeat(pad));
-                    r.push_str(&format!("{DIM}{meta}{RESET}"));
-                    r
-                });
+                push_catalog_items(
+                    &mut self.window_start,
+                    sel,
+                    &mut out,
+                    items.len(),
+                    rows,
+                    |i| {
+                        let (title, updated, turns) = &items[i];
+                        let age = age_str(*updated);
+                        let meta = format!(
+                            "{} · {} · {} turn{}",
+                            workspace_label(&dir),
+                            age,
+                            turns,
+                            if *turns == 1 { "" } else { "s" }
+                        );
+                        let desc_col = width * 2 / 3;
+                        let style = if i == sel { SELECTED } else { DIM };
+                        let mut r = format!(
+                            "{style}  {}{RESET}",
+                            clip(title, desc_col.saturating_sub(4))
+                        );
+                        let pad = desc_col.saturating_sub(visible_width(&r));
+                        r.push_str(&" ".repeat(pad));
+                        r.push_str(&format!("{DIM}{meta}{RESET}"));
+                        r
+                    },
+                );
             }
             Screen::Models => {
                 if self.models_loading && self.models.is_empty() {
@@ -1309,10 +1405,17 @@ impl Tui {
                         out.push(format!("{DIM}No models found.{RESET}"));
                     } else {
                         out.push(format!("{SELECTED}Models {}{RESET}", items.len()));
-                        push_catalog_items(&mut self.window_start, sel, &mut out, items.len(), rows, |i| {
-                            let style = if i == sel { SELECTED } else { DIM };
-                            format!("{style}  {}{RESET}", items[i])
-                        });
+                        push_catalog_items(
+                            &mut self.window_start,
+                            sel,
+                            &mut out,
+                            items.len(),
+                            rows,
+                            |i| {
+                                let style = if i == sel { SELECTED } else { DIM };
+                                format!("{style}  {}{RESET}", items[i])
+                            },
+                        );
                     }
                 }
             }
@@ -1396,35 +1499,35 @@ impl Tui {
             let marker = if half { "●" } else { " " };
             rows.push(format!("{ACTIVITY}{marker} {label}{RESET}"));
         } else {
-        match &self.activity {
-            Activity::Thinking => {
-                let now = self.turn_start.elapsed();
-                let secs = now.as_secs();
-                let half = (now.as_millis() as i64 / 500) % 2 == 0;
-                let head = if half {
-                    format!("{ACTIVITY}• Thinking ({secs}s)")
-                } else {
-                    format!(" {ACTIVITY} Thinking ({secs}s)")
-                };
-                rows.push(format!(
-                    "{head}{DIM} (↑{} ↓{}){RESET}",
-                    tok(self.live_in),
-                    tok(self.live_out)
-                ));
-            }
-            Activity::Streaming => {
-                if self.live_in > 0 || self.live_out > 0 {
+            match &self.activity {
+                Activity::Thinking => {
+                    let now = self.turn_start.elapsed();
+                    let secs = now.as_secs();
+                    let half = (now.as_millis() as i64 / 500) % 2 == 0;
+                    let head = if half {
+                        format!("{ACTIVITY}• Thinking ({secs}s)")
+                    } else {
+                        format!(" {ACTIVITY} Thinking ({secs}s)")
+                    };
                     rows.push(format!(
-                        "{DIM}  (↑{} ↓{}){RESET}",
+                        "{head}{DIM} (↑{} ↓{}){RESET}",
                         tok(self.live_in),
                         tok(self.live_out)
                     ));
-                } else {
-                    rows.push(String::from("  "));
                 }
+                Activity::Streaming => {
+                    if self.live_in > 0 || self.live_out > 0 {
+                        rows.push(format!(
+                            "{DIM}  (↑{} ↓{}){RESET}",
+                            tok(self.live_in),
+                            tok(self.live_out)
+                        ));
+                    } else {
+                        rows.push(String::from("  "));
+                    }
+                }
+                _ => {}
             }
-            _ => {}
-        }
         }
         rows
     }
@@ -1452,7 +1555,11 @@ impl Tui {
             let _ = write!(out, "{}", term::move_to((vis + 1 + i) as u16, 1));
             let _ = out.write_all(line.as_bytes());
         }
-        let _ = write!(out, "{}", term::move_to((vis + 1 + cursor_row) as u16, cursor_col as u16));
+        let _ = write!(
+            out,
+            "{}",
+            term::move_to((vis + 1 + cursor_row) as u16, cursor_col as u16)
+        );
         let _ = out.write_all(term::cursor_visible().as_bytes());
         let _ = out.flush();
     }
@@ -1480,7 +1587,7 @@ impl Tui {
         if jump > capacity && old.len().saturating_sub(d) <= 2 {
             for line in &new[d..] {
                 let _ = write!(out, "{}", term::move_to(rows as u16, 1));
-                let _ = write!(out, "{}\n", line);
+                let _ = writeln!(out, "{}", line);
             }
             self.streamed = new.to_vec();
             return;
@@ -1557,10 +1664,7 @@ impl Tui {
         if let Some(extra) = scroll_hint {
             segs.push(extra.to_string());
         }
-        format!(
-            "{DIM}{}{RESET}",
-            segs.join(" · ")
-        )
+        format!("{DIM}{}{RESET}", segs.join(" · "))
     }
 
     fn chrome_rows(&self) -> (Vec<String>, usize, usize) {
@@ -1591,7 +1695,12 @@ impl Tui {
                 PickerKind::Files => {
                     let n = p.file_matches.len();
                     for idx in p.win..(p.win + PICKER_VISIBLE).min(n) {
-                        rows.push(file_row(&p.file_matches[idx], &p.query, idx == p.sel, width));
+                        rows.push(file_row(
+                            &p.file_matches[idx],
+                            &p.query,
+                            idx == p.sel,
+                            width,
+                        ));
                     }
                 }
             }
@@ -1653,7 +1762,11 @@ impl Tui {
         }
         frame.extend(chrome);
         self.emit_diff(out, &frame);
-        let _ = write!(out, "{}", term::move_to(cursor_abs as u16, cursor_col as u16));
+        let _ = write!(
+            out,
+            "{}",
+            term::move_to(cursor_abs as u16, cursor_col as u16)
+        );
         let _ = out.write_all(term::cursor_visible().as_bytes());
         let _ = out.flush();
     }
@@ -1800,7 +1913,9 @@ impl Tui {
                     file_matches: Vec::new(),
                 };
                 match p.kind {
-                    PickerKind::Slash => p.slash_matches = slash_matches(&p.query, &self.user_commands),
+                    PickerKind::Slash => {
+                        p.slash_matches = slash_matches(&p.query, &self.user_commands)
+                    }
                     PickerKind::Files => p.file_matches = file_matches(&p.query, &self.cfg.dir),
                 }
                 self.picker = Some(p);
@@ -1839,10 +1954,7 @@ impl Tui {
             let q: String = chars[j + 1..cursor].iter().collect();
             return Some((PickerKind::Slash, q, j, cursor));
         }
-        let start = input.len()
-            - input
-                .trim_start_matches(|c: char| c == ' ' || c == '\t' || c == '\r' || c == '\n')
-                .len();
+        let start = input.len() - input.trim_start_matches([' ', '\t', '\r', '\n']).len();
         if chars.get(start) == Some(&'/') {
             let q: String = chars[start + 1..cursor].iter().collect();
             if !q.chars().any(is_picker_term) {
@@ -2187,7 +2299,11 @@ fn line_display_pos(chars: &[char], char_idx: usize, avail: usize) -> (usize, us
     if char_idx == chars.len() && !chars.is_empty() {
         let total: usize = chars.iter().map(|c| char_width(*c)).sum();
         let sub = total / a;
-        let sub = if total % a == 0 { sub.saturating_sub(1) } else { sub };
+        let sub = if total.is_multiple_of(a) {
+            sub.saturating_sub(1)
+        } else {
+            sub
+        };
         (sub, total - sub * a)
     } else {
         (w / a, w % a)
@@ -2329,10 +2445,8 @@ fn walk_files(
         let lower = path.to_lowercase();
         let q = query.to_lowercase();
         let base = name.to_lowercase();
-        let matched = q.is_empty()
-            || base.starts_with(&q)
-            || lower.starts_with(&q)
-            || lower.contains(&q);
+        let matched =
+            q.is_empty() || base.starts_with(&q) || lower.starts_with(&q) || lower.contains(&q);
         if !matched {
             continue;
         }
@@ -2398,7 +2512,9 @@ fn slash_row(spec: &SlashItem, sel: bool, width: usize) -> String {
     let cmd_part = format!("  {}", spec.command);
     let pad = cmd_col.saturating_sub(visible_width(&cmd_part));
     let cat = format!("  {}", spec.category);
-    let desc_avail = width.saturating_sub(cmd_col + visible_width(&cat) + 1).max(1);
+    let desc_avail = width
+        .saturating_sub(cmd_col + visible_width(&cat) + 1)
+        .max(1);
     let desc = truncate_wide(&spec.description, desc_avail);
     let left = format!("{cmd_part}{}", " ".repeat(pad));
     let gap = width
@@ -2438,9 +2554,7 @@ fn file_row(path: &str, query: &str, sel: bool, width: usize) -> String {
     let avail = width.saturating_sub(visible_width(&body) + 1);
     let tail = truncate_wide(&tail, avail);
     if sel {
-        format!(
-            "  {BOLD}{USER_RAIL}{head}\x1b[48;5;239m{hit}\x1b[49m{tail}{RESET}"
-        )
+        format!("  {BOLD}{USER_RAIL}{head}\x1b[48;5;239m{hit}\x1b[49m{tail}{RESET}")
     } else {
         format!("  {DIM}{head}{BOLD}{hit}{RESET}{DIM}{tail}{RESET}")
     }
@@ -2871,10 +2985,7 @@ fn run_turn(
             break;
         }
     }
-    if !cancelled
-        && err.is_none()
-        && h.last().map(|m| !m.tool_calls.is_empty()).unwrap_or(false)
-    {
+    if !cancelled && err.is_none() && h.last().map(|m| !m.tool_calls.is_empty()).unwrap_or(false) {
         err = Some("stopped: max turns reached".into());
     }
     let _ = tx.send(TurnEvent::End {
