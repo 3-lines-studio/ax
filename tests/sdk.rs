@@ -1,4 +1,4 @@
-//! Port of ax-go's ax_test.go: the agent loop against a fake provider.
+//! Agent loop against a fake provider.
 
 use ax::{new_tool, Agent, Error, Message, Provider, Request, Response, ToolCall, Usage};
 use serde::Deserialize;

@@ -1,9 +1,8 @@
 # ax
 
-A minimal LLM coding agent harness — Rust port of [ax-go](../ax-go),
-with the terminal UX of [fx.sh](https://fx.sh) (vercel-labs/fx): a
-transcript TUI with streamed markdown, tool status lines, and a
-shell-style input bar.
+A minimal LLM coding agent harness with the terminal UX of
+[fx.sh](https://fx.sh) (vercel-labs/fx): a transcript TUI with streamed
+markdown, tool status lines, and a shell-style input bar.
 
 Release binary: **~760 KB** (stripped, `x86_64-linux`, dynamically linked
 against system libcurl). No TUI framework, no markdown library — both are
@@ -85,7 +84,7 @@ archived automatically, so nothing is lost:
   `ax --resume last` resumes the most recent session;
   `ax --resume <id>` resumes by id
 - sessions live in `~/.config/ax/sessions/` (or `$XDG_CONFIG_HOME/ax/sessions/`); the live transcript is
-  `~/.config/ax/session.jsonl` (ax-go field names, byte-compatible)
+  `~/.config/ax/session.jsonl` (snake_case field names)
 
 ### Slash commands
 
@@ -182,17 +181,13 @@ let msgs = agent.run(&[ax::Message { role: "user".into(), content: "fix the fail
 - `src/term.rs` — raw terminal layer (termios, keys incl. CSI modifiers and
   SGR mouse, bracketed paste, alternate screen)
 
-## Differences from ax-go
+## Notes
 
-- Full transcript TUI instead of a scrolling REPL; fresh sessions with an
-  archive + resume picker instead of auto-resume.
 - No permission system — tools always run (yolo). Sandboxing is expected to
   live outside ax (containers, seccomp, etc.).
-- No in-run abort beyond ctrl+c (same behavior).
-- HTTP uses system libcurl instead of Go's net/http; session files are
-  byte-compatible with ax-go. libcurl is `dlopen`'d lazily on the first
-  request, so the binary has no hard link-time dependency on libcurl's
-  dependency tree (openssl, krb5, zstd, brotli, nghttp2/3, ssh2, …).
+- HTTP uses system libcurl, `dlopen`'d lazily on the first request, so the
+  binary has no hard link-time dependency on libcurl's dependency tree
+  (openssl, krb5, zstd, brotli, nghttp2/3, ssh2, …).
 
 ## Size and cold start
 

@@ -1,5 +1,5 @@
-//! Port of ax-go's openai_test.go: wire format round trip against a local
-//! HTTP server (plain http, no TLS needed for the test).
+//! Wire format round trip against a local HTTP server (plain http, no TLS
+//! needed for the test).
 
 use ax::{new_tool, Message, OpenAI, Provider, Request, ToolCall};
 use std::io::{Read, Write};

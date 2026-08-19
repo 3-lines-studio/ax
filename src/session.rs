@@ -1,6 +1,6 @@
 //! Per-user session store: live session file plus an archive catalog,
 //! rooted at `~/.config/ax` (or `$XDG_CONFIG_HOME/ax`).
-//! Live file stays byte-compatible with ax-go: `{root}/session.jsonl`.
+//! Live transcript: `{root}/session.jsonl`.
 //! Archived sessions live in `{root}/sessions/<unix_ms>.jsonl`.
 
 use crate::Message;

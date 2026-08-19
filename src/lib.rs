@@ -1,11 +1,11 @@
 //! Minimal LLM coding agent harness.
 //!
-//! Port of ax-go. The loop is the only logic: messages -> LLM -> tool calls ->
-//! results -> repeat. No memory, sessions, retries, parallel tool execution,
-//! or streaming. `run` never mutates its input.
+//! The loop is the only logic: messages -> LLM -> tool calls -> results ->
+//! repeat. No memory, sessions, retries, parallel tool execution, or
+//! streaming. `run` never mutates its input.
 //!
-//! Message/ToolCall serialize with ax-go's field names so `.ax/session.jsonl`
-//! files are interchangeable with the Go version.
+//! Message/ToolCall serialize with snake_case field names (OpenAI wire
+//! format).
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;

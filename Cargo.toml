@@ -2,7 +2,7 @@
 name = "ax"
 version = "0.1.0"
 edition = "2024"
-description = "Minimal LLM coding agent harness (port of ax-go)"
+description = "Minimal LLM coding agent harness"
 license = "MIT"
 
 [dependencies]
