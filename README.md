@@ -2,10 +2,10 @@
 
 A minimal LLM coding agent harness — Rust port of [ax-go](../ax-go),
 with the terminal UX of [fx.sh](https://fx.sh) (vercel-labs/fx): a
-full-screen transcript, streamed markdown, tool status lines, and a
+transcript TUI with streamed markdown, tool status lines, and a
 shell-style input bar.
 
-Release binary: **~690 KB** (stripped, `x86_64-linux`, dynamically linked
+Release binary: **~760 KB** (stripped, `x86_64-linux`, dynamically linked
 against system libcurl). No TUI framework, no markdown library — both are
 hand-rolled ports of fx's presentation layer.
 
@@ -22,7 +22,7 @@ tiny.
 
 ## Usage
 
-Interactive — a full-screen transcript TUI:
+Interactive — a transcript TUI:
 
 ```
 OPENAI_API_KEY=... ./target/release/ax -model gpt-4.1-mini
@@ -41,36 +41,64 @@ auto · gpt-4.1-mini
 - user prompts render as cards on a `┃` rail; assistant answers stream as
   markdown (headings, tables, task lists, blockquotes, highlighted code)
 - tool calls show as `● Running …` / `● Ran …` with `│` output rails
-- `• Thinking (Ns)` blinks while the model is working; `ctrl+c` interrupts
-- **enter** sends, **up/down** history, **left/right/home/end** edit,
-  **ctrl+w/u/k/a/e** edit words/lines, **tab** completes slash commands
-- `/help /clear /new /reset /resume /model /system /status /stats /version`
-  `/quit` — typing `/` opens the command picker
-- the session (`.ax/session.jsonl`, ax-go field names) is caller-owned and
-  auto-resumed on start; `/resume` reloads it
+- `• Thinking (Ns)` blinks while the model is working
+- the transcript streams into the **terminal scrollback**: mouse wheel and
+  Shift+PgUp scroll sessions natively; **Ctrl+O** opens a full-transcript
+  view with internal PgUp/PgDn/wheel scrolling (Esc or Ctrl+O closes)
+- **enter** sends, **up/down** history, **left/right** edit,
+  **Ctrl+a/e/b/f/p/n/w/u/k/d/l/o** edit words/lines, **Alt+left/right**
+  word moves, **Tab** completes slash commands
+- **ctrl+c** during a run asks to confirm ("press ctrl+c again to exit");
+  a second ctrl+c quits
 
-One-shot (like `fx ask`):
+### Sessions
+
+Every `ax` launch starts a **fresh session**. The previous session is
+archived automatically, so nothing is lost:
+
+- `/resume` opens the session picker (titles, age, turn count; type to filter)
+- `/new` archives the current session and starts fresh; `/clear` does the same
+- `/rename <title>` names the current session
+- CLI: `ax -r` / `ax resume` / `ax --resume` open the picker;
+  `ax --resume last` resumes the most recent session;
+  `ax --resume <id>` resumes by id
+- sessions live in `.ax/sessions/`; the live transcript is
+  `.ax/session.jsonl` (ax-go field names, byte-compatible)
+
+### Slash commands
+
+`/help` opens a searchable command catalog. Supported:
+`/help /clear /new /reset /resume /rename /status /stats /model /models
+/permissions /settings /appearance /copy /version /quit`.
+
+- `/models` browses models from `{base}/models`; Enter selects
+- `/permissions` cycles auto → ask → yolo (shown in the status line)
+- `/settings` and `/appearance` open the settings catalog
+- `/copy` copies the last assistant response (OSC 52)
+
+### One-shot
 
 ```
 OPENAI_API_KEY=... ./target/release/ax -model gpt-4.1-mini "explain main.go"
 ```
 
 Renders the final answer as markdown with ANSI on a TTY, raw when piped.
-
 Works with any OpenAI-compatible endpoint (`-base`): OpenRouter, DeepSeek,
 Ollama, vLLM.
 
 ## CLI flags
 
-| Flag       | Default                     | Meaning                      |
-|------------|-----------------------------|------------------------------|
-| `-base`    | `https://api.openai.com/v1` | OpenAI-compatible base URL   |
-| `-model`   | `gpt-4.1-mini`              | model name                   |
-| `-system`  | built-in                    | system prompt                |
-| `-C`       | current dir                 | working directory for tools  |
+| Flag          | Default                     | Meaning                      |
+|---------------|-----------------------------|------------------------------|
+| `-base`       | `https://api.openai.com/v1` | OpenAI-compatible base URL   |
+| `-model`      | `gpt-4.1-mini`              | model name                   |
+| `-system`     | built-in                    | system prompt                |
+| `-C`          | current dir                 | working directory for tools  |
+| `-r`, `--resume` | —                        | open the session picker      |
+| `--resume last\|ID` | —                    | resume a saved session       |
 
-With no prompt and a TTY, starts the TUI. With no prompt and no TTY, reads
-the prompt from stdin.
+With no prompt and a TTY, starts the TUI (fresh session). With no prompt
+and no TTY, reads the prompt from stdin.
 
 ## Design
 
@@ -107,23 +135,25 @@ let msgs = agent.run(&[ax::Message { role: "user".into(), content: "fix the fail
 - `src/markdown.rs` — byte-exact port of fx's markdown-to-ANSI renderer
   (blocks, inline styles, tables, footnotes, links, code highlighting)
 - `src/tui.rs` — transcript TUI: user cards, streamed blocks, tool status,
-  activity line, footer input bar, command picker
-- `src/term.rs` — raw terminal layer (termios, keys, bracketed paste)
+  activity line, footer input bar, command catalog screens
+  (help/resume/models/settings), session store, full-transcript mode
+- `src/term.rs` — raw terminal layer (termios, keys incl. CSI modifiers and
+  SGR mouse, bracketed paste, scroll regions, alternate screen)
 
 ## Differences from ax-go
 
-- Full-screen transcript TUI instead of a scrolling REPL (no rich slash
-  commands beyond the ported set; no markdown dropped — it's exact).
+- Full transcript TUI instead of a scrolling REPL; fresh sessions with an
+  archive + resume picker instead of auto-resume.
 - No in-run abort beyond ctrl+c (same behavior).
 - HTTP uses system libcurl instead of Go's net/http; session files are
   byte-compatible with ax-go.
 
 ## Size notes
 
-| Variant                              | Size   |
-|--------------------------------------|--------|
-| stable + system libcurl + TUI (this) | ~690 KB |
-| stable + rustls/ring, no TUI         | ~1.48 MB |
+| Variant                                  | Size   |
+|------------------------------------------|--------|
+| stable + system libcurl + TUI (this)     | ~760 KB |
+| stable + rustls/ring, no TUI             | ~1.48 MB |
 
 The pure-Rust TLS stack (rustls + ring) is the size floor for a self-contained
 binary; system libcurl is the pragmatic choice for a sub-1 MB target.

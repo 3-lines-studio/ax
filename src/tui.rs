@@ -1,13 +1,17 @@
-//! Full-screen transcript TUI, replicating the vercel-labs/fx terminal UX:
-//! user cards on a ┃ rail, streamed markdown, tool status lines, command
-//! output rails, a bottom input bar with ❯ prompt, and a status hint row.
+//! Transcript TUI replicating the vercel-labs/fx terminal UX.
+//!
+//! Inline mode (default) streams the transcript into the terminal scrollback
+//! with the footer pinned at the bottom, so the terminal's native scrolling
+//! (mouse wheel, Shift+PgUp) works on sessions. Ctrl+O opens the
+//! full-transcript mode with internal PgUp/PgDn/wheel scrolling.
 
 use crate::markdown::{self, Block, Markdown};
 use crate::openai::{OpenAI, StreamEvent};
-use crate::term::{Key, Terminal};
+use crate::session::{self, SessionMeta};
+use crate::term::{self, Key, Terminal};
 use crate::{Message, Tool, ToolCall, Usage};
-use std::io::Write;
 use std::cell::RefCell;
+use std::io::Write;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
@@ -16,14 +20,17 @@ use std::time::Instant;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+const RESET: &str = "\x1b[0m";
+const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[38;5;245m";
 const STATUSLINE: &str = "\x1b[38;5;245m";
 const DIVIDER: &str = "\x1b[38;5;240m";
 const PERMISSION_AUTO: &str = "\x1b[38;5;252m";
+const HINT: &str = "\x1b[38;5;255m";
 const SYSTEM_NOTICE_TEXT: &str = "\x1b[38;5;250m";
-const SYSTEM_NOTICE_LABEL: &str = "\x1b[1;38;5;252m";
-const RESET: &str = "\x1b[0m";
+const SELECTED: &str = "\x1b[1;38;5;255m";
 const USER_RAIL: &str = "\x1b[38;5;255m";
+const WELCOME_APP: &str = "\x1b[1;38;5;255m";
 
 pub struct TuiConfig {
     pub base: String,
@@ -31,6 +38,8 @@ pub struct TuiConfig {
     pub system: String,
     pub dir: String,
     pub api_key: String,
+    /// None = fresh session. Some("") = resume picker. Some("last") or id = load.
+    pub resume: Option<String>,
 }
 
 enum Entry {
@@ -45,73 +54,27 @@ enum Entry {
     Notice(String),
 }
 
-pub fn run(cfg: TuiConfig) -> Result<(), String> {
-    let mut term = Terminal::new()?;
-    let (rows, cols) = term.size();
-    let model_display = compact_model_label(&cfg.model);
-    let mut tui = Tui {
-        cfg,
-        entries: Vec::new(),
-        running: false,
-        cancel: Arc::new(AtomicBool::new(false)),
-        tx: None,
-        rx: None,
-        cur_text: None,
-        md: None,
-        md_pending: None,
-        msgs: Vec::new(),
-        activity: Activity::Idle,
-        turn_start: Instant::now(),
-        scroll: 0,
-        input: Input::default(),
-        model_display,
-        sess_in: 0,
-        sess_out: 0,
-        want_quit: false,
-        rows,
-        cols,
-        last_frame: Vec::new(),
-    };
-    tui.entries.push(Entry::Welcome);
-    tui.msgs = load_session(&tui.cfg.dir, &mut tui.entries);
-    let result = tui.loop_forever(&mut term);
-    term.restore();
-    if result.is_ok() {
-        tui.dump_transcript();
-    }
-    result
-}
-
-struct Tui {
-    cfg: TuiConfig,
-    entries: Vec<Entry>,
-    running: bool,
-    cancel: Arc<AtomicBool>,
-    tx: Option<Sender<TurnEvent>>,
-    rx: Option<Receiver<TurnEvent>>,
-    cur_text: Option<usize>,
-    md: Option<Markdown>,
-    md_pending: Option<Rc<RefCell<Vec<(String, Block)>>>>,
-    msgs: Vec<Message>,
-    activity: Activity,
-    turn_start: Instant,
-    scroll: usize,
-    input: Input,
-    model_display: String,
-    sess_in: usize,
-    sess_out: usize,
-    want_quit: bool,
-    rows: u16,
-    cols: u16,
-    last_frame: Vec<String>,
-}
-
 #[derive(PartialEq, Clone)]
 enum Activity {
     Idle,
     Thinking,
     Tool(String),
     Streaming,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum Mode {
+    Inline,
+    Full,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum Screen {
+    None,
+    Help,
+    Resume,
+    Models,
+    Settings,
 }
 
 pub enum TurnEvent {
@@ -132,39 +95,247 @@ pub enum TurnEvent {
     },
 }
 
+struct SlashSpec {
+    command: &'static str,
+    help: &'static str,
+    description: &'static str,
+    category: &'static str,
+}
+
+const SLASH: &[SlashSpec] = &[
+    SlashSpec { command: "/help", help: "/help", description: "show available slash commands", category: "General",  },
+    SlashSpec { command: "/clear", help: "/clear", description: "start a fresh session", category: "General",  },
+    SlashSpec { command: "/new", help: "/new", description: "start a fresh session", category: "Session",  },
+    SlashSpec { command: "/reset", help: "/reset", description: "reset the current session context", category: "Session",  },
+    SlashSpec { command: "/resume", help: "/resume", description: "resume a saved session", category: "Session",  },
+    SlashSpec { command: "/rename", help: "/rename <title>", description: "rename the current session", category: "Session",  },
+    SlashSpec { command: "/status", help: "/status", description: "show runtime configuration", category: "General",  },
+    SlashSpec { command: "/stats", help: "/stats", description: "show token and turn statistics", category: "Account",  },
+    SlashSpec { command: "/model", help: "/model <id-or-query>", description: "choose what model and reasoning effort to use", category: "Model",  },
+    SlashSpec { command: "/models", help: "/models", description: "browse available models", category: "Model",  },
+    SlashSpec { command: "/permissions", help: "/permissions [ask|auto|yolo]", description: "choose what ax is allowed to do", category: "Security",  },
+    SlashSpec { command: "/settings", help: "/settings", description: "browse and update settings", category: "Appearance",  },
+    SlashSpec { command: "/appearance", help: "/appearance", description: "choose input and transcript presentation", category: "Appearance",  },
+    SlashSpec { command: "/copy", help: "/copy", description: "copy the last assistant response", category: "Session",  },
+    SlashSpec { command: "/version", help: "/version", description: "show the ax version", category: "General",  },
+    SlashSpec { command: "/quit", help: "/quit (/exit)", description: "exit the interactive shell", category: "General",  },
+];
+
+pub fn run(cfg: TuiConfig) -> Result<(), String> {
+    let mut term = Terminal::new()?;
+    let mut tui = Tui::new(cfg);
+    if let Some(id) = tui.cfg.resume.clone() {
+        if id.is_empty() {
+            tui.open_screen(Screen::Resume);
+        } else {
+            tui.resume_by_id(&id);
+        }
+    } else {
+        session::archive_live(&tui.cfg.dir);
+    }
+    if tui.entries.is_empty() {
+        tui.entries.push(Entry::Welcome);
+    }
+    let result = tui.loop_forever(&mut term);
+    term.restore();
+    if result.is_ok() {
+        tui.on_exit();
+    }
+    result
+}
+
+struct Tui {
+    cfg: TuiConfig,
+    entries: Vec<Entry>,
+    running: bool,
+    cancel: Arc<AtomicBool>,
+    ctrl_c_pending: bool,
+    toggle_full_pending: bool,
+    exit_alt_pending: bool,
+    tx: Option<Sender<TurnEvent>>,
+    rx: Option<Receiver<TurnEvent>>,
+    cur_text: Option<usize>,
+    md: Option<Markdown>,
+    md_pending: Option<Rc<RefCell<Vec<(String, Block)>>>>,
+    msgs: Vec<Message>,
+    activity: Activity,
+    turn_start: Instant,
+    input: Input,
+    model_display: String,
+    sess_in: usize,
+    sess_out: usize,
+    want_quit: bool,
+    mode: Mode,
+    screen: Screen,
+    alt_active: bool,
+    full_scroll: usize,
+    streamed: Vec<String>,
+    painted_once: bool,
+    last_frame: Vec<String>,
+    rows: u16,
+    cols: u16,
+    sel: usize,
+    window_start: usize,
+    sessions: Vec<SessionMeta>,
+    models: Vec<String>,
+    models_loading: bool,
+    models_rx: Option<Receiver<Result<Vec<String>, String>>>,
+    permission: u8,
+}
+
 impl Tui {
+    fn new(cfg: TuiConfig) -> Tui {
+        let model_display = compact_model_label(&cfg.model);
+        Tui {
+            cfg,
+            entries: Vec::new(),
+            running: false,
+            cancel: Arc::new(AtomicBool::new(false)),
+            ctrl_c_pending: false,
+            toggle_full_pending: false,
+            exit_alt_pending: false,
+            tx: None,
+            rx: None,
+            cur_text: None,
+            md: None,
+            md_pending: None,
+            msgs: Vec::new(),
+            activity: Activity::Idle,
+            turn_start: Instant::now(),
+            input: Input::default(),
+            model_display,
+            sess_in: 0,
+            sess_out: 0,
+            want_quit: false,
+            mode: Mode::Inline,
+            screen: Screen::None,
+            alt_active: false,
+            full_scroll: 0,
+            streamed: Vec::new(),
+            painted_once: false,
+            last_frame: Vec::new(),
+            rows: 24,
+            cols: 80,
+            sel: 0,
+            window_start: 0,
+            sessions: Vec::new(),
+            models: Vec::new(),
+            models_loading: false,
+            models_rx: None,
+            permission: 0,
+        }
+    }
+
+    fn on_exit(&mut self) {
+        session::save_live(&self.cfg.dir, &self.msgs);
+        session::archive_live(&self.cfg.dir);
+    }
+
     fn loop_forever(&mut self, term: &mut Terminal) -> Result<(), String> {
         let stdin_fd = libc::STDIN_FILENO;
         loop {
-            self.paint(term);
             let mut fds = [libc::pollfd {
                 fd: stdin_fd,
                 events: libc::POLLIN,
                 revents: 0,
             }];
             unsafe {
-                libc::poll(fds.as_mut_ptr(), 1, 100);
+                libc::poll(fds.as_mut_ptr(), 1, 40);
             }
             if fds[0].revents & libc::POLLIN != 0 {
                 if !self.handle_key(term.read_key()?)? {
-                    return Ok(());
+                    break;
                 }
             }
+            if self.want_quit {
+                break;
+            }
+            if self.toggle_full_pending {
+                self.toggle_full_pending = false;
+                self.toggle_full(term);
+            }
+            if self.exit_alt_pending {
+                self.exit_alt_pending = false;
+                self.leave_alt(term);
+            }
             self.drain_events();
+            self.paint(term);
+        }
+        Ok(())
+    }
+
+    fn ctrl_letter(c: char) -> Option<char> {
+        let b = c as u8;
+        if (1..=26).contains(&b) {
+            Some((b + 96) as char)
+        } else {
+            None
         }
     }
 
     fn handle_key(&mut self, key: Key) -> Result<bool, String> {
+        if self.screen != Screen::None {
+            return self.handle_screen_key(key);
+        }
+        if self.mode == Mode::Full {
+            match key {
+                Key::PageUp => {
+                    let h = self.full_view_h();
+                    self.full_scroll = (self.full_scroll + h).min(self.full_max_scroll());
+                    return Ok(true);
+                }
+                Key::PageDown => {
+                    let h = self.full_view_h();
+                    self.full_scroll = self.full_scroll.saturating_sub(h);
+                    return Ok(true);
+                }
+                Key::WheelUp => {
+                    self.full_scroll = (self.full_scroll + 3).min(self.full_max_scroll());
+                    return Ok(true);
+                }
+                Key::WheelDown => {
+                    self.full_scroll = self.full_scroll.saturating_sub(3);
+                    return Ok(true);
+                }
+                Key::Ctrl(c) => {
+                    if Self::ctrl_letter(c) == Some('o') {
+                        self.toggle_full_pending = true;
+                        return Ok(true);
+                    }
+                }
+                Key::Esc => {
+                    self.toggle_full_pending = true;
+                    return Ok(true);
+                }
+                _ => {}
+            }
+        } else {
+            match key {
+                Key::Ctrl(c) => {
+                    if Self::ctrl_letter(c) == Some('o') {
+                        self.toggle_full_pending = true;
+                        return Ok(true);
+                    }
+                }
+                _ => {}
+            }
+        }
         match key {
             Key::CtrlC => {
                 if self.running {
-                    self.cancel.store(true, Ordering::Relaxed);
+                    if self.ctrl_c_pending {
+                        self.cancel.store(true, Ordering::Relaxed);
+                        self.want_quit = true;
+                    } else {
+                        self.ctrl_c_pending = true;
+                    }
                     return Ok(true);
                 }
                 return Ok(false);
             }
             Key::Ctrl(c) => {
-                if !self.handle_ctrl(c) {
+                let letter = Self::ctrl_letter(c).unwrap_or(c);
+                if !self.handle_ctrl(letter) {
                     return Ok(false);
                 }
             }
@@ -177,22 +348,193 @@ impl Tui {
                     }
                 }
             }
+            Key::ShiftEnter => self.input.insert('\n'),
             Key::Tab => self.tab(),
+            Key::ShiftTab => {}
             Key::Backspace => self.input.backspace(),
             Key::Delete => self.input.delete(),
             Key::Left => self.input.move_left(),
             Key::Right => self.input.move_right(),
-            Key::Home => self.input.home(),
-            Key::End => self.input.end(),
+            Key::Home | Key::CtrlHome => self.input.home(),
+            Key::End | Key::CtrlEnd => self.input.end(),
             Key::Up => self.input.history_prev(),
             Key::Down => self.input.history_next(),
-            Key::PageUp => self.scroll_up(),
-            Key::PageDown => self.scroll_down(),
+            Key::AltLeft => self.input.move_word_left(),
+            Key::AltRight => self.input.move_word_right(),
+            Key::AltUp | Key::AltDown | Key::CtrlUp | Key::CtrlDown | Key::CtrlLeft | Key::CtrlRight => {}
+            Key::PageUp | Key::PageDown => {}
+            Key::WheelUp | Key::WheelDown | Key::WheelLeft | Key::WheelRight => {}
+            Key::MousePress(_, _) | Key::MouseRelease | Key::MouseOther => {}
             Key::Alt(_) | Key::Esc => self.input.esc(),
             Key::Paste(bytes) => self.input.paste(&bytes),
+            Key::PasteStart | Key::PasteEnd => {}
             Key::Eof => return Ok(false),
         }
         Ok(true)
+    }
+
+    fn handle_screen_key(&mut self, key: Key) -> Result<bool, String> {
+        match key {
+            Key::CtrlC => {
+                self.close_screen();
+                Ok(true)
+            }
+            Key::Ctrl(c) => {
+                let letter = Self::ctrl_letter(c).unwrap_or(c);
+                if letter == 'o' || letter == 'l' {
+                    self.close_screen();
+                }
+                Ok(true)
+            }
+            Key::Esc => {
+                self.close_screen();
+                Ok(true)
+            }
+            Key::Char(c) => {
+                self.input.insert(c);
+                self.sel = 0;
+                self.window_start = 0;
+                Ok(true)
+            }
+            Key::Backspace => {
+                self.input.backspace();
+                self.sel = 0;
+                self.window_start = 0;
+                Ok(true)
+            }
+            Key::Up => {
+                self.sel = self.sel.saturating_sub(1);
+                Ok(true)
+            }
+            Key::Down => {
+                let n = self.catalog_item_count();
+                if n > 0 && self.sel + 1 < n {
+                    self.sel += 1;
+                }
+                Ok(true)
+            }
+            Key::PageUp => {
+                self.sel = self.sel.saturating_sub(8);
+                Ok(true)
+            }
+            Key::PageDown => {
+                let n = self.catalog_item_count();
+                self.sel = (self.sel + 8).min(n.saturating_sub(1));
+                Ok(true)
+            }
+            Key::Left | Key::Right => {
+                if self.screen == Screen::Settings {
+                    self.cycle_permission();
+                }
+                Ok(true)
+            }
+            Key::Tab => {
+                if self.screen == Screen::Models {
+                    let n = self.catalog_item_count();
+                    if n > 0 {
+                        self.sel = (self.sel + 1) % n;
+                    }
+                }
+                Ok(true)
+            }
+            Key::Enter => {
+                self.catalog_activate();
+                Ok(true)
+            }
+            Key::Paste(bytes) => {
+                for c in String::from_utf8_lossy(&bytes).chars() {
+                    if c == '\n' || c == '\r' {
+                        continue;
+                    }
+                    self.input.insert(c);
+                }
+                self.sel = 0;
+                self.window_start = 0;
+                Ok(true)
+            }
+            _ => Ok(true),
+        }
+    }
+
+    fn close_screen(&mut self) {
+        self.screen = Screen::None;
+        self.input.take();
+        if self.mode == Mode::Inline {
+            self.exit_alt_pending = true;
+            self.streamed.clear();
+        } else {
+            self.last_frame.clear();
+        }
+    }
+
+    fn enter_alt(&mut self, term: &mut Terminal) {
+        if self.alt_active {
+            return;
+        }
+        let out = term.out();
+        let _ = out.write_all(term::enter_alt().as_bytes());
+        let _ = out.write_all(term::mouse_on().as_bytes());
+        let _ = out.write_all(term::clear_display().as_bytes());
+        let _ = out.flush();
+        self.alt_active = true;
+    }
+
+    fn leave_alt(&mut self, term: &mut Terminal) {
+        if !self.alt_active {
+            return;
+        }
+        let out = term.out();
+        let _ = out.write_all(term::mouse_off().as_bytes());
+        let _ = out.write_all(term::leave_alt().as_bytes());
+        let _ = out.flush();
+        self.alt_active = false;
+    }
+
+    fn toggle_full(&mut self, term: &mut Terminal) {
+        if self.mode == Mode::Inline {
+            self.enter_alt(term);
+            self.mode = Mode::Full;
+            self.full_scroll = 0;
+            self.last_frame.clear();
+        } else {
+            self.leave_alt(term);
+            self.mode = Mode::Inline;
+            self.streamed.clear();
+        }
+    }
+
+    fn handle_ctrl(&mut self, c: char) -> bool {
+        match c {
+            'a' => self.input.home(),
+            'e' => self.input.end(),
+            'b' => self.input.move_left(),
+            'f' => self.input.move_right(),
+            'p' => self.input.history_prev(),
+            'n' => self.input.history_next(),
+            'w' => self.input.delete_word_left(),
+            'u' => {
+                let chars: Vec<char> = self.input.buf.chars().collect();
+                self.input.buf = chars[self.input.cursor..].iter().collect();
+                self.input.cursor = 0;
+            }
+            'k' => {
+                let chars: Vec<char> = self.input.buf.chars().collect();
+                self.input.buf = chars[..self.input.cursor].iter().collect();
+            }
+            'd' => {
+                if !self.running && self.input.buf.is_empty() {
+                    return false;
+                }
+                if self.input.cursor < self.input.buf.chars().count() {
+                    self.input.delete();
+                }
+            }
+            'l' => {
+                self.painted_once = false;
+            }
+            _ => {}
+        }
+        true
     }
 
     fn submit(&mut self) {
@@ -204,7 +546,9 @@ impl Tui {
             self.slash(rest);
             return;
         }
-        self.scroll = 0;
+        if self.running {
+            return;
+        }
         self.entries.push(Entry::User(v.clone()));
         self.input.history.push(v.clone());
         self.msgs.push(Message {
@@ -223,6 +567,7 @@ impl Tui {
         self.rx = Some(rx);
         self.running = true;
         self.cancel = Arc::new(AtomicBool::new(false));
+        self.ctrl_c_pending = false;
         self.turn_start = Instant::now();
         self.activity = Activity::Thinking;
         self.cur_text = None;
@@ -239,143 +584,154 @@ impl Tui {
 
     fn drain_events(&mut self) -> bool {
         let mut any = false;
-        let rx = match self.rx.take() {
-            Some(rx) => rx,
-            None => return false,
-        };
         let mut cur = self.cur_text;
-        while let Ok(ev) = rx.try_recv() {
-            any = true;
-            match ev {
-                TurnEvent::AssistantDelta(delta) => {
-                    if self.md.is_none() {
-                        let pending = Rc::new(RefCell::new(Vec::new()));
-                        let p2 = pending.clone();
-                        let mut md = Markdown::new();
-                        md.set_on_block(move |b, out| {
-                            p2.borrow_mut().push((std::mem::take(out), b));
-                        });
-                        self.md = Some(md);
-                        self.md_pending = Some(pending);
-                    }
-                    let pending = self.md_pending.as_ref().unwrap().clone();
-                    self.md.as_mut().unwrap().push(&delta);
-                    for (drained, block) in pending.borrow_mut().drain(..) {
-                        if let Some(i) = cur.take() {
-                            self.entries[i] = Entry::Text(drained);
-                        } else if !drained.is_empty() {
-                            self.entries.push(Entry::Text(drained));
+        if let Some(rx) = self.rx.take() {
+            while let Ok(ev) = rx.try_recv() {
+                any = true;
+                match ev {
+                    TurnEvent::AssistantDelta(delta) => {
+                        if self.md.is_none() {
+                            let pending = Rc::new(RefCell::new(Vec::new()));
+                            let p2 = pending.clone();
+                            let mut md = Markdown::new();
+                            md.set_on_block(move |b, out| {
+                                p2.borrow_mut().push((std::mem::take(out), b));
+                            });
+                            self.md = Some(md);
+                            self.md_pending = Some(pending);
                         }
-                        self.push_block(block);
-                        cur = None;
-                    }
-                    let text = self.md.as_ref().unwrap().current_text().to_string();
-                    if let Some(i) = cur {
-                        if !text.is_empty() {
-                            self.entries[i] = Entry::Text(text);
+                        let pending = self.md_pending.as_ref().unwrap().clone();
+                        self.md.as_mut().unwrap().push(&delta);
+                        for (drained, block) in pending.borrow_mut().drain(..) {
+                            if let Some(i) = cur.take() {
+                                self.entries[i] = Entry::Text(drained);
+                            } else if !drained.is_empty() {
+                                self.entries.push(Entry::Text(drained));
+                            }
+                            self.push_block(block);
+                            cur = None;
                         }
-                    } else if !text.is_empty() {
-                        self.entries.push(Entry::Text(text));
-                        cur = Some(self.entries.len() - 1);
+                        let text = self.md.as_ref().unwrap().current_text().to_string();
+                        if let Some(i) = cur {
+                            if !text.is_empty() {
+                                self.entries[i] = Entry::Text(text);
+                            }
+                        } else if !text.is_empty() {
+                            self.entries.push(Entry::Text(text));
+                            cur = Some(self.entries.len() - 1);
+                        }
+                        self.activity = Activity::Streaming;
                     }
-                    self.activity = Activity::Streaming;
-                }
-                TurnEvent::AssistantDone => {
-                    if let Some(mut md) = self.md.take() {
-                        let pending = self.md_pending.take();
-                        let tail = md.finish();
-                        if let Some(pending) = pending {
-                            for (drained, block) in pending.borrow_mut().drain(..) {
-                                if !drained.is_empty() {
-                                    self.entries.push(Entry::Text(drained));
+                    TurnEvent::AssistantDone => {
+                        if let Some(mut md) = self.md.take() {
+                            let pending = self.md_pending.take();
+                            let tail = md.finish();
+                            if let Some(pending) = pending {
+                                for (drained, block) in pending.borrow_mut().drain(..) {
+                                    if !drained.is_empty() {
+                                        self.entries.push(Entry::Text(drained));
+                                    }
+                                    self.push_block(block);
                                 }
-                                self.push_block(block);
+                            }
+                            if !tail.is_empty() {
+                                if let Some(i) = cur.take() {
+                                    self.entries[i] = Entry::Text(tail);
+                                } else {
+                                    self.entries.push(Entry::Text(tail));
+                                }
                             }
                         }
-                        if !tail.is_empty() {
-                            if let Some(i) = cur.take() {
-                                self.entries[i] = Entry::Text(tail);
-                            } else {
+                        cur = None;
+                        self.activity = Activity::Thinking;
+                    }
+                    TurnEvent::ToolStart(label) => {
+                        self.entries.push(Entry::Tool {
+                            active: true,
+                            label: label.clone(),
+                        });
+                        self.activity = Activity::Tool(label);
+                    }
+                    TurnEvent::ToolResult {
+                        label,
+                        output,
+                        cancelled,
+                    } => {
+                        for e in self.entries.iter_mut().rev() {
+                            if let Entry::Tool { active, .. } = e {
+                                if *active {
+                                    *e = Entry::Tool {
+                                        active: false,
+                                        label: label.clone(),
+                                    };
+                                    break;
+                                }
+                            }
+                        }
+                        if !cancelled {
+                            self.entries.push(Entry::Output {
+                                stderr: false,
+                                text: output,
+                            });
+                        }
+                        self.activity = Activity::Thinking;
+                    }
+                    TurnEvent::Notice(text) => {
+                        self.entries.push(Entry::Notice(text));
+                    }
+                    TurnEvent::End {
+                        messages,
+                        usage,
+                        err,
+                        cancelled,
+                    } => {
+                        self.running = false;
+                        self.ctrl_c_pending = false;
+                        self.sess_in += usage.input;
+                        self.sess_out += usage.output;
+                        if let Some(mut md) = self.md.take() {
+                            let pending = self.md_pending.take();
+                            let tail = md.finish();
+                            if let Some(pending) = pending {
+                                for (drained, block) in pending.borrow_mut().drain(..) {
+                                    if !drained.is_empty() {
+                                        self.entries.push(Entry::Text(drained));
+                                    }
+                                    self.push_block(block);
+                                }
+                            }
+                            if !tail.is_empty() {
                                 self.entries.push(Entry::Text(tail));
                             }
                         }
-                    }
-                    cur = None;
-                    self.activity = Activity::Thinking;
-                }
-                TurnEvent::ToolStart(label) => {
-                    self.entries.push(Entry::Tool {
-                        active: true,
-                        label: label.clone(),
-                    });
-                    self.activity = Activity::Tool(label);
-                }
-                TurnEvent::ToolResult {
-                    label,
-                    output,
-                    cancelled,
-                } => {
-                    for e in self.entries.iter_mut().rev() {
-                        if let Entry::Tool { active, .. } = e {
-                            if *active {
-                                *e = Entry::Tool {
-                                    active: false,
-                                    label: label.clone(),
-                                };
-                                break;
-                            }
+                        self.cur_text = None;
+                        self.msgs = messages.clone();
+                        if let Some(err) = err {
+                            self.entries.push(Entry::Notice(format!("error: {err}")));
                         }
-                    }
-                    if !cancelled {
-                        self.entries.push(Entry::Output {
-                            stderr: false,
-                            text: output,
-                        });
-                    }
-                    self.activity = Activity::Thinking;
-                }
-                TurnEvent::Notice(text) => {
-                    self.entries.push(Entry::Notice(text));
-                }
-                TurnEvent::End {
-                    messages,
-                    usage,
-                    err,
-                    cancelled,
-                } => {
-                    self.running = false;
-                    self.sess_in += usage.input;
-                    self.sess_out += usage.output;
-                    if let Some(mut md) = self.md.take() {
-                        let pending = self.md_pending.take();
-                        let tail = md.finish();
-                        if let Some(pending) = pending {
-                            for (drained, block) in pending.borrow_mut().drain(..) {
-                                if !drained.is_empty() {
-                                    self.entries.push(Entry::Text(drained));
-                                }
-                                self.push_block(block);
-                            }
+                        if cancelled {
+                            self.entries.push(Entry::Notice("interrupted".into()));
                         }
-                        if !tail.is_empty() {
-                            self.entries.push(Entry::Text(tail));
-                        }
+                        session::save_live(&self.cfg.dir, &messages);
+                        self.activity = Activity::Idle;
                     }
-                    self.cur_text = None;
-                    self.msgs = messages.clone();
-                    if let Some(err) = err {
-                        self.entries.push(Entry::Notice(format!("error: {err}")));
-                    }
-                    if cancelled {
-                        self.entries.push(Entry::Notice("interrupted".into()));
-                    }
-                    save_session(&self.cfg.dir, &messages);
-                    self.activity = Activity::Idle;
                 }
             }
+            self.rx = Some(rx);
         }
         self.cur_text = cur;
-        self.rx = Some(rx);
+        if let Some(rx) = self.models_rx.take() {
+            match rx.try_recv() {
+                Ok(Ok(m)) => {
+                    self.models = m;
+                    self.models_loading = false;
+                }
+                Ok(Err(_)) => {
+                    self.models_loading = false;
+                }
+                Err(_) => self.models_rx = Some(rx),
+            }
+        }
         any
     }
 
@@ -398,52 +754,21 @@ impl Tui {
             None => (cmd, ""),
         };
         match name {
-            "help" => {
-                let help = "/help /clear /new /reset /resume /model /system /status /stats /version /quit";
-                self.entries.push(Entry::Notice(format!("{SYSTEM_NOTICE_LABEL}help{RESET} {DIM}{help}{RESET}")));
-            }
-            "clear" => {
-                self.entries.clear();
-                self.entries.push(Entry::Welcome);
-            }
-            "new" | "reset" => {
-                self.entries.clear();
-                self.entries.push(Entry::Welcome);
-                self.msgs.clear();
-                self.sess_in = 0;
-                self.sess_out = 0;
-                save_session(&self.cfg.dir, &[]);
-            }
-            "resume" => {
-                let before = self.entries.len();
-                self.msgs = load_session(&self.cfg.dir, &mut self.entries);
-                let n = self.entries.len() - before;
-                self.entries.push(Entry::Notice(format!(
-                    "{DIM}resumed {n} messages{RESET}"
-                )));
-            }
-            "model" => {
+            "help" => self.open_screen(Screen::Help),
+            "clear" | "new" => self.fresh_session(true),
+            "reset" => self.fresh_session(false),
+            "resume" => self.open_screen(Screen::Resume),
+            "rename" => {
                 if !rest.is_empty() {
-                    self.cfg.model = rest.to_string();
-                    self.model_display = compact_model_label(rest);
-                }
-                self.entries.push(Entry::Notice(format!(
-                    "{DIM}model: {}{RESET}",
-                    self.cfg.model
-                )));
-            }
-            "system" => {
-                if !rest.is_empty() {
-                    self.cfg.system = rest.to_string();
-                }
-                let s = if self.cfg.system.is_empty() {
-                    "(default)".to_string()
+                    session::set_live_title(&self.cfg.dir, rest);
+                    self.entries.push(Entry::Notice(format!(
+                        "{DIM}renamed: {rest}{RESET}"
+                    )));
                 } else {
-                    clip(&self.cfg.system, 120)
-                };
-                self.entries.push(Entry::Notice(format!(
-                    "{DIM}system: {s}{RESET}"
-                )));
+                    self.entries.push(Entry::Notice(format!(
+                        "{DIM}usage: /rename <title>{RESET}"
+                    )));
+                }
             }
             "status" => {
                 let key = if self.cfg.api_key.is_empty() {
@@ -451,11 +776,15 @@ impl Tui {
                 } else {
                     "set".to_string()
                 };
-                let msg = format!(
+                let dir = if self.cfg.dir.is_empty() {
+                    ".".to_string()
+                } else {
+                    self.cfg.dir.clone()
+                };
+                self.entries.push(Entry::Notice(format!(
                     "{DIM}base: {} · model: {} · dir: {} · key: {}{RESET}",
-                    self.cfg.base, self.cfg.model, self.cfg.dir, key
-                );
-                self.entries.push(Entry::Notice(msg));
+                    self.cfg.base, self.cfg.model, dir, key
+                )));
             }
             "stats" => {
                 let msg = format!(
@@ -465,6 +794,17 @@ impl Tui {
                 );
                 self.entries.push(Entry::Notice(msg));
             }
+            "model" => {
+                if !rest.is_empty() {
+                    self.cfg.model = rest.to_string();
+                    self.model_display = compact_model_label(rest);
+                }
+                self.open_screen(Screen::Models);
+            }
+            "models" => self.open_screen(Screen::Models),
+            "permissions" => self.cycle_permission(),
+            "settings" | "appearance" => self.open_screen(Screen::Settings),
+            "copy" => self.copy_last(),
             "version" => {
                 self.entries
                     .push(Entry::Notice(format!("{DIM}v{VERSION}{RESET}")));
@@ -477,74 +817,393 @@ impl Tui {
                     .push(Entry::Notice(format!("{DIM}unknown command: /{name}{RESET}")));
             }
         }
-        if name == "quit" || name == "exit" {
+    }
+
+    fn cycle_permission(&mut self) {
+        self.permission = (self.permission + 1) % 3;
+    }
+
+    fn fresh_session(&mut self, archive: bool) {
+        if archive {
+            session::archive_live(&self.cfg.dir);
+        }
+        self.entries.clear();
+        self.entries.push(Entry::Welcome);
+        self.msgs.clear();
+        self.sess_in = 0;
+        self.sess_out = 0;
+        self.input.history.clear();
+        self.activity = Activity::Idle;
+        self.running = false;
+        self.cur_text = None;
+        self.md = None;
+        self.md_pending = None;
+        self.streamed.clear();
+        if self.mode == Mode::Full {
+            self.full_scroll = 0;
+            self.last_frame.clear();
+        }
+    }
+
+    fn copy_last(&mut self) {
+        let mut text = String::new();
+        for m in self.msgs.iter().rev() {
+            if m.role == "assistant" && !m.content.is_empty() {
+                text = m.content.clone();
+                break;
+            }
+        }
+        if text.is_empty() {
+            self.entries.push(Entry::Notice(format!(
+                "{DIM}no assistant response to copy{RESET}"
+            )));
             return;
         }
-        self.scroll = 0;
+        let b64 = b64_encode(text.as_bytes());
+        print!("\x1b]52;c;{b64}\x1b\\");
+        let _ = std::io::stdout().flush();
+        self.entries
+            .push(Entry::Notice(format!("{DIM}copied last response{RESET}")));
     }
 
-    fn scroll_up(&mut self) {
-        self.scroll = self.scroll.saturating_add(self.content_height() - 2);
+    fn resume_by_id(&mut self, id: &str) {
+        let dir = self.cfg.dir.clone();
+        let msgs = if id == "last" {
+            session::list_sessions(&dir)
+                .into_iter()
+                .next()
+                .map(|s| session::load_session(&s.path))
+        } else {
+            session::load_by_id(&dir, id)
+        };
+        match msgs {
+            Some(msgs) => self.load_messages(msgs),
+            None => {
+                self.entries.push(Entry::Notice(format!(
+                    "{DIM}no such session: {id}{RESET}"
+                )));
+            }
+        }
     }
 
-    fn scroll_down(&mut self) {
-        self.scroll = self.scroll.saturating_sub(self.content_height() - 2);
+    fn load_messages(&mut self, msgs: Vec<Message>) {
+        self.msgs = msgs;
+        self.entries.clear();
+        self.entries.push(Entry::Welcome);
+        for m in &self.msgs {
+            match m.role.as_str() {
+                "user" => self
+                    .entries
+                    .push(Entry::User(m.content.clone())),
+                "assistant" => {
+                    if !m.content.is_empty() {
+                        self.entries
+                            .push(Entry::Text(markdown::Markdown::render(&m.content)));
+                    }
+                    for c in &m.tool_calls {
+                        self.entries.push(Entry::Tool {
+                            active: false,
+                            label: tool_label(c, false),
+                        });
+                    }
+                }
+                "tool" => {
+                    if !m.content.is_empty() {
+                        self.entries.push(Entry::Output {
+                            stderr: false,
+                            text: m.content.clone(),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.sess_in = 0;
+        self.sess_out = 0;
+        self.streamed.clear();
+        if self.mode == Mode::Full {
+            self.full_scroll = 0;
+            self.last_frame.clear();
+        }
+        session::save_live(&self.cfg.dir, &self.msgs);
     }
 
-    fn content_height(&self) -> usize {
-        (self.rows as usize).saturating_sub(if self.picker_active() { 4 } else { 2 })
+    fn open_screen(&mut self, screen: Screen) {
+        match screen {
+            Screen::Resume => {
+                self.sessions = session::list_sessions(&self.cfg.dir);
+            }
+            Screen::Models => {
+                self.start_models_load();
+            }
+            _ => {}
+        }
+        self.screen = screen;
+        self.input.take();
+        self.sel = 0;
+        self.window_start = 0;
+        self.last_frame.clear();
     }
 
-    fn picker_active(&self) -> bool {
-        self.input.buf().starts_with('/') && slash_matches(&self.input.buf()).len() > 1
+    fn start_models_load(&mut self) {
+        if self.models_loading || !self.models.is_empty() {
+            return;
+        }
+        self.models_loading = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.models_rx = Some(rx);
+        let provider = OpenAI::new(self.cfg.base.clone(), self.cfg.api_key.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(provider.list_models().map_err(|e| e.to_string()));
+        });
     }
+
+    // ---------- catalog ----------
+
+    fn catalog_item_count(&self) -> usize {
+        match self.screen {
+            Screen::Help => self.help_items().len(),
+            Screen::Resume => self.filtered_sessions().len(),
+            Screen::Models => self.filtered_models().len(),
+            Screen::Settings => self.settings_items().len(),
+            _ => 0,
+        }
+    }
+
+    fn help_items(&self) -> Vec<&'static SlashSpec> {
+        let q = self.input.buf().trim().to_lowercase();
+        SLASH
+            .iter()
+            .filter(|s| {
+                q.is_empty()
+                    || s.command.to_lowercase().contains(&q)
+                    || s.description.to_lowercase().contains(&q)
+                    || s.category.to_lowercase().contains(&q)
+            })
+            .collect()
+    }
+
+    fn filtered_sessions(&self) -> Vec<&SessionMeta> {
+        let q = self.input.buf().trim().to_lowercase();
+        self.sessions
+            .iter()
+            .filter(|s| q.is_empty() || s.title.to_lowercase().contains(&q))
+            .collect()
+    }
+
+    fn filtered_models(&self) -> Vec<&String> {
+        let q = self.input.buf().trim().to_lowercase();
+        self.models
+            .iter()
+            .filter(|m| q.is_empty() || m.to_lowercase().contains(&q))
+            .collect()
+    }
+
+    fn settings_items(&self) -> Vec<(&'static str, String)> {
+        let q = self.input.buf().trim().to_lowercase();
+        let mode = match self.permission {
+            0 => "auto".to_string(),
+            1 => "ask".to_string(),
+            _ => "yolo".to_string(),
+        };
+        if q.is_empty() || "permission mode".contains(&q) || "permissions".contains(&q) {
+            vec![("Permission mode", mode)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn catalog_activate(&mut self) {
+        match self.screen {
+            Screen::Help => {
+                let items = self.help_items();
+                if let Some(spec) = items.get(self.sel).copied() {
+                    let cmd = spec.command;
+                    self.close_screen();
+                    if let Some(rest) = cmd.strip_prefix('/') {
+                        self.slash(rest);
+                    }
+                }
+            }
+            Screen::Resume => {
+                let s = self.filtered_sessions().get(self.sel).cloned();
+                if let Some(s) = s {
+                    let msgs = session::load_session(&s.path);
+                    let title = s.title.clone();
+                    self.close_screen();
+                    self.load_messages(msgs);
+                    self.entries.push(Entry::Notice(format!(
+                        "{DIM}resumed: {title}{RESET}"
+                    )));
+                }
+            }
+            Screen::Models => {
+                let m = self.filtered_models().get(self.sel).cloned().cloned();
+                if let Some(m) = m {
+                    self.cfg.model = m.clone();
+                    self.model_display = compact_model_label(&m);
+                    self.close_screen();
+                    self.entries.push(Entry::Notice(format!(
+                        "{DIM}model: {}{RESET}",
+                        self.cfg.model
+                    )));
+                }
+            }
+            Screen::Settings => {
+                self.close_screen();
+            }
+            Screen::None => {}
+        }
+    }
+
+    fn catalog_rows(&mut self, rows: u16, cols: u16) -> Vec<String> {
+        let width = cols as usize;
+        let mut out = Vec::new();
+        let (composer, _) = self.input.render_with("┃ ", width);
+        out.push(format!("{HINT}{composer}{RESET}"));
+        out.push(format!("{DIVIDER}{}{RESET}", "\u{2500}".repeat(width)));
+        let q = self.input.buf().trim().to_lowercase();
+        let sel = self.sel;
+        let dir = self.cfg.dir.clone();
+        let screen = self.screen;
+        match screen {
+            Screen::Help => {
+                let items: Vec<&'static SlashSpec> = SLASH
+                    .iter()
+                    .filter(|s| {
+                        q.is_empty()
+                            || s.command.to_lowercase().contains(&q)
+                            || s.description.to_lowercase().contains(&q)
+                            || s.category.to_lowercase().contains(&q)
+                    })
+                    .collect();
+                out.push(format!("{SELECTED}Commands {}{RESET}", items.len()));
+                push_catalog_items(&mut self.window_start, sel, &mut out, items.len(), rows, |i| {
+                    let s = items[i];
+                    let style = if i == sel { SELECTED } else { DIM };
+                    let mut r = format!("{style}  {}{RESET}", s.help);
+                    let desc_col = width * 2 / 3;
+                    let pad = desc_col.saturating_sub(visible_width(&r));
+                    r.push_str(&" ".repeat(pad));
+                    r.push_str(&format!(
+                        "{DIM}{}{RESET}",
+                        clip(&s.description, width.saturating_sub(desc_col))
+                    ));
+                    r
+                });
+            }
+            Screen::Resume => {
+                let items: Vec<(String, i64, usize)> = self
+                    .sessions
+                    .iter()
+                    .filter(|s| q.is_empty() || s.title.to_lowercase().contains(&q))
+                    .map(|s| (s.title.clone(), s.updated, s.turns))
+                    .collect();
+                out.push(format!("{SELECTED}Sessions {}{RESET}", items.len()));
+                push_catalog_items(&mut self.window_start, sel, &mut out, items.len(), rows, |i| {
+                    let (title, updated, turns) = &items[i];
+                    let age = age_str(*updated);
+                    let meta = format!(
+                        "{} · {} · {} turn{}",
+                        workspace_label(&dir),
+                        age,
+                        turns,
+                        if *turns == 1 { "" } else { "s" }
+                    );
+                    let desc_col = width * 2 / 3;
+                    let style = if i == sel { SELECTED } else { DIM };
+                    let mut r =
+                        format!("{style}  {}{RESET}", clip(title, desc_col.saturating_sub(4)));
+                    let pad = desc_col.saturating_sub(visible_width(&r));
+                    r.push_str(&" ".repeat(pad));
+                    r.push_str(&format!("{DIM}{meta}{RESET}"));
+                    r
+                });
+            }
+            Screen::Models => {
+                if self.models_loading && self.models.is_empty() {
+                    out.push(format!("{DIM}Loading models…{RESET}"));
+                } else {
+                    let items: Vec<String> = self
+                        .models
+                        .iter()
+                        .filter(|m| q.is_empty() || m.to_lowercase().contains(&q))
+                        .cloned()
+                        .collect();
+                    if items.is_empty() && !self.models_loading {
+                        out.push(format!("{DIM}No models found.{RESET}"));
+                    } else {
+                        out.push(format!("{SELECTED}Models {}{RESET}", items.len()));
+                        push_catalog_items(&mut self.window_start, sel, &mut out, items.len(), rows, |i| {
+                            let style = if i == sel { SELECTED } else { DIM };
+                            format!("{style}  {}{RESET}", items[i])
+                        });
+                    }
+                }
+            }
+            Screen::Settings => {
+                let mode = match self.permission {
+                    0 => "auto".to_string(),
+                    1 => "ask".to_string(),
+                    _ => "yolo".to_string(),
+                };
+                let items: Vec<(&'static str, String)> =
+                    if q.is_empty() || "permission mode".contains(&q) || "permissions".contains(&q) {
+                        vec![("Permission mode", mode)]
+                    } else {
+                        Vec::new()
+                    };
+                out.push(format!("{SELECTED}Settings{RESET}"));
+                out.push(format!("{DIM}Interface{RESET}"));
+                push_catalog_items(&mut self.window_start, sel, &mut out, items.len(), rows, |i| {
+                    let (name, value) = &items[i];
+                    let style = if i == sel { SELECTED } else { DIM };
+                    let mut r = format!("{style}  {name}{RESET}");
+                    let desc_col = width * 2 / 3;
+                    let pad = desc_col.saturating_sub(visible_width(&r));
+                    r.push_str(&" ".repeat(pad));
+                    r.push_str(&format!("{DIM}{value}{RESET}"));
+                    r
+                });
+            }
+            Screen::None => {}
+        }
+        let hint = match screen {
+            Screen::Help => "↑↓ Navigate     Enter Open     Esc Close",
+            Screen::Resume => "↑↓ Navigate     Enter Open     Esc Close",
+            Screen::Models => "↑↓ Navigate     Enter Open     Esc Close",
+            Screen::Settings => "↑↓ Navigate     ←→ Change     Esc Close",
+            Screen::None => "",
+        };
+        out.push(format!("{DIM}{hint}{RESET}"));
+        out
+    }
+
+    // ---------- rendering ----------
 
     fn paint(&mut self, term: &mut Terminal) {
         let (rows, cols) = term.size();
-        if rows != self.rows || cols != self.cols {
-            self.rows = rows;
-            self.cols = cols;
-            self.last_frame.clear();
+        let resized = rows != self.rows || cols != self.cols;
+        self.rows = rows;
+        self.cols = cols;
+        if self.screen != Screen::None {
+            self.enter_alt(term);
+            self.paint_catalog(term, resized);
+            return;
         }
-        let frame = self.compose();
-        self.emit(term, &frame);
+        match self.mode {
+            Mode::Inline => self.paint_inline(term, resized),
+            Mode::Full => self.paint_full(term, resized),
+        }
     }
 
-    fn emit(&mut self, term: &mut Terminal, frame: &Frame) {
-        let out = term.out();
-        for (i, row) in frame.rows.iter().enumerate() {
-            let prev = self.last_frame.get(i).map(|s| s.as_str()).unwrap_or("");
-            if prev != row {
-                let _ = out.write_all(
-                    format!("\x1b[{};1H{row}{}", i + 1, crate::term::clear_eol()).as_bytes(),
-                );
-            }
-        }
-        if self.last_frame.len() > frame.rows.len() {
-            for i in frame.rows.len()..self.last_frame.len() {
-                let _ = out.write_all(
-                    format!("\x1b[{};1H{}", i + 1, crate::term::clear_eol()).as_bytes(),
-                );
-            }
-        }
-        self.last_frame = frame.rows.clone();
-        let _ = out.write_all(
-            format!(
-                "\x1b[{};{}H{}",
-                frame.input_row, frame.input_col, crate::term::cursor_visible()
-            )
-            .as_bytes(),
-        );
-        let _ = out.flush();
-    }
-
-    fn compose(&self) -> Frame {
-        let width = self.cols as usize;
-        let mut rows: Vec<String> = Vec::new();
+    fn render_transcript(&self) -> Vec<String> {
+        let width = (self.cols as usize).max(1);
+        let mut rows = Vec::new();
         for entry in &self.entries {
             match entry {
                 Entry::Welcome => rows.push(format!(
-                    "{SYSTEM_NOTICE_LABEL}𝒂x{RESET}{DIM} v{VERSION} · Run /help for commands{RESET}"
+                    "{WELCOME_APP}𝒂x{RESET}{DIM} v{VERSION} · Run /help for commands{RESET}"
                 )),
                 Entry::User(text) => {
                     for line in wrap_text(text, width.saturating_sub(2)) {
@@ -574,7 +1233,6 @@ impl Tui {
                 Entry::Notice(text) => rows.push(text.clone()),
             }
         }
-        // Activity line while running.
         match &self.activity {
             Activity::Thinking => {
                 let secs = self.turn_start.elapsed().as_secs();
@@ -585,120 +1243,292 @@ impl Tui {
             }
             _ => {}
         }
-        let content_height = self.content_height().max(1);
-        let total = rows.len();
-        let start = total.saturating_sub(content_height + self.scroll.min(total));
-        let mut visible = rows[start..].to_vec();
-        if visible.len() < content_height {
-            visible.resize(content_height, String::new());
-        }
-
-        let mut frame = Frame {
-            rows: Vec::new(),
-            input_row: 0,
-            input_col: 0,
-        };
-        let picker = self.picker_active();
-        frame.rows.extend(visible);
-        // input line
-        let (input_line, cursor_col) = self.input.render(width);
-        frame.input_row = content_height as u16 + 1;
-        frame.input_col = (cursor_col + 1).min(width) as u16;
-        frame.rows.push(input_line);
-        if picker {
-            frame.rows.push(format!(
-                "{DIVIDER}{}{RESET}",
-                "\u{2500}".repeat(width)
-            ));
-            frame.rows.push(slash_completion_line(&self.input.buf(), width));
-        }
-        // hint line
-        frame.rows.push(format!(
-            "{PERMISSION_AUTO}auto{RESET}{STATUSLINE} · {}{RESET}",
-            self.model_display
-        ));
-        frame
+        rows
     }
 
-    fn dump_transcript(&self) {
-        let width = self.cols as usize;
-        let mut out = String::new();
-        let mut last_nl = true;
-        for entry in &self.entries {
-            let mut chunk = String::new();
-            match entry {
-                Entry::Welcome => continue,
-                Entry::User(text) => {
-                    for line in wrap_text(text, width.saturating_sub(2)) {
-                        chunk.push_str(&format!("{USER_RAIL}┃{RESET} {BOLD}{line}{RESET}\n"));
-                    }
-                }
-                Entry::Text(t) => chunk.push_str(t),
-                Entry::Code(c) => chunk.push_str(c),
-                Entry::Table(t) => chunk.push_str(t),
-                Entry::Rule => continue,
-                Entry::Tool { label, .. } => {
-                    chunk.push_str(&format!("● {label}\n"));
-                }
-                Entry::Output { stderr, text } => {
-                    for line in text.lines() {
-                        let style = if *stderr { SYSTEM_NOTICE_TEXT } else { DIM };
-                        chunk.push_str(&format!("{style}│ {line}{RESET}\n"));
-                    }
-                }
-                Entry::Notice(text) => chunk.push_str(&format!("{text}\n")),
-            }
-            if chunk.is_empty() {
-                continue;
-            }
-            if !last_nl {
-                out.push('\n');
-            }
-            out.push_str(&chunk);
-            last_nl = chunk.ends_with('\n');
+    fn region_bottom(&self) -> u16 {
+        (self.rows).saturating_sub(2).max(1)
+    }
+
+    fn paint_inline(&mut self, term: &mut Terminal, resized: bool) {
+        let out = term.out();
+        let region_bottom = self.region_bottom();
+        if !self.painted_once || resized {
+            let _ = out.write_all(term::clear_display().as_bytes());
+            let _ = out.write_all(term::scroll_region(1, region_bottom).as_bytes());
+            self.painted_once = true;
+            self.streamed.clear();
         }
-        print!("{out}");
+        let new_rows = self.render_transcript();
+        self.update_region(out, &new_rows, region_bottom);
+        self.draw_footer(out, self.cols, self.rows);
+        let _ = out.flush();
+    }
+
+    fn update_region(&mut self, out: &mut std::io::Stdout, new: &[String], region_bottom: u16) {
+        let old = &self.streamed;
+        if new == old {
+            return;
+        }
+        let region_h = region_bottom as usize;
+        let old_len = old.len();
+        if new.len() > old_len && new[..old_len] == old[..] {
+            self.append_rows(out, &new[old_len..], old_len, region_bottom);
+            self.streamed = new.to_vec();
+            return;
+        }
+        if new.len() < old_len && new[..] == old[..new.len()] {
+            let visible_start = old_len.saturating_sub(region_h);
+            if new.len() >= visible_start {
+                for i in new.len()..old_len {
+                    let row = self.row_position(i, old_len, region_h, region_bottom);
+                    let _ = write!(out, "{}", term::move_to(row, 1));
+                    let _ = out.write_all(term::clear_eol().as_bytes());
+                }
+                self.streamed = new.to_vec();
+                return;
+            }
+        }
+        let visible_start = old_len.saturating_sub(region_h);
+        let mut changed = false;
+        let mut all_in_window = true;
+        for i in 0..new.len().min(old_len) {
+            if new[i] != old[i] {
+                changed = true;
+                if i < visible_start {
+                    all_in_window = false;
+                    break;
+                }
+            }
+        }
+        if changed && all_in_window {
+            for i in 0..new.len().min(old_len) {
+                if new[i] != old[i] {
+                    let row = self.row_position(i, old_len, region_h, region_bottom);
+                    let _ = write!(out, "{}", term::move_to(row, 1));
+                    let _ = out.write_all(term::clear_eol().as_bytes());
+                    let _ = out.write_all(new[i].as_bytes());
+                }
+            }
+            if new.len() > old_len {
+                self.append_rows(out, &new[old_len..], old_len, region_bottom);
+            } else if new.len() < old_len {
+                for i in new.len()..old_len {
+                    if i >= visible_start {
+                        let row = self.row_position(i, old_len, region_h, region_bottom);
+                        let _ = write!(out, "{}", term::move_to(row, 1));
+                        let _ = out.write_all(term::clear_eol().as_bytes());
+                    }
+                }
+            }
+            self.streamed = new.to_vec();
+            return;
+        }
+        let window_start = new.len().saturating_sub(region_h);
+        for i in 0..region_h {
+            let _ = write!(out, "{}", term::move_to((i + 1) as u16, 1));
+            let _ = out.write_all(term::clear_eol().as_bytes());
+            if let Some(r) = new.get(window_start + i) {
+                let _ = out.write_all(r.as_bytes());
+            }
+        }
+        self.streamed = new.to_vec();
+    }
+
+    fn row_position(&self, i: usize, len: usize, region_h: usize, region_bottom: u16) -> u16 {
+        let _ = region_bottom;
+        if len <= region_h {
+            (i + 1) as u16
+        } else {
+            (region_h - len + 1 + i) as u16
+        }
+    }
+
+    fn append_rows(
+        &mut self,
+        out: &mut std::io::Stdout,
+        rows: &[String],
+        old_len: usize,
+        region_bottom: u16,
+    ) {
+        let region_h = region_bottom as usize;
+        for (k, r) in rows.iter().enumerate() {
+            let idx = old_len + k;
+            if idx < region_h {
+                let _ = write!(out, "{}", term::move_to((idx + 1) as u16, 1));
+                let _ = out.write_all(term::clear_eol().as_bytes());
+                let _ = out.write_all(r.as_bytes());
+            } else {
+                let _ = write!(out, "{}", term::move_to(region_bottom, 1));
+                let _ = out.write_all(term::clear_eol().as_bytes());
+                let _ = out.write_all(r.as_bytes());
+                let _ = out.write_all(b"\n");
+            }
+        }
+    }
+
+    fn hint_line(&self, scroll_hint: Option<&str>) -> String {
+        if self.running && self.ctrl_c_pending {
+            return format!("{DIM}press ctrl+c again to exit{RESET}");
+        }
+        let mut s = String::from(STATUSLINE);
+        if self.cfg.api_key.is_empty() {
+            s.push_str("set OPENAI_API_KEY");
+        }
+        s.push_str(" · ");
+        match self.permission {
+            0 => {
+                s.push_str(PERMISSION_AUTO);
+                s.push_str("auto");
+                s.push_str(RESET);
+                s.push_str(STATUSLINE);
+            }
+            1 => s.push_str("ask"),
+            _ => s.push_str("YOLO"),
+        }
+        s.push_str(" · ");
+        s.push_str(&self.model_display);
+        if self.sess_in > 0 {
+            s.push_str(" · Context: ");
+            s.push_str(&tok(self.sess_in));
+        }
+        if let Some(extra) = scroll_hint {
+            s.push_str(extra);
+        }
+        s.push_str(RESET);
+        s
+    }
+
+    fn draw_footer(&mut self, out: &mut std::io::Stdout, cols: u16, rows: u16) {
+        let input_row = rows.saturating_sub(1).max(1);
+        let hint_row = rows.max(2);
+        let (input_line, cursor_col) = self.input.render(cols as usize);
+        let _ = write!(out, "{}", term::move_to(input_row, 1));
+        let _ = out.write_all(term::clear_eol().as_bytes());
+        let _ = out.write_all(input_line.as_bytes());
+        let _ = write!(out, "{}", term::move_to(hint_row, 1));
+        let _ = out.write_all(term::clear_eol().as_bytes());
+        let hint = self.hint_line(None);
+        let _ = out.write_all(hint.as_bytes());
+        let _ = write!(out, "{}", term::move_to(input_row, cursor_col as u16));
+        let _ = out.write_all(term::cursor_visible().as_bytes());
+    }
+
+    fn full_view_h(&self) -> usize {
+        (self.rows as usize).saturating_sub(2).max(1)
+    }
+
+    fn full_max_scroll(&self) -> usize {
+        let total = self.render_transcript().len();
+        total.saturating_sub(self.full_view_h())
+    }
+
+    fn paint_full(&mut self, term: &mut Terminal, resized: bool) {
+        self.enter_alt(term);
+        if resized {
+            self.last_frame.clear();
+        }
+        let out = term.out();
+        let cols = self.cols as usize;
+        let rows = self.rows as usize;
+        if self.last_frame.is_empty() {
+            let _ = out.write_all(term::clear_display().as_bytes());
+        }
+        let all = self.render_transcript();
+        let view_h = self.full_view_h();
+        let total = all.len();
+        let max_scroll = total.saturating_sub(view_h);
+        if self.full_scroll > max_scroll {
+            self.full_scroll = max_scroll;
+        }
+        let start = total.saturating_sub(view_h + self.full_scroll);
+        let mut frame = Vec::new();
+        for i in start..total.min(start + view_h) {
+            frame.push(all[i].clone());
+        }
+        while frame.len() < view_h {
+            frame.push(String::new());
+        }
+        let (input_line, cursor_col) = self.input.render(cols);
+        frame.push(input_line);
+        let scroll_hint = if self.full_scroll > 0 {
+            let pct = if max_scroll > 0 {
+                (self.full_scroll * 100) / max_scroll
+            } else {
+                0
+            };
+            format!(" · {pct}%")
+        } else {
+            String::new()
+        };
+        frame.push(self.hint_line(Some(&scroll_hint)));
+        self.emit_diff(out, &frame);
+        let _ = write!(out, "{}", term::move_to((rows - 1) as u16, cursor_col as u16));
+        let _ = out.write_all(term::cursor_visible().as_bytes());
+        let _ = out.flush();
+    }
+
+    fn paint_catalog(&mut self, term: &mut Terminal, resized: bool) {
+        self.enter_alt(term);
+        if resized {
+            self.last_frame.clear();
+        }
+        let out = term.out();
+        if self.last_frame.is_empty() {
+            let _ = out.write_all(term::clear_display().as_bytes());
+        }
+        let frame = self.catalog_rows(self.rows, self.cols);
+        self.emit_diff(out, &frame);
+        let _ = out.write_all(term::cursor_hidden().as_bytes());
+        let _ = out.flush();
+    }
+
+    fn emit_diff(&mut self, out: &mut std::io::Stdout, frame: &[String]) {
+        for (i, row) in frame.iter().enumerate() {
+            let prev = self.last_frame.get(i).map(|s| s.as_str()).unwrap_or("");
+            if prev != row {
+                let _ = write!(out, "{}", term::move_to((i + 1) as u16, 1));
+                let _ = out.write_all(term::clear_eol().as_bytes());
+                let _ = out.write_all(row.as_bytes());
+            }
+        }
+        if self.last_frame.len() > frame.len() {
+            for i in frame.len()..self.last_frame.len() {
+                let _ = write!(out, "{}", term::move_to((i + 1) as u16, 1));
+                let _ = out.write_all(term::clear_eol().as_bytes());
+            }
+        }
+        self.last_frame = frame.to_vec();
     }
 
     fn tab(&mut self) {
         self.input.tab();
     }
-
-    fn handle_ctrl(&mut self, c: char) -> bool {
-        match c {
-            'a' => self.input.home(),
-            'e' => self.input.end(),
-            'w' => self.input.delete_word_left(),
-            'u' => {
-                let chars: Vec<char> = self.input.buf.chars().collect();
-                self.input.buf = chars[self.input.cursor..].iter().collect();
-                self.input.cursor = 0;
-            }
-            'k' => {
-                let chars: Vec<char> = self.input.buf.chars().collect();
-                self.input.buf = chars[..self.input.cursor].iter().collect();
-            }
-            'd' => {
-                if !self.running && self.input.buf.is_empty() {
-                    return false;
-                }
-            }
-            'l' => {
-                self.entries.clear();
-                self.entries.push(Entry::Welcome);
-            }
-            _ => {}
-        }
-        true
-    }
 }
 
-const BOLD: &str = "\x1b[1m";
-
-struct Frame {
-    rows: Vec<String>,
-    input_row: u16,
-    input_col: u16,
+fn push_catalog_items(
+    window_start: &mut usize,
+    sel: usize,
+    out: &mut Vec<String>,
+    count: usize,
+    rows: u16,
+    row_fn: impl Fn(usize) -> String,
+) {
+    let header = 3usize;
+    let hint = 1usize;
+    let available = (rows as usize).saturating_sub(header + hint).max(1);
+    let sel = sel.min(count.saturating_sub(1));
+    let mut start = *window_start;
+    if sel < start {
+        start = sel;
+    }
+    if sel >= start + available {
+        start = sel + 1 - available;
+    }
+    *window_start = start;
+    for i in start..(start + available).min(count) {
+        out.push(row_fn(i));
+    }
 }
 
 #[derive(Default)]
@@ -748,6 +1578,31 @@ impl Input {
         if self.cursor < self.buf.chars().count() {
             self.cursor += 1;
         }
+    }
+
+    fn move_word_left(&mut self) {
+        let chars: Vec<char> = self.buf.chars().collect();
+        let mut i = self.cursor;
+        while i > 0 && chars[i - 1] == ' ' {
+            i -= 1;
+        }
+        while i > 0 && chars[i - 1] != ' ' {
+            i -= 1;
+        }
+        self.cursor = i;
+    }
+
+    fn move_word_right(&mut self) {
+        let chars: Vec<char> = self.buf.chars().collect();
+        let n = chars.len();
+        let mut i = self.cursor;
+        while i < n && chars[i] == ' ' {
+            i += 1;
+        }
+        while i < n && chars[i] != ' ' {
+            i += 1;
+        }
+        self.cursor = i;
     }
 
     fn home(&mut self) {
@@ -834,52 +1689,59 @@ impl Input {
         while i > 0 && chars[i - 1] != ' ' {
             i -= 1;
         }
-        self.buf = chars[..i].iter().chain(chars[self.cursor..].iter()).collect();
+        self.buf = chars[..i]
+            .iter()
+            .chain(chars[self.cursor..].iter())
+            .collect();
         self.cursor = i;
     }
 
     fn render(&self, width: usize) -> (String, usize) {
+        self.render_with("❯ ", width)
+    }
+
+    fn render_with(&self, prefix: &str, width: usize) -> (String, usize) {
+        let pchars: Vec<char> = prefix.chars().collect();
+        let avail = width.saturating_sub(pchars.len()).max(1);
         let chars: Vec<char> = self.buf.chars().collect();
         let mut scroll = self.scroll;
         if self.cursor < scroll {
             scroll = self.cursor;
         }
-        let visible: String = chars
-            .iter()
-            .skip(scroll)
-            .take(width.saturating_sub(2))
-            .collect();
-        let cursor_col = 2 + self.cursor.saturating_sub(scroll);
-        (format!("❯ {visible}"), cursor_col)
+        if self.cursor > scroll + avail {
+            scroll = self.cursor - avail;
+        }
+        let visible: String = chars.iter().skip(scroll).take(avail).collect();
+        let cursor_col = pchars.len() + self.cursor.saturating_sub(scroll);
+        (format!("{prefix}{visible}"), cursor_col)
     }
 }
 
 fn slash_matches(input: &str) -> Vec<String> {
-    const COMMANDS: &[&str] = &[
-        "/help",
-        "/clear",
-        "/new",
-        "/reset",
-        "/resume",
-        "/model",
-        "/system",
-        "/status",
-        "/stats",
-        "/version",
-        "/quit",
-    ];
     let token = input.trim();
-    COMMANDS
+    SLASH
         .iter()
+        .map(|s| s.command)
         .filter(|c| c.starts_with(token) || (token.is_empty() && input.starts_with('/')))
         .map(|s| s.to_string())
         .collect()
 }
 
-fn slash_completion_line(input: &str, width: usize) -> String {
-    let matches = slash_matches(input);
-    let line = matches.join("  ");
-    format!("{DIM}{}{RESET}", clip(&line, width))
+fn visible_width(s: &str) -> usize {
+    let bytes = s.as_bytes();
+    let mut w = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            i = ansi_seq_end(bytes, i);
+            continue;
+        }
+        let len = utf8_len(bytes[i]);
+        let ch = &s[i..i + len];
+        w += char_width(ch.chars().next().unwrap_or(' '));
+        i += len;
+    }
+    w
 }
 
 fn wrap_text(text: &str, width: usize) -> Vec<String> {
@@ -981,9 +1843,6 @@ pub fn wrap_ansi(text: &str, width: usize) -> Vec<String> {
         return vec![String::new()];
     }
     let mut rows: Vec<String> = Vec::new();
-    // Split into logical lines first: in raw mode an embedded \n moves down
-    // at the current column, so each line must be emitted as its own row.
-    // A trailing newline ends the last line, not an extra blank row.
     let text = text.strip_suffix('\n').unwrap_or(text);
     for part in text.split('\n') {
         let part = part.strip_suffix('\r').unwrap_or(part);
@@ -1102,6 +1961,60 @@ fn tok(n: usize) -> String {
     format!("{:.1}k", n as f64 / 1000.0)
 }
 
+fn age_str(updated_ms: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let delta = (now - updated_ms).max(0) as u64;
+    let min = 60_000u64;
+    let hour = 3_600_000u64;
+    let day = 86_400_000u64;
+    if delta < min {
+        "now".into()
+    } else if delta < hour {
+        format!("{}m", delta / min)
+    } else if delta < day {
+        format!("{}h", delta / hour)
+    } else {
+        format!("{}d", delta / day)
+    }
+}
+
+fn workspace_label(dir: &str) -> String {
+    let d = if dir.is_empty() { "." } else { dir };
+    std::path::Path::new(d)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| d.to_string())
+}
+
+fn b64_encode(data: &[u8]) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in data.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        out.push(T[(b[0] >> 2) as usize] as char);
+        out.push(T[(((b[0] & 3) << 4) | (b[1] >> 4)) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            T[(((b[1] & 15) << 2) | (b[2] >> 6)) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[(b[2] & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 fn build_tools(dir: &str) -> Vec<Tool> {
     vec![
         crate::tools::read(),
@@ -1118,8 +2031,14 @@ fn tool_label(call: &ToolCall, running: bool) -> String {
         command: Option<String>,
     }
     let args: Option<Args> = serde_json::from_str(&call.arguments).ok();
-    let path = args.as_ref().and_then(|a| a.path.clone()).unwrap_or_default();
-    let command = args.as_ref().and_then(|a| a.command.clone()).unwrap_or_default();
+    let path = args
+        .as_ref()
+        .and_then(|a| a.path.clone())
+        .unwrap_or_default();
+    let command = args
+        .as_ref()
+        .and_then(|a| a.command.clone())
+        .unwrap_or_default();
     match call.name.as_str() {
         "bash" => {
             let cmd = command.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -1155,17 +2074,18 @@ fn run_turn(
             cancelled = true;
             break;
         }
-        let (resp, calls) = match stream_request(&provider, &model, &system, &h, &tools, &cancel, &tx) {
-            Ok(x) => x,
-            Err(e) => {
-                if cancel.load(Ordering::Relaxed) {
-                    cancelled = true;
-                } else {
-                    err = Some(e);
+        let (resp, calls) =
+            match stream_request(&provider, &model, &system, &h, &tools, &cancel, &tx) {
+                Ok(x) => x,
+                Err(e) => {
+                    if cancel.load(Ordering::Relaxed) {
+                        cancelled = true;
+                    } else {
+                        err = Some(e);
+                    }
+                    break;
                 }
-                break;
-            }
-        };
+            };
         usage = Usage {
             input: usage.input + resp.usage.input,
             output: usage.output + resp.usage.output,
@@ -1199,8 +2119,10 @@ fn run_turn(
             break;
         }
     }
-    if !cancelled && err.is_none() && h.len() > 0 && h.last().map(|m| !m.tool_calls.is_empty()).unwrap_or(false) {
-        // max turns with dangling tool calls
+    if !cancelled
+        && err.is_none()
+        && h.last().map(|m| !m.tool_calls.is_empty()).unwrap_or(false)
+    {
         err = Some("stopped: max turns reached".into());
     }
     let _ = tx.send(TurnEvent::End {
@@ -1252,64 +2174,4 @@ fn exec_tool(tools: &[Tool], call: &ToolCall) -> String {
         }
     }
     format!("error: unknown tool: {}", call.name)
-}
-
-fn session_path(dir: &str) -> std::path::PathBuf {
-    std::path::PathBuf::from(dir).join(".ax").join("session.jsonl")
-}
-
-fn save_session(dir: &str, msgs: &[Message]) {
-    let p = session_path(dir);
-    if let Some(parent) = p.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let mut b = Vec::new();
-    for m in msgs {
-        if let Ok(line) = serde_json::to_string(m) {
-            b.extend_from_slice(line.as_bytes());
-            b.push(b'\n');
-        }
-    }
-    let _ = std::fs::write(p, b);
-}
-
-fn load_session(dir: &str, entries: &mut Vec<Entry>) -> Vec<Message> {
-    let mut msgs = Vec::new();
-    let b = match std::fs::read(session_path(dir)) {
-        Ok(b) => b,
-        Err(_) => return msgs,
-    };
-    for line in String::from_utf8_lossy(&b).lines() {
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(m) = serde_json::from_str::<Message>(line) else {
-            continue;
-        };
-        msgs.push(m.clone());
-        match m.role.as_str() {
-            "user" => entries.push(Entry::User(m.content)),
-            "assistant" => {
-                if !m.content.is_empty() {
-                    entries.push(Entry::Text(markdown::Markdown::render(&m.content)));
-                }
-                for c in &m.tool_calls {
-                    entries.push(Entry::Tool {
-                        active: false,
-                        label: tool_label(c, false),
-                    });
-                }
-            }
-            "tool" => {
-                if !m.content.is_empty() {
-                    entries.push(Entry::Output {
-                        stderr: false,
-                        text: m.content,
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-    msgs
 }

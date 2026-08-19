@@ -13,6 +13,7 @@ struct Config {
     model: String,
     system: String,
     dir: String,
+    resume: Option<String>,
 }
 
 fn main() {
@@ -33,6 +34,7 @@ fn main() {
             system: cfg.system.clone(),
             dir: cfg.dir.clone(),
             api_key: api_key(),
+            resume: cfg.resume.clone(),
         };
         if let Err(e) = ax::tui::run(tui_cfg) {
             eprintln!("error: {e}");
@@ -57,6 +59,7 @@ fn parse_args(args: &[String]) -> Result<(Config, Vec<String>), String> {
         model: "gpt-4.1-mini".into(),
         system: String::new(),
         dir: String::new(),
+        resume: None,
     };
     let mut rest = Vec::new();
     let mut i = 0;
@@ -65,6 +68,29 @@ fn parse_args(args: &[String]) -> Result<(Config, Vec<String>), String> {
         if a == "-h" || a == "--help" {
             usage();
             std::process::exit(0);
+        }
+        if a == "-r" {
+            cfg.resume = Some(String::new());
+            i += 1;
+            continue;
+        }
+        if a == "--resume" || a == "resume" {
+            // Bare resume opens the picker; a following non-flag names the target.
+            if let Some(next) = args.get(i + 1) {
+                if !next.starts_with('-') {
+                    cfg.resume = Some(next.clone());
+                    i += 2;
+                    continue;
+                }
+            }
+            cfg.resume = Some(String::new());
+            i += 1;
+            continue;
+        }
+        if let Some(v) = a.strip_prefix("--resume=") {
+            cfg.resume = Some(v.to_string());
+            i += 1;
+            continue;
         }
         let Some(stripped) = a.strip_prefix('-') else {
             rest = args[i..].to_vec();
@@ -110,8 +136,12 @@ fn usage() {
          \x20 -model NAME  model name (default \"gpt-4.1-mini\")\n\
          \x20 -system TEXT  system prompt (default: built-in)\n\
          \x20 -C DIR       working directory for tools\n\
+         \x20 -r, --resume  open the session picker\n\
+         \x20 --resume last  resume the most recent session\n\
+         \x20 --resume ID   resume a saved session by id\n\
          \n\
-         With no prompt and a TTY, starts the interactive transcript TUI.\n\
+         With no prompt and a TTY, starts the interactive transcript TUI\n\
+         (fresh session; \"/resume\" reopens saved ones).\n\
          With no prompt and no TTY, reads the prompt from stdin."
     );
 }

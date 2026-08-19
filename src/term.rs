@@ -1,9 +1,9 @@
-//! Raw terminal layer: termios, key parsing, window size, bracketed paste.
-//! No dependencies beyond libc.
+//! Raw terminal layer: termios, key parsing (CSI modifiers, SGR mouse),
+//! window size, bracketed paste, scroll regions, alternate screen.
 
 #![allow(unsafe_code)]
 
-use std::io::{Read, Write};
+use std::io::Write;
 
 pub struct Terminal {
     original: libc::termios,
@@ -37,6 +37,7 @@ impl Terminal {
     pub fn restore(&mut self) {
         let _ = self.out.write_all(b"\x1b[?2004l");
         let _ = self.out.write_all(b"\x1b[?25h");
+        let _ = self.out.write_all(b"\x1b[0m\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1049l\x1b[?25h");
         let _ = self.out.flush();
         let fd = std::io::stdout().as_raw_fd();
         unsafe {
@@ -66,32 +67,36 @@ impl Terminal {
     }
 
     pub fn read_key(&mut self) -> Result<Key, String> {
-        let mut stdin = std::io::stdin();
-        let mut buf = [0u8; 1];
+        let fd = libc::STDIN_FILENO;
         loop {
-            let n = stdin.read(&mut buf).map_err(|e| format!("read: {e}"))?;
-            if n == 0 {
-                return Ok(Key::Eof);
-            }
-            let b = buf[0];
+            let b = read_byte(fd)?;
             match b {
                 0x03 => return Ok(Key::CtrlC),
                 0x0d | 0x0a => return Ok(Key::Enter),
                 0x09 => return Ok(Key::Tab),
                 0x7f | 0x08 => return Ok(Key::Backspace),
                 0x1b => {
-                    // Possible escape sequence. Peek without blocking long.
-                    let mut next = [0u8; 1];
-                    let n = stdin.read(&mut next).map_err(|e| format!("read: {e}"))?;
-                    if n == 0 {
+                    // Possible escape sequence. Peek with a short timeout so a
+                    // lone Esc does not block waiting for a next byte. Reads
+                    // go through libc so the kernel buffer is never pre-consumed
+                    // by stdio read-ahead.
+                    let mut pfd = [libc::pollfd {
+                        fd,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    }];
+                    unsafe {
+                        libc::poll(pfd.as_mut_ptr(), 1, 30);
+                    }
+                    if pfd[0].revents & libc::POLLIN == 0 {
                         return Ok(Key::Esc);
                     }
-                    match next[0] {
+                    let next = read_byte(fd)?;
+                    match next {
                         b'[' => return self.read_csi(),
                         b'O' => {
-                            let mut c = [0u8; 1];
-                            let _ = stdin.read(&mut c);
-                            return Ok(match c[0] {
+                            let c = read_byte(fd)?;
+                            return Ok(match c {
                                 b'H' => Key::Home,
                                 b'F' => Key::End,
                                 b'A' => Key::Up,
@@ -114,12 +119,10 @@ impl Terminal {
                     let len = utf8_len(b);
                     let mut bytes = vec![b];
                     for _ in 1..len {
-                        let mut c = [0u8; 1];
-                        let n = stdin.read(&mut c).map_err(|e| format!("read: {e}"))?;
-                        if n == 0 {
-                            break;
+                        match read_byte(fd) {
+                            Ok(c) => bytes.push(c),
+                            Err(_) => break,
                         }
-                        bytes.push(c[0]);
                     }
                     let s = String::from_utf8_lossy(&bytes).into_owned();
                     if let Some(ch) = s.chars().next() {
@@ -131,49 +134,190 @@ impl Terminal {
     }
 
     fn read_csi(&mut self) -> Result<Key, String> {
-        let mut stdin = std::io::stdin();
+        let fd = libc::STDIN_FILENO;
         let mut bytes = Vec::new();
-        let mut b = [0u8; 1];
-        // Collect up to 8 parameter/final bytes (arrows are short).
-        for _ in 0..8 {
-            let n = stdin.read(&mut b).map_err(|e| format!("read: {e}"))?;
-            if n == 0 {
+        loop {
+            let b = read_byte(fd)?;
+            bytes.push(b);
+            if (0x40..=0x7e).contains(&b) {
                 break;
             }
-            bytes.push(b[0]);
-            if (0x40..=0x7e).contains(&b[0]) {
+            if bytes.len() > 32 {
                 break;
             }
         }
-        if bytes.is_empty() {
-            return Ok(Key::Esc);
+        // Bracketed paste: ESC [ 200 ~ ... ESC [ 201 ~
+        if bytes == b"200~" {
+            let mut content = Vec::new();
+            loop {
+                let b = read_byte(fd)?;
+                if b == 0x1b {
+                    // Expect ESC [ 201 ~
+                    let mut tail = vec![b];
+                    loop {
+                        let c = read_byte(fd)?;
+                        tail.push(c);
+                        if tail == b"\x1b[201~" {
+                            break;
+                        }
+                        if tail.len() > 8 {
+                            break;
+                        }
+                    }
+                    if tail == b"\x1b[201~" {
+                        return Ok(Key::Paste(content));
+                    }
+                    content.extend_from_slice(&tail);
+                    continue;
+                }
+                content.push(b);
+            }
+        }
+        if bytes == b"201~" {
+            return Ok(Key::PasteEnd);
+        }
+        // SGR mouse: ESC [ < b ; x ; y M/m
+        if bytes[0] == b'<' {
+            return Ok(self.decode_mouse(&bytes));
         }
         let final_byte = bytes[bytes.len() - 1];
-        let params: Vec<u8> = bytes
-            .iter()
-            .take(bytes.len() - 1)
-            .copied()
-            .filter(|b| b.is_ascii_digit())
-            .collect();
+        let params: Vec<&[u8]> = bytes[..bytes.len() - 1].split(|b| *b == b';').collect();
+        let num = |i: usize| -> Option<u32> {
+            params
+                .get(i)
+                .and_then(|p| std::str::from_utf8(p).ok())
+                .and_then(|s| s.parse::<u32>().ok())
+        };
+        let mods = num(1).unwrap_or(0) as u8;
+        let ctrl = mods & 4 != 0;
+        let alt = mods & 2 != 0;
+        let shift = mods & 1 != 0;
+        let arrow = |up: bool| -> Key {
+            if ctrl {
+                if up {
+                    Key::CtrlUp
+                } else {
+                    Key::CtrlDown
+                }
+            } else if alt {
+                if up {
+                    Key::AltUp
+                } else {
+                    Key::AltDown
+                }
+            } else if up {
+                Key::Up
+            } else {
+                Key::Down
+            }
+        };
         match final_byte {
-            b'A' => Ok(Key::Up),
-            b'B' => Ok(Key::Down),
-            b'C' => Ok(Key::Right),
-            b'D' => Ok(Key::Left),
-            b'H' => Ok(Key::Home),
-            b'F' => Ok(Key::End),
-            b'~' => match params.first() {
-                Some(1) | Some(7) => Ok(Key::Home),
-                Some(3) => Ok(Key::Delete),
-                Some(4) | Some(8) => Ok(Key::End),
-                Some(5) => Ok(Key::PageUp),
-                Some(6) => Ok(Key::PageDown),
-                _ => Ok(Key::Esc),
-            },
+            b'A' => return Ok(arrow(true)),
+            b'B' => return Ok(arrow(false)),
+            b'C' => {
+                return Ok(match (ctrl, alt, shift) {
+                    (true, _, _) => Key::CtrlRight,
+                    (_, true, _) => Key::AltRight,
+                    (false, false, true) => Key::Right,
+                    _ => Key::Right,
+                })
+            }
+            b'D' => {
+                return Ok(match (ctrl, alt, shift) {
+                    (true, _, _) => Key::CtrlLeft,
+                    (_, true, _) => Key::AltLeft,
+                    (false, false, true) => Key::Left,
+                    _ => Key::Left,
+                })
+            }
+            b'H' => {
+                if ctrl {
+                    return Ok(Key::CtrlHome);
+                }
+                return Ok(Key::Home);
+            }
+            b'F' => {
+                if ctrl {
+                    return Ok(Key::CtrlEnd);
+                }
+                return Ok(Key::End);
+            }
+            b'Z' => return Ok(Key::ShiftTab),
+            b'u' => {
+                // Kitty CSI-u: ESC [ <key> ; <mod> u
+                return Ok(match (num(0), mods) {
+                    (Some(13), 2) => Key::ShiftEnter,
+                    (Some(13), _) => Key::Enter,
+                    (Some(127), 2) => Key::Backspace,
+                    (Some(127), _) => Key::Backspace,
+                    (Some(9), 2) => Key::ShiftTab,
+                    (Some(9), _) => Key::Tab,
+                    _ => Key::Esc,
+                });
+            }
+            b'~' => {
+                return Ok(match num(0) {
+                    Some(1) | Some(7) => Key::Home,
+                    Some(3) => Key::Delete,
+                    Some(4) | Some(8) => Key::End,
+                    Some(5) => Key::PageUp,
+                    Some(6) => Key::PageDown,
+                    Some(15) => Key::Ctrl(char::from(15)), // F5 -> toggle (Ctrl+O)
+                    _ => Key::Esc,
+                })
+            }
             b'M' | b'm' => Ok(Key::Paste(bytes.clone())),
             _ => Ok(Key::Esc),
         }
     }
+
+    fn decode_mouse(&self, bytes: &[u8]) -> Key {
+        // ESC [ < cb ; x ; y M|m
+        let body = &bytes[1..bytes.len() - 1];
+        let mut parts = body.split(|b| *b == b';');
+        let cb = parts
+            .next()
+            .and_then(|p| std::str::from_utf8(p).ok())
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
+        let x = parts
+            .next()
+            .and_then(|p| std::str::from_utf8(p).ok())
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(0);
+        let y = parts
+            .next()
+            .and_then(|p| std::str::from_utf8(p).ok())
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(0);
+        let release = bytes.last() == Some(&b'm');
+        match cb {
+            64 => Key::WheelUp,
+            65 => Key::WheelDown,
+            66 => Key::WheelLeft,
+            67 => Key::WheelRight,
+            0 | 32 | 1 | 33 | 2 | 34 | 3 | 35 => {
+                if release {
+                    Key::MouseRelease
+                } else {
+                    Key::MousePress(x, y)
+                }
+            }
+            _ => Key::MouseOther,
+        }
+    }
+}
+
+fn read_byte(fd: i32) -> Result<u8, String> {
+    let mut b = [0u8; 1];
+    let n = unsafe { libc::read(fd, b.as_mut_ptr() as *mut libc::c_void, 1) };
+    if n < 0 {
+        return Err(format!("read: {}", std::io::Error::last_os_error()));
+    }
+    if n == 0 {
+        return Err("eof".into());
+    }
+    Ok(b[0])
 }
 
 fn utf8_len(first: u8) -> usize {
@@ -206,7 +350,9 @@ pub enum Key {
     Ctrl(char),
     Alt(char),
     Enter,
+    ShiftEnter,
     Tab,
+    ShiftTab,
     Backspace,
     Delete,
     Up,
@@ -215,12 +361,31 @@ pub enum Key {
     Right,
     Home,
     End,
+    CtrlHome,
+    CtrlEnd,
     PageUp,
     PageDown,
+    CtrlUp,
+    CtrlDown,
+    CtrlLeft,
+    CtrlRight,
+    AltUp,
+    AltDown,
+    AltLeft,
+    AltRight,
+    WheelUp,
+    WheelDown,
+    WheelLeft,
+    WheelRight,
+    MousePress(u16, u16),
+    MouseRelease,
+    MouseOther,
     Esc,
     CtrlC,
     Eof,
     Paste(Vec<u8>),
+    PasteStart,
+    PasteEnd,
 }
 
 /// ANSI helpers for composing frames.
@@ -232,10 +397,38 @@ pub fn clear_eol() -> &'static str {
     "\x1b[K"
 }
 
+pub fn clear_display() -> &'static str {
+    "\x1b[2J"
+}
+
 pub fn cursor_visible() -> &'static str {
     "\x1b[?25h"
 }
 
 pub fn cursor_hidden() -> &'static str {
     "\x1b[?25l"
+}
+
+pub fn scroll_region(top: u16, bottom: u16) -> String {
+    format!("\x1b[{top};{bottom}r")
+}
+
+pub fn reset_scroll_region() -> &'static str {
+    "\x1b[r"
+}
+
+pub fn enter_alt() -> &'static str {
+    "\x1b[?1049h"
+}
+
+pub fn leave_alt() -> &'static str {
+    "\x1b[?1049l"
+}
+
+pub fn mouse_on() -> &'static str {
+    "\x1b[?1000h\x1b[?1002h\x1b[?1006h"
+}
+
+pub fn mouse_off() -> &'static str {
+    "\x1b[?1000l\x1b[?1002l\x1b[?1006l"
 }
