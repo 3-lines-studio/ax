@@ -53,9 +53,20 @@ auto · gpt-4.1-mini
   to the bottom once the transcript fills the terminal; **Ctrl+O** opens a
   full-transcript view with internal PgUp/PgDn/wheel scrolling (Esc or Ctrl+O
   closes)
-- **enter** sends, **up/down** history, **left/right** edit,
-  **Ctrl+a/e/b/f/p/n/w/u/k/d/l/o** edit words/lines, **Alt+left/right**
-  word moves, **Tab** completes slash commands
+- **enter** sends, **shift+enter**/**alt+enter** insert a newline (the input
+  is a wrapping multiline textarea, each line on a `┃` rail), **up/down**
+  move between lines (first/last line fall back to history),
+  **left/right** edit, **Ctrl+a/e/b/f/p/n/w/u/k/d/l/o** edit words/lines,
+  **Alt+left/right** word moves
+- **`/` completions**: type `/` and the command picker opens below the input
+  (fx style — divider, `Commands N · Type to filter`, up to 6 rows with the
+  selection highlighted); type to filter, **↑↓** move, **Tab** completes,
+  **Enter** runs the selected command, **Esc** closes
+- **`@` file completions**: type `@` anywhere after a word boundary and the
+  workspace file picker opens (recursive, `.git`/`target`/`node_modules` and
+  hidden dirs skipped); filter by name or path, **Enter**/**Tab** insert the
+  full path and keep the `@` reference, selecting a directory keeps
+  drilling into it, **Esc** closes
 - **ctrl+c** twice within 3s exits (fx contract): the first press cancels
   any running turn, clears the draft, and shows "press ctrl+c again to
   exit"; any other key disarms, and the prompt expires after 3s. On exit the

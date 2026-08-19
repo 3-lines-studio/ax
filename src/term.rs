@@ -246,7 +246,7 @@ impl Terminal {
             b'u' => {
                 // Kitty CSI-u: ESC [ <key> ; <mod> u
                 return Ok(match (num(0), mods) {
-                    (Some(13), 2) => Key::ShiftEnter,
+                    (Some(13), 2) | (Some(13), 3) => Key::ShiftEnter,
                     (Some(13), _) => Key::Enter,
                     (Some(127), 2) => Key::Backspace,
                     (Some(127), _) => Key::Backspace,
@@ -263,6 +263,11 @@ impl Terminal {
                     Some(5) => Key::PageUp,
                     Some(6) => Key::PageDown,
                     Some(15) => Key::Ctrl(char::from(15)), // F5 -> toggle (Ctrl+O)
+                    Some(27) => match (num(1), num(2)) {
+                        (Some(2), Some(13)) | (Some(3), Some(13)) => Key::ShiftEnter,
+                        (_, Some(13)) => Key::Enter,
+                        _ => Key::Esc,
+                    },
                     _ => Key::Esc,
                 })
             }

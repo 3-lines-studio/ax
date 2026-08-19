@@ -96,6 +96,25 @@ struct SlashSpec {
     category: &'static str,
 }
 
+#[derive(PartialEq, Clone, Copy)]
+enum PickerKind {
+    Slash,
+    Files,
+}
+
+struct Picker {
+    kind: PickerKind,
+    token_start: usize,
+    token_end: usize,
+    query: String,
+    sel: usize,
+    win: usize,
+    slash_matches: Vec<&'static SlashSpec>,
+    file_matches: Vec<String>,
+}
+
+const PICKER_VISIBLE: usize = 6;
+
 const SLASH: &[SlashSpec] = &[
     SlashSpec { command: "/help", help: "/help", description: "show available slash commands", category: "General",  },
     SlashSpec { command: "/clear", help: "/clear", description: "start a fresh session", category: "General",  },
@@ -185,6 +204,8 @@ struct Tui {
     models_loading: bool,
     models_rx: Option<Receiver<Result<Vec<String>, String>>>,
     permission: u8,
+    picker: Option<Picker>,
+    picker_dismissed: Option<PickerKind>,
 }
 
 impl Tui {
@@ -232,6 +253,8 @@ impl Tui {
             models_loading: false,
             models_rx: None,
             permission: 0,
+            picker: None,
+            picker_dismissed: None,
         }
     }
 
@@ -326,6 +349,10 @@ impl Tui {
                     }
                 }
                 Key::Esc => {
+                    if self.picker.is_some() {
+                        self.picker_dismiss();
+                        return Ok(true);
+                    }
                     self.toggle_full_pending = true;
                     return Ok(true);
                 }
@@ -375,7 +402,9 @@ impl Tui {
             }
             Key::Char(c) => self.input.insert(c),
             Key::Enter => {
-                if !self.running {
+                if self.picker.is_some() {
+                    self.picker_enter();
+                } else if !self.running {
                     self.submit();
                     if self.want_quit {
                         return Ok(false);
@@ -383,23 +412,64 @@ impl Tui {
                 }
             }
             Key::ShiftEnter => self.input.insert('\n'),
-            Key::Tab => self.tab(),
-            Key::ShiftTab => {}
+            Key::Tab => {
+                if self.picker.is_some() {
+                    self.picker_tab();
+                }
+            }
+            Key::ShiftTab => {
+                if self.picker.is_some() {
+                    self.picker_move(true);
+                }
+            }
             Key::Backspace => self.input.backspace(),
             Key::Delete => self.input.delete(),
             Key::Left => self.input.move_left(),
             Key::Right => self.input.move_right(),
-            Key::Home | Key::CtrlHome => self.input.home(),
-            Key::End | Key::CtrlEnd => self.input.end(),
-            Key::Up => self.input.history_prev(),
-            Key::Down => self.input.history_next(),
+            Key::Home => self.input.home(),
+            Key::End => self.input.end(),
+            Key::CtrlHome => self.input.doc_home(),
+            Key::CtrlEnd => self.input.doc_end(),
+            Key::Up => {
+                if self.picker.is_some() {
+                    self.picker_move(true);
+                } else {
+                    let (line, _) = self.input.cursor_line_col();
+                    if line > 0 {
+                        self.input.move_line_up();
+                    } else {
+                        self.input.history_prev();
+                    }
+                }
+            }
+            Key::Down => {
+                if self.picker.is_some() {
+                    self.picker_move(false);
+                } else {
+                    let lines = self.input.buf().chars().filter(|c| *c == '\n').count();
+                    let (line, _) = self.input.cursor_line_col();
+                    if line < lines {
+                        self.input.move_line_down();
+                    } else {
+                        self.input.history_next();
+                    }
+                }
+            }
             Key::AltLeft => self.input.move_word_left(),
             Key::AltRight => self.input.move_word_right(),
             Key::AltUp | Key::AltDown | Key::CtrlUp | Key::CtrlDown | Key::CtrlLeft | Key::CtrlRight => {}
             Key::PageUp | Key::PageDown => {}
             Key::WheelUp | Key::WheelDown | Key::WheelLeft | Key::WheelRight => {}
             Key::MousePress(_, _) | Key::MouseRelease | Key::MouseOther => {}
-            Key::Alt(_) | Key::Esc => self.input.esc(),
+            Key::Alt(c) if c == '\r' || c == '\n' => self.input.insert('\n'),
+            Key::Alt(_) => self.input.esc(),
+            Key::Esc => {
+                if self.picker.is_some() {
+                    self.picker_dismiss();
+                } else {
+                    self.input.esc();
+                }
+            }
             Key::Paste(bytes) => self.input.paste(&bytes),
             Key::PasteStart | Key::PasteEnd => {}
             Key::Eof => return Ok(false),
@@ -1096,7 +1166,8 @@ impl Tui {
     fn catalog_rows(&mut self, rows: u16, cols: u16) -> Vec<String> {
         let width = cols as usize;
         let mut out = Vec::new();
-        let (composer, _) = self.input.render_with("┃ ", width);
+        let (composer_rows, _, _) = self.input.render_with("┃ ", width);
+        let composer = composer_rows.first().cloned().unwrap_or_default();
         out.push(format!("{HINT}{composer}{RESET}"));
         out.push(format!("{DIVIDER}{}{RESET}", "\u{2500}".repeat(width)));
         let q = self.input.buf().trim().to_lowercase();
@@ -1325,7 +1396,8 @@ impl Tui {
             self.streamed.clear();
         }
         let content = self.render_transcript();
-        let chrome = self.chrome_rows();
+        self.sync_picker();
+        let (chrome, cursor_row, cursor_col) = self.chrome_rows();
         let rows = (self.rows as usize).max(1);
         let capacity = rows.saturating_sub(chrome.len()).max(1);
         self.update_content(out, &content, rows, capacity);
@@ -1339,8 +1411,7 @@ impl Tui {
             let _ = write!(out, "{}", term::move_to((vis + 1 + i) as u16, 1));
             let _ = out.write_all(line.as_bytes());
         }
-        let (_, cursor_col) = self.input.render(self.cols as usize);
-        let _ = write!(out, "{}", term::move_to((vis + 1) as u16, cursor_col as u16));
+        let _ = write!(out, "{}", term::move_to((vis + 1 + cursor_row) as u16, cursor_col as u16));
         let _ = out.write_all(term::cursor_visible().as_bytes());
         let _ = out.flush();
     }
@@ -1458,9 +1529,43 @@ impl Tui {
         )
     }
 
-    fn chrome_rows(&self) -> Vec<String> {
-        let (input_line, _) = self.input.render(self.cols as usize);
-        vec![input_line, String::new(), self.hint_line(None)]
+    fn chrome_rows(&self) -> (Vec<String>, usize, usize) {
+        self.chrome_rows_with_hint(None)
+    }
+
+    fn chrome_rows_with_hint(&self, scroll_hint: Option<&str>) -> (Vec<String>, usize, usize) {
+        let (input_rows, cursor_row, cursor_col) = self.input.render(self.cols as usize);
+        let cap = (self.rows as usize / 2).max(4);
+        let mut vis_start = input_rows.len().saturating_sub(cap);
+        if cursor_row < vis_start {
+            vis_start = cursor_row;
+        }
+        let mut rows: Vec<String> = input_rows[vis_start..].to_vec();
+        let vis_cursor_row = cursor_row - vis_start;
+        if let Some(p) = &self.picker {
+            let width = self.cols as usize;
+            rows.push(picker_divider(width));
+            match p.kind {
+                PickerKind::Slash => {
+                    rows.push(slash_header(p, width));
+                    rows.push(String::new());
+                    let n = p.slash_matches.len();
+                    for idx in p.win..(p.win + PICKER_VISIBLE).min(n) {
+                        rows.push(slash_row(p.slash_matches[idx], idx == p.sel, width));
+                    }
+                }
+                PickerKind::Files => {
+                    let n = p.file_matches.len();
+                    for idx in p.win..(p.win + PICKER_VISIBLE).min(n) {
+                        rows.push(file_row(&p.file_matches[idx], &p.query, idx == p.sel, width));
+                    }
+                }
+            }
+            rows.push(picker_divider(width));
+        }
+        rows.push(String::new());
+        rows.push(self.hint_line(scroll_hint));
+        (rows, vis_cursor_row, cursor_col)
     }
 
     fn full_view_h(&self) -> usize {
@@ -1478,13 +1583,27 @@ impl Tui {
             self.last_frame.clear();
         }
         let out = term.out();
-        let cols = self.cols as usize;
         let rows = self.rows as usize;
         if self.last_frame.is_empty() {
             let _ = out.write_all(term::clear_display().as_bytes());
         }
         let all = self.render_transcript();
-        let view_h = self.full_view_h();
+        self.sync_picker();
+        let scroll_hint = if self.full_scroll > 0 {
+            let max_scroll = self.full_max_scroll();
+            let pct = if max_scroll > 0 {
+                (self.full_scroll * 100) / max_scroll
+            } else {
+                0
+            };
+            format!(" · {pct}%")
+        } else {
+            String::new()
+        };
+        let (chrome, cursor_row, cursor_col) = self.chrome_rows_with_hint(Some(&scroll_hint));
+        let chrome_len = chrome.len();
+        let cursor_abs = rows.saturating_sub(chrome_len) + cursor_row;
+        let view_h = rows.saturating_sub(chrome_len).max(1);
         let total = all.len();
         let max_scroll = total.saturating_sub(view_h);
         if self.full_scroll > max_scroll {
@@ -1498,21 +1617,9 @@ impl Tui {
         while frame.len() < view_h {
             frame.push(String::new());
         }
-        let (input_line, cursor_col) = self.input.render(cols);
-        frame.push(input_line);
-        let scroll_hint = if self.full_scroll > 0 {
-            let pct = if max_scroll > 0 {
-                (self.full_scroll * 100) / max_scroll
-            } else {
-                0
-            };
-            format!(" · {pct}%")
-        } else {
-            String::new()
-        };
-        frame.push(self.hint_line(Some(&scroll_hint)));
+        frame.extend(chrome);
         self.emit_diff(out, &frame);
-        let _ = write!(out, "{}", term::move_to((rows - 1) as u16, cursor_col as u16));
+        let _ = write!(out, "{}", term::move_to(cursor_abs as u16, cursor_col as u16));
         let _ = out.write_all(term::cursor_visible().as_bytes());
         let _ = out.flush();
     }
@@ -1550,8 +1657,165 @@ impl Tui {
         self.last_frame = frame.to_vec();
     }
 
-    fn tab(&mut self) {
-        self.input.tab();
+    fn picker_enter(&mut self) {
+        let Some(p) = self.picker.take() else { return };
+        self.picker_dismissed = None;
+        match p.kind {
+            PickerKind::Slash => {
+                if let Some(spec) = p.slash_matches.get(p.sel) {
+                    let cmd = spec.command.trim_start_matches('/');
+                    self.input.take();
+                    self.slash(cmd);
+                }
+            }
+            PickerKind::Files => {
+                if let Some(path) = p.file_matches.get(p.sel) {
+                    let s = p.token_start + 1;
+                    let e = p.token_end;
+                    self.input.replace_range(s, e, path);
+                    if !path.ends_with('/') {
+                        self.picker_dismissed = Some(PickerKind::Files);
+                    }
+                }
+            }
+        }
+    }
+
+    fn picker_tab(&mut self) {
+        let Some(p) = &self.picker else { return };
+        match p.kind {
+            PickerKind::Slash => {
+                if let Some(spec) = p.slash_matches.get(p.sel) {
+                    let s = p.token_start;
+                    let e = p.token_end;
+                    let cmd = spec.command.to_string();
+                    self.input.replace_range(s, e, &cmd);
+                }
+            }
+            PickerKind::Files => {
+                self.picker_enter();
+            }
+        }
+    }
+
+    fn picker_move(&mut self, up: bool) {
+        let Some(p) = &mut self.picker else { return };
+        let n = match p.kind {
+            PickerKind::Slash => p.slash_matches.len(),
+            PickerKind::Files => p.file_matches.len(),
+        };
+        if n == 0 {
+            return;
+        }
+        if up {
+            p.sel = (p.sel + n - 1) % n;
+        } else {
+            p.sel = (p.sel + 1) % n;
+        }
+        if p.sel < p.win {
+            p.win = p.sel;
+        }
+        if p.sel >= p.win + PICKER_VISIBLE {
+            p.win = p.sel - PICKER_VISIBLE + 1;
+        }
+    }
+
+    fn picker_dismiss(&mut self) {
+        if let Some(p) = &self.picker {
+            self.picker_dismissed = Some(p.kind);
+        }
+        self.picker = None;
+    }
+
+    fn sync_picker(&mut self) {
+        if self.screen != Screen::None {
+            self.picker = None;
+            return;
+        }
+        let trigger = self.picker_trigger();
+        match trigger {
+            None => {
+                self.picker = None;
+                self.picker_dismissed = None;
+            }
+            Some((kind, query, token_start, token_end)) => {
+                if self.picker_dismissed == Some(kind) {
+                    self.picker = None;
+                    return;
+                }
+                let same = self
+                    .picker
+                    .as_ref()
+                    .map(|p| p.kind == kind && p.query == query)
+                    .unwrap_or(false);
+                if same {
+                    if let Some(p) = &mut self.picker {
+                        p.token_start = token_start;
+                        p.token_end = token_end;
+                    }
+                    return;
+                }
+                let mut p = Picker {
+                    kind,
+                    token_start,
+                    token_end,
+                    query,
+                    sel: 0,
+                    win: 0,
+                    slash_matches: Vec::new(),
+                    file_matches: Vec::new(),
+                };
+                match p.kind {
+                    PickerKind::Slash => p.slash_matches = slash_matches(&p.query),
+                    PickerKind::Files => p.file_matches = file_matches(&p.query, &self.cfg.dir),
+                }
+                self.picker = Some(p);
+            }
+        }
+    }
+
+    fn picker_trigger(&self) -> Option<(PickerKind, String, usize, usize)> {
+        let input = self.input.buf();
+        let chars: Vec<char> = input.chars().collect();
+        let cursor = self.input.cursor.min(chars.len());
+        let mut i = cursor;
+        while i > 0 {
+            let c = chars[i - 1];
+            if c == '@' {
+                let at = i - 1;
+                if at == 0 || is_file_boundary(chars[at - 1]) {
+                    let q: String = chars[i..cursor].iter().collect();
+                    return Some((PickerKind::Files, q, at, cursor));
+                }
+            }
+            if is_picker_term(c) {
+                break;
+            }
+            i -= 1;
+        }
+        let mut j = cursor;
+        while j > 0 && !is_picker_term(chars[j - 1]) {
+            j -= 1;
+        }
+        if j < cursor
+            && chars.get(j) == Some(&'/')
+            && j + 1 < cursor
+            && !input[..j].trim().is_empty()
+        {
+            let q: String = chars[j + 1..cursor].iter().collect();
+            return Some((PickerKind::Slash, q, j, cursor));
+        }
+        let start = input.len()
+            - input
+                .trim_start_matches(|c: char| c == ' ' || c == '\t' || c == '\r' || c == '\n')
+                .len();
+        if chars.get(start) == Some(&'/') {
+            let q: String = chars[start + 1..cursor].iter().collect();
+            if !q.chars().any(is_picker_term) {
+                return Some((PickerKind::Slash, q, start, cursor));
+            }
+        }
+        None
     }
 }
 
@@ -1586,7 +1850,7 @@ struct Input {
     cursor: usize,
     history: Vec<String>,
     hist_idx: Option<usize>,
-    scroll: usize,
+    preferred_col: Option<usize>,
 }
 impl Input {
     fn buf(&self) -> &str {
@@ -1596,7 +1860,7 @@ impl Input {
     fn take(&mut self) -> String {
         let v = std::mem::take(&mut self.buf);
         self.cursor = 0;
-        self.scroll = 0;
+        self.preferred_col = None;
         self.hist_idx = None;
         v
     }
@@ -1604,6 +1868,7 @@ impl Input {
     fn insert(&mut self, c: char) {
         self.buf.insert(self.cursor, c);
         self.cursor += 1;
+        self.preferred_col = None;
     }
 
     fn backspace(&mut self) {
@@ -1611,22 +1876,26 @@ impl Input {
             self.cursor -= 1;
             self.buf.remove(self.cursor);
         }
+        self.preferred_col = None;
     }
 
     fn delete(&mut self) {
         if self.cursor < self.buf.chars().count() {
             self.buf.remove(self.cursor);
         }
+        self.preferred_col = None;
     }
 
     fn move_left(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
+        self.preferred_col = None;
     }
 
     fn move_right(&mut self) {
         if self.cursor < self.buf.chars().count() {
             self.cursor += 1;
         }
+        self.preferred_col = None;
     }
 
     fn move_word_left(&mut self) {
@@ -1655,11 +1924,117 @@ impl Input {
     }
 
     fn home(&mut self) {
-        self.cursor = 0;
+        let (s, _) = self.line_bounds();
+        self.cursor = s;
+        self.preferred_col = None;
     }
 
     fn end(&mut self) {
+        let (_, e) = self.line_bounds();
+        self.cursor = e;
+        self.preferred_col = None;
+    }
+
+    fn doc_home(&mut self) {
+        self.cursor = 0;
+        self.preferred_col = None;
+    }
+
+    fn doc_end(&mut self) {
         self.cursor = self.buf.chars().count();
+        self.preferred_col = None;
+    }
+
+    fn cursor_line_col(&self) -> (usize, usize) {
+        let chars: Vec<char> = self.buf.chars().collect();
+        let mut line = 0;
+        let mut col = 0;
+        for (i, &c) in chars.iter().enumerate() {
+            if i >= self.cursor {
+                break;
+            }
+            if c == '\n' {
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        (line, col)
+    }
+
+    fn line_bounds(&self) -> (usize, usize) {
+        let chars: Vec<char> = self.buf.chars().collect();
+        let mut start = 0;
+        for i in 0..self.cursor.min(chars.len()) {
+            if chars[i] == '\n' {
+                start = i + 1;
+            }
+        }
+        let mut end = chars.len();
+        for i in self.cursor..chars.len() {
+            if chars[i] == '\n' {
+                end = i;
+                break;
+            }
+        }
+        (start, end)
+    }
+
+    fn move_line_up(&mut self) {
+        let (line, col) = self.cursor_line_col();
+        if line == 0 {
+            return;
+        }
+        if self.preferred_col.is_none() {
+            self.preferred_col = Some(col);
+        }
+        let (start, _) = self.line_bounds();
+        let chars: Vec<char> = self.buf.chars().collect();
+        let sep = start.saturating_sub(1);
+        let mut prev_start = 0;
+        for i in (0..sep).rev() {
+            if chars[i] == '\n' {
+                prev_start = i + 1;
+                break;
+            }
+        }
+        let prev_len = sep.saturating_sub(prev_start);
+        let target = self.preferred_col.unwrap_or(col).min(prev_len);
+        self.cursor = prev_start + target;
+    }
+
+    fn move_line_down(&mut self) {
+        let (_, col) = self.cursor_line_col();
+        if self.preferred_col.is_none() {
+            self.preferred_col = Some(col);
+        }
+        let (_, end) = self.line_bounds();
+        let chars: Vec<char> = self.buf.chars().collect();
+        if end >= chars.len() || chars[end] != '\n' {
+            return;
+        }
+        let next_start = end + 1;
+        let mut next_end = chars.len();
+        for i in next_start..chars.len() {
+            if chars[i] == '\n' {
+                next_end = i;
+                break;
+            }
+        }
+        let next_len = next_end - next_start;
+        let target = self.preferred_col.unwrap_or(col).min(next_len);
+        self.cursor = next_start + target;
+    }
+
+    fn replace_range(&mut self, start: usize, end: usize, rep: &str) {
+        let chars: Vec<char> = self.buf.chars().collect();
+        let mut out: String = chars[..start].iter().collect();
+        out.push_str(rep);
+        out.extend(chars[end..].iter());
+        self.buf = out;
+        self.cursor = start + rep.chars().count();
+        self.preferred_col = None;
     }
 
     fn history_prev(&mut self) {
@@ -1699,33 +2074,10 @@ impl Input {
     fn paste(&mut self, bytes: &[u8]) {
         let s = String::from_utf8_lossy(bytes);
         for c in s.chars() {
-            if c == '\n' || c == '\r' {
+            if c == '\r' {
                 continue;
             }
             self.insert(c);
-        }
-    }
-
-    fn tab(&mut self) {
-        if !self.buf.starts_with('/') {
-            return;
-        }
-        let matches = slash_matches(&self.buf);
-        if matches.is_empty() {
-            return;
-        }
-        if matches.len() == 1 {
-            self.buf = matches[0].to_string() + " ";
-            self.cursor = self.buf.chars().count();
-        } else {
-            let current = self.buf.trim();
-            let pos = matches
-                .iter()
-                .position(|m| m == current)
-                .unwrap_or(usize::MAX);
-            let next = matches[(pos + 1) % matches.len()].clone();
-            self.buf = next.to_string();
-            self.cursor = self.buf.chars().count();
         }
     }
 
@@ -1745,35 +2097,281 @@ impl Input {
         self.cursor = i;
     }
 
-    fn render(&self, width: usize) -> (String, usize) {
+    fn render(&self, width: usize) -> (Vec<String>, usize, usize) {
         self.render_with(&format!("{USER_RAIL}┃{RESET} "), width)
     }
 
-    fn render_with(&self, prefix: &str, width: usize) -> (String, usize) {
+    fn render_with(&self, prefix: &str, width: usize) -> (Vec<String>, usize, usize) {
         let pwidth = visible_width(prefix);
         let avail = width.saturating_sub(pwidth).max(1);
-        let chars: Vec<char> = self.buf.chars().collect();
-        let mut scroll = self.scroll;
-        if self.cursor < scroll {
-            scroll = self.cursor;
+        let (line_idx, col_in_line) = self.cursor_line_col();
+        let mut rows = Vec::new();
+        let mut cursor_row = 0usize;
+        let mut cursor_col = 1usize;
+        for (i, line) in self.buf.split('\n').enumerate() {
+            let chars: Vec<char> = line.chars().collect();
+            let wrapped = wrap_chars(&chars, avail);
+            if i == line_idx {
+                let (sub, colw) = line_display_pos(&chars, col_in_line, avail);
+                cursor_row = rows.len() + sub;
+                cursor_col = pwidth + 1 + colw;
+            }
+            for r in wrapped {
+                rows.push(format!("{prefix}{}", r.iter().collect::<String>()));
+            }
         }
-        if self.cursor > scroll + avail {
-            scroll = self.cursor - avail;
+        if rows.is_empty() {
+            rows.push(prefix.to_string());
         }
-        let visible: String = chars.iter().skip(scroll).take(avail).collect();
-        let cursor_col = pwidth + 1 + self.cursor.saturating_sub(scroll);
-        (format!("{prefix}{visible}"), cursor_col)
+        (rows, cursor_row, cursor_col)
     }
 }
 
-fn slash_matches(input: &str) -> Vec<String> {
-    let token = input.trim();
+fn wrap_chars(chars: &[char], width: usize) -> Vec<Vec<char>> {
+    if width == 0 {
+        return vec![chars.to_vec()];
+    }
+    let mut rows = Vec::new();
+    let mut cur = Vec::new();
+    let mut w = 0usize;
+    for &c in chars {
+        let cw = char_width(c);
+        if w + cw > width && !cur.is_empty() {
+            rows.push(std::mem::take(&mut cur));
+            w = 0;
+        }
+        cur.push(c);
+        w += cw;
+    }
+    rows.push(cur);
+    rows
+}
+
+fn line_display_pos(chars: &[char], char_idx: usize, avail: usize) -> (usize, usize) {
+    let a = avail.max(1);
+    let w: usize = chars[..char_idx].iter().map(|c| char_width(*c)).sum();
+    if char_idx == chars.len() && !chars.is_empty() {
+        let total: usize = chars.iter().map(|c| char_width(*c)).sum();
+        let sub = total / a;
+        let sub = if total % a == 0 { sub.saturating_sub(1) } else { sub };
+        (sub, total - sub * a)
+    } else {
+        (w / a, w % a)
+    }
+}
+
+fn slash_matches(query: &str) -> Vec<&'static SlashSpec> {
+    let q = query.to_lowercase();
+    if q.is_empty() {
+        return SLASH.iter().collect();
+    }
     SLASH
         .iter()
-        .map(|s| s.command)
-        .filter(|c| c.starts_with(token) || (token.is_empty() && input.starts_with('/')))
-        .map(|s| s.to_string())
+        .filter(|s| {
+            let cmd = s.command[1..].to_lowercase();
+            cmd.starts_with(&q) || cmd.contains(&q)
+        })
         .collect()
+}
+
+fn file_matches(query: &str, dir: &str) -> Vec<String> {
+    let root = if dir.is_empty() { "." } else { dir };
+    if let Some(slash) = query.rfind('/') {
+        let (d, prefix) = query.split_at(slash + 1);
+        let base = if d.is_empty() {
+            root.to_string()
+        } else if d == "/" {
+            "/".to_string()
+        } else {
+            format!("{}/{}", root.trim_end_matches('/'), d.trim_end_matches('/'))
+        };
+        let mut names: Vec<String> = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(&base) {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                if name.starts_with('.') && is_dir {
+                    continue;
+                }
+                if name.to_lowercase().starts_with(&prefix.to_lowercase()) {
+                    names.push(format!("{d}{name}"));
+                }
+            }
+        }
+        names.sort();
+        return names;
+    }
+    let mut pref: Vec<String> = Vec::new();
+    let mut rest: Vec<String> = Vec::new();
+    let mut visited = 0usize;
+    walk_files(root, "", query, &mut pref, &mut rest, &mut visited);
+    pref.sort();
+    rest.sort();
+    pref.extend(rest);
+    pref
+}
+
+fn walk_files(
+    dir: &str,
+    rel: &str,
+    query: &str,
+    pref: &mut Vec<String>,
+    rest: &mut Vec<String>,
+    visited: &mut usize,
+) {
+    if *visited > 4000 {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        *visited += 1;
+        if *visited > 4000 {
+            return;
+        }
+        let name = e.file_name().to_string_lossy().into_owned();
+        let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        if name.starts_with('.') && is_dir {
+            continue;
+        }
+        let path = if rel.is_empty() {
+            name.clone()
+        } else {
+            format!("{rel}/{name}")
+        };
+        let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        if is_dir {
+            if name == "target" || name == "node_modules" {
+                continue;
+            }
+            walk_files(
+                &format!("{}/{}", dir.trim_end_matches('/'), name),
+                &path,
+                query,
+                pref,
+                rest,
+                visited,
+            );
+        }
+        let lower = path.to_lowercase();
+        let q = query.to_lowercase();
+        let base = name.to_lowercase();
+        let matched = q.is_empty()
+            || base.starts_with(&q)
+            || lower.starts_with(&q)
+            || lower.contains(&q);
+        if !matched {
+            continue;
+        }
+        let display = if is_dir { format!("{path}/") } else { path };
+        if q.is_empty() || base.starts_with(&q) || lower.starts_with(&q) {
+            pref.push(display);
+        } else {
+            rest.push(display);
+        }
+    }
+}
+
+fn is_picker_term(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r')
+}
+
+fn is_file_boundary(c: char) -> bool {
+    is_picker_term(c) || matches!(c, '(' | '[' | '{' | '<' | '\'' | '"' | '`')
+}
+
+fn picker_divider(width: usize) -> String {
+    format!("{DIVIDER}{}{RESET}", "\u{2500}".repeat(width))
+}
+
+fn slash_header(p: &Picker, width: usize) -> String {
+    let n = p.slash_matches.len();
+    let mut h = format!("{DIM}Commands {n}");
+    if p.query.is_empty() {
+        h.push_str(" · Type to filter");
+    }
+    h.push_str(RESET);
+    if n > PICKER_VISIBLE {
+        let end = (p.win + PICKER_VISIBLE).min(n);
+        let ind = format!("{}–{}", p.win + 1, end);
+        let pad = width.saturating_sub(visible_width(&h) + visible_width(&ind));
+        if pad > 0 {
+            h.push_str(&format!("{DIM}{}{ind}{RESET}", " ".repeat(pad)));
+        }
+    }
+    h
+}
+
+fn truncate_wide(s: &str, width: usize) -> String {
+    if visible_width(s) <= width {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut w = 0usize;
+    for c in s.chars() {
+        let cw = char_width(c);
+        if w + cw > width.saturating_sub(1) {
+            out.push('\u{2026}');
+            break;
+        }
+        out.push(c);
+        w += cw;
+    }
+    out
+}
+
+fn slash_row(spec: &SlashSpec, sel: bool, width: usize) -> String {
+    let cmd_col = 24usize;
+    let cmd_part = format!("  {}", spec.command);
+    let pad = cmd_col.saturating_sub(visible_width(&cmd_part));
+    let cat = format!("  {}", spec.category);
+    let desc_avail = width.saturating_sub(cmd_col + visible_width(&cat) + 1).max(1);
+    let desc = truncate_wide(spec.description, desc_avail);
+    let left = format!("{cmd_part}{}", " ".repeat(pad));
+    let gap = width
+        .saturating_sub(cmd_col + visible_width(&desc) + visible_width(&cat))
+        .max(1);
+    if sel {
+        format!(
+            "{BOLD}{USER_RAIL}{left}{RESET}{DIM}{desc}{RESET}{}{cat}{RESET}",
+            " ".repeat(gap)
+        )
+    } else {
+        format!("{DIM}{left}{desc}{}{cat}{RESET}", " ".repeat(gap))
+    }
+}
+
+fn file_row(path: &str, query: &str, sel: bool, width: usize) -> String {
+    let mut chars: Vec<char> = path.chars().collect();
+    if chars.len() > 100 {
+        chars.truncate(100);
+    }
+    let mut idx = 0usize;
+    let q: Vec<char> = query.chars().collect();
+    if !q.is_empty() {
+        let path_str: String = chars.iter().collect();
+        if let Some(p) = path_str.to_lowercase().find(&query.to_lowercase()) {
+            idx = path_str[..p].chars().count();
+        }
+    }
+    let mut hit_end = (idx + q.len()).min(chars.len());
+    if path.ends_with('/') && idx + q.len() == chars.len().saturating_sub(1) {
+        hit_end = chars.len();
+    }
+    let head: String = chars[..idx].iter().collect();
+    let hit: String = chars[idx..hit_end].iter().collect();
+    let tail: String = chars[hit_end..].iter().collect();
+    let body = format!("  {head}");
+    let avail = width.saturating_sub(visible_width(&body) + 1);
+    let tail = truncate_wide(&tail, avail);
+    if sel {
+        format!(
+            "  {BOLD}{USER_RAIL}{head}\x1b[48;5;239m{hit}\x1b[49m{tail}{RESET}"
+        )
+    } else {
+        format!("  {DIM}{head}{BOLD}{hit}{RESET}{DIM}{tail}{RESET}")
+    }
 }
 
 fn visible_width(s: &str) -> usize {
