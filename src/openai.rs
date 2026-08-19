@@ -12,6 +12,7 @@ pub struct OpenAI {
 pub enum StreamEvent {
     Content(String),
     ToolCall(ToolCall),
+    Tokens { input: usize, output: usize },
     Done,
 }
 
@@ -259,6 +260,7 @@ struct StreamAcc {
     content: String,
     calls: Vec<OaToolCallDelta>,
     usage: OaUsage,
+    out_tokens: usize,
 }
 
 #[derive(Default, Deserialize)]
@@ -328,6 +330,10 @@ impl StreamAcc {
         };
         if chunk.usage.prompt_tokens != 0 || chunk.usage.completion_tokens != 0 {
             self.usage = chunk.usage;
+            let _ = tx.send(StreamEvent::Tokens {
+                input: self.usage.prompt_tokens,
+                output: self.usage.completion_tokens,
+            });
         }
         let Some(choice) = chunk.choices.into_iter().next() else {
             return;
@@ -335,7 +341,12 @@ impl StreamAcc {
         if let Some(content) = choice.delta.content {
             if !content.is_empty() {
                 self.content.push_str(&content);
+                self.out_tokens += 1;
                 let _ = tx.send(StreamEvent::Content(content));
+                let _ = tx.send(StreamEvent::Tokens {
+                    input: self.usage.prompt_tokens,
+                    output: self.out_tokens,
+                });
             }
         }
         if let Some(calls) = choice.delta.tool_calls {

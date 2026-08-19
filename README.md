@@ -34,7 +34,8 @@ OPENAI_API_KEY=... ./target/release/ax -model gpt-4.1-mini
 
 fixed the test in ax_test.go
 
-❯
+┃
+
 auto · gpt-4.1-mini
 ```
 
@@ -43,8 +44,11 @@ auto · gpt-4.1-mini
 - tool calls show as `● Running …` / `● Ran …` with `│` output rails
 - `• Thinking (Ns)` blinks while the model is working
 - the transcript streams into the **terminal scrollback**: mouse wheel and
-  Shift+PgUp scroll sessions natively; **Ctrl+O** opens a full-transcript
-  view with internal PgUp/PgDn/wheel scrolling (Esc or Ctrl+O closes)
+  Shift+PgUp scroll the whole session natively, exactly like fx — the chrome
+  (title, input, status line) floats below the transcript at the top and pins
+  to the bottom once the transcript fills the terminal; **Ctrl+O** opens a
+  full-transcript view with internal PgUp/PgDn/wheel scrolling (Esc or Ctrl+O
+  closes)
 - **enter** sends, **up/down** history, **left/right** edit,
   **Ctrl+a/e/b/f/p/n/w/u/k/d/l/o** edit words/lines, **Alt+left/right**
   word moves, **Tab** completes slash commands
@@ -134,11 +138,12 @@ let msgs = agent.run(&[ax::Message { role: "user".into(), content: "fix the fail
 
 - `src/markdown.rs` — byte-exact port of fx's markdown-to-ANSI renderer
   (blocks, inline styles, tables, footnotes, links, code highlighting)
-- `src/tui.rs` — transcript TUI: user cards, streamed blocks, tool status,
-  activity line, footer input bar, command catalog screens
+- `src/tui.rs` — transcript TUI: top-anchored fx chrome (title, input,
+  status line) with native-scroll streaming, user cards, streamed blocks,
+  tool status, activity/summary lines, command catalog screens
   (help/resume/models/settings), session store, full-transcript mode
 - `src/term.rs` — raw terminal layer (termios, keys incl. CSI modifiers and
-  SGR mouse, bracketed paste, scroll regions, alternate screen)
+  SGR mouse, bracketed paste, alternate screen)
 
 ## Differences from ax-go
 

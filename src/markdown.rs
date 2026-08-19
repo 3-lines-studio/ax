@@ -1660,8 +1660,12 @@ impl Markdown {
         self.active_footnote = None;
     }
 
-    pub fn current_text(&self) -> &str {
-        &self.out
+    pub fn current_text(&self) -> String {
+        if self.line_buf.is_empty() {
+            return self.out.clone();
+        }
+        let partial = String::from_utf8_lossy(&self.line_buf).into_owned();
+        format!("{}{}", self.out, partial)
     }
 
     pub fn finish(&mut self) -> String {

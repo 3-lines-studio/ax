@@ -23,7 +23,6 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[38;5;245m";
-const STATUSLINE: &str = "\x1b[38;5;245m";
 const DIVIDER: &str = "\x1b[38;5;240m";
 const PERMISSION_AUTO: &str = "\x1b[38;5;252m";
 const HINT: &str = "\x1b[38;5;255m";
@@ -52,13 +51,13 @@ enum Entry {
     Tool { active: bool, label: String },
     Output { stderr: bool, text: String },
     Notice(String),
+    Summary { secs: u64, input: usize, output: usize },
 }
 
 #[derive(PartialEq, Clone)]
 enum Activity {
     Idle,
     Thinking,
-    Tool(String),
     Streaming,
 }
 
@@ -86,6 +85,7 @@ pub enum TurnEvent {
         output: String,
         cancelled: bool,
     },
+    Tokens { input: usize, output: usize },
     Notice(String),
     End {
         messages: Vec<Message>,
@@ -172,6 +172,8 @@ struct Tui {
     streamed: Vec<String>,
     painted_once: bool,
     last_frame: Vec<String>,
+    live_in: usize,
+    live_out: usize,
     rows: u16,
     cols: u16,
     sel: usize,
@@ -214,6 +216,8 @@ impl Tui {
             streamed: Vec::new(),
             painted_once: false,
             last_frame: Vec::new(),
+            live_in: 0,
+            live_out: 0,
             rows: 24,
             cols: 80,
             sel: 0,
@@ -571,6 +575,8 @@ impl Tui {
         self.turn_start = Instant::now();
         self.activity = Activity::Thinking;
         self.cur_text = None;
+        self.live_in = 0;
+        self.live_out = 0;
         let cancel = self.cancel.clone();
         let provider = OpenAI::new(self.cfg.base.clone(), self.cfg.api_key.clone());
         let model = self.cfg.model.clone();
@@ -611,7 +617,7 @@ impl Tui {
                             self.push_block(block);
                             cur = None;
                         }
-                        let text = self.md.as_ref().unwrap().current_text().to_string();
+                        let text = self.md.as_ref().unwrap().current_text();
                         if let Some(i) = cur {
                             if !text.is_empty() {
                                 self.entries[i] = Entry::Text(text);
@@ -650,7 +656,6 @@ impl Tui {
                             active: true,
                             label: label.clone(),
                         });
-                        self.activity = Activity::Tool(label);
                     }
                     TurnEvent::ToolResult {
                         label,
@@ -675,6 +680,10 @@ impl Tui {
                             });
                         }
                         self.activity = Activity::Thinking;
+                    }
+                    TurnEvent::Tokens { input, output } => {
+                        self.live_in = input;
+                        self.live_out = output;
                     }
                     TurnEvent::Notice(text) => {
                         self.entries.push(Entry::Notice(text));
@@ -706,11 +715,17 @@ impl Tui {
                         }
                         self.cur_text = None;
                         self.msgs = messages.clone();
-                        if let Some(err) = err {
-                            self.entries.push(Entry::Notice(format!("error: {err}")));
-                        }
                         if cancelled {
                             self.entries.push(Entry::Notice("interrupted".into()));
+                        } else if err.is_none() {
+                            self.entries.push(Entry::Summary {
+                                secs: self.turn_start.elapsed().as_secs(),
+                                input: usage.input,
+                                output: usage.output,
+                            });
+                        }
+                        if let Some(err) = err {
+                            self.entries.push(Entry::Notice(format!("error: {err}")));
                         }
                         session::save_live(&self.cfg.dir, &messages);
                         self.activity = Activity::Idle;
@@ -1202,27 +1217,25 @@ impl Tui {
         let mut rows = Vec::new();
         for entry in &self.entries {
             match entry {
-                Entry::Welcome => rows.push(format!(
-                    "{WELCOME_APP}𝒂x{RESET}{DIM} v{VERSION} · Run /help for commands{RESET}"
-                )),
+                Entry::Welcome => {
+                    rows.push(format!(
+                        "{WELCOME_APP}𝒂x{RESET}{DIM} v{VERSION} · Run /help for commands{RESET}"
+                    ));
+                }
                 Entry::User(text) => {
                     for line in wrap_text(text, width.saturating_sub(2)) {
                         rows.push(format!("{USER_RAIL}┃{RESET} {BOLD}{line}{RESET}"));
                     }
                 }
-                Entry::Text(t) => rows.extend(wrap_ansi(t, width)),
-                Entry::Code(c) => rows.extend(wrap_ansi(c, width)),
-                Entry::Table(t) => rows.extend(wrap_ansi(t, width)),
+                Entry::Text(t) => rows.extend(wrap_gutter(t, width, 2)),
+                Entry::Code(c) => rows.extend(wrap_gutter(c, width, 2)),
+                Entry::Table(t) => rows.extend(wrap_gutter(t, width, 2)),
                 Entry::Rule => rows.push(format!(
                     "{DIM}{}{RESET}",
                     "\u{2500}".repeat(markdown::ansi::HORIZONTAL_RULE_WIDTH)
                 )),
-                Entry::Tool { active, label } => {
-                    if *active {
-                        rows.push(format!("● {label}"));
-                    } else {
-                        rows.push(format!("{SYSTEM_NOTICE_TEXT}●{RESET} {label}"));
-                    }
+                Entry::Tool { active: _, label } => {
+                    rows.push(format!("{USER_RAIL}●{RESET} {label}"));
                 }
                 Entry::Output { stderr, text } => {
                     for line in text.lines() {
@@ -1231,138 +1244,137 @@ impl Tui {
                     }
                 }
                 Entry::Notice(text) => rows.push(text.clone()),
+                Entry::Summary {
+                    secs,
+                    input,
+                    output,
+                } => {
+                    rows.push(format!(
+                        "{DIM}  {} (↑{} ↓{}){RESET}",
+                        format_dur(*secs),
+                        tok(*input),
+                        tok(*output)
+                    ));
+                }
             }
+            rows.push(String::new());
         }
         match &self.activity {
-            Activity::Thinking => {
+            Activity::Thinking | Activity::Streaming => {
                 let secs = self.turn_start.elapsed().as_secs();
-                rows.push(format!("{PERMISSION_AUTO}• Thinking ({secs}s){RESET}"));
-            }
-            Activity::Tool(label) => {
-                rows.push(format!("{PERMISSION_AUTO}●{RESET} {label}"));
+                let mut line = format!("{PERMISSION_AUTO}• Thinking ({secs}s){RESET}");
+                if self.live_in > 0 || self.live_out > 0 {
+                    line.push_str(&format!(
+                        " {DIM}(↑{} ↓{}){RESET}",
+                        tok(self.live_in),
+                        tok(self.live_out)
+                    ));
+                }
+                rows.push(line);
             }
             _ => {}
         }
         rows
     }
 
-    fn region_bottom(&self) -> u16 {
-        (self.rows).saturating_sub(2).max(1)
-    }
-
     fn paint_inline(&mut self, term: &mut Terminal, resized: bool) {
         let out = term.out();
-        let region_bottom = self.region_bottom();
         if !self.painted_once || resized {
             let _ = out.write_all(term::clear_display().as_bytes());
-            let _ = out.write_all(term::scroll_region(1, region_bottom).as_bytes());
             self.painted_once = true;
             self.streamed.clear();
         }
-        let new_rows = self.render_transcript();
-        self.update_region(out, &new_rows, region_bottom);
-        self.draw_footer(out, self.cols, self.rows);
+        let content = self.render_transcript();
+        let chrome = self.chrome_rows();
+        let rows = (self.rows as usize).max(1);
+        let capacity = rows.saturating_sub(chrome.len()).max(1);
+        self.update_content(out, &content, rows, capacity);
+        let vis = content.len().min(capacity);
+        for row in (vis + 1)..=rows {
+            let _ = write!(out, "{}", term::move_to(row as u16, 1));
+            let _ = out.write_all(term::clear_eol().as_bytes());
+        }
+        for (i, line) in chrome.iter().enumerate() {
+            let _ = write!(out, "{}", term::move_to((vis + 1 + i) as u16, 1));
+            let _ = out.write_all(line.as_bytes());
+        }
+        let (_, cursor_col) = self.input.render(self.cols as usize);
+        let _ = write!(out, "{}", term::move_to((vis + 1) as u16, cursor_col as u16));
+        let _ = out.write_all(term::cursor_visible().as_bytes());
         let _ = out.flush();
     }
 
-    fn update_region(&mut self, out: &mut std::io::Stdout, new: &[String], region_bottom: u16) {
+    fn update_content(
+        &mut self,
+        out: &mut std::io::Stdout,
+        new: &[String],
+        rows: usize,
+        capacity: usize,
+    ) {
         let old = &self.streamed;
         if new == old {
             return;
         }
-        let region_h = region_bottom as usize;
-        let old_len = old.len();
-        if new.len() > old_len && new[..old_len] == old[..] {
-            self.append_rows(out, &new[old_len..], old_len, region_bottom);
-            self.streamed = new.to_vec();
-            return;
-        }
-        if new.len() < old_len && new[..] == old[..new.len()] {
-            let visible_start = old_len.saturating_sub(region_h);
-            if new.len() >= visible_start {
-                for i in new.len()..old_len {
-                    let row = self.row_position(i, old_len, region_h, region_bottom);
-                    let _ = write!(out, "{}", term::move_to(row, 1));
-                    let _ = out.write_all(term::clear_eol().as_bytes());
+        let old_vis = old.len().min(capacity);
+        let new_vis = new.len().min(capacity);
+        let old_scrolled = old.len().saturating_sub(old_vis);
+        let new_scrolled = new.len().saturating_sub(new_vis);
+        // Patch path: all differences inside the visible window and the
+        // content did not shrink below the previous scroll point.
+        if new_scrolled >= old_scrolled {
+            let mut all_in_window = true;
+            let mut changed = false;
+            for i in 0..new.len().max(old.len()) {
+                if old.get(i) != new.get(i) {
+                    changed = true;
+                    if i < new_scrolled {
+                        all_in_window = false;
+                        break;
+                    }
+                }
+            }
+            if changed && all_in_window {
+                if new_scrolled > old_scrolled {
+                    if new_scrolled > old.len() {
+                        self.repaint_tail(out, new, capacity);
+                        self.streamed = new.to_vec();
+                        return;
+                    }
+                    for _ in 0..(new_scrolled - old_scrolled) {
+                        let _ = write!(out, "{}", term::move_to(rows as u16, 1));
+                        let _ = out.write_all(b"\n");
+                    }
+                }
+                for i in 0..new.len() {
+                    if old.get(i) != new.get(i) {
+                        let row = (i - new_scrolled + 1) as u16;
+                        let _ = write!(out, "{}", term::move_to(row, 1));
+                        let _ = out.write_all(term::clear_eol().as_bytes());
+                        let _ = out.write_all(new[i].as_bytes());
+                    }
+                }
+                for i in new.len()..old.len() {
+                    if i >= new_scrolled {
+                        let row = (i - new_scrolled + 1) as u16;
+                        let _ = write!(out, "{}", term::move_to(row, 1));
+                        let _ = out.write_all(term::clear_eol().as_bytes());
+                    }
                 }
                 self.streamed = new.to_vec();
                 return;
             }
         }
-        let visible_start = old_len.saturating_sub(region_h);
-        let mut changed = false;
-        let mut all_in_window = true;
-        for i in 0..new.len().min(old_len) {
-            if new[i] != old[i] {
-                changed = true;
-                if i < visible_start {
-                    all_in_window = false;
-                    break;
-                }
-            }
-        }
-        if changed && all_in_window {
-            for i in 0..new.len().min(old_len) {
-                if new[i] != old[i] {
-                    let row = self.row_position(i, old_len, region_h, region_bottom);
-                    let _ = write!(out, "{}", term::move_to(row, 1));
-                    let _ = out.write_all(term::clear_eol().as_bytes());
-                    let _ = out.write_all(new[i].as_bytes());
-                }
-            }
-            if new.len() > old_len {
-                self.append_rows(out, &new[old_len..], old_len, region_bottom);
-            } else if new.len() < old_len {
-                for i in new.len()..old_len {
-                    if i >= visible_start {
-                        let row = self.row_position(i, old_len, region_h, region_bottom);
-                        let _ = write!(out, "{}", term::move_to(row, 1));
-                        let _ = out.write_all(term::clear_eol().as_bytes());
-                    }
-                }
-            }
-            self.streamed = new.to_vec();
-            return;
-        }
-        let window_start = new.len().saturating_sub(region_h);
-        for i in 0..region_h {
-            let _ = write!(out, "{}", term::move_to((i + 1) as u16, 1));
-            let _ = out.write_all(term::clear_eol().as_bytes());
-            if let Some(r) = new.get(window_start + i) {
-                let _ = out.write_all(r.as_bytes());
-            }
-        }
+        self.repaint_tail(out, new, capacity);
         self.streamed = new.to_vec();
     }
 
-    fn row_position(&self, i: usize, len: usize, region_h: usize, region_bottom: u16) -> u16 {
-        let _ = region_bottom;
-        if len <= region_h {
-            (i + 1) as u16
-        } else {
-            (region_h - len + 1 + i) as u16
-        }
-    }
-
-    fn append_rows(
-        &mut self,
-        out: &mut std::io::Stdout,
-        rows: &[String],
-        old_len: usize,
-        region_bottom: u16,
-    ) {
-        let region_h = region_bottom as usize;
-        for (k, r) in rows.iter().enumerate() {
-            let idx = old_len + k;
-            if idx < region_h {
-                let _ = write!(out, "{}", term::move_to((idx + 1) as u16, 1));
-                let _ = out.write_all(term::clear_eol().as_bytes());
+    fn repaint_tail(&self, out: &mut std::io::Stdout, new: &[String], capacity: usize) {
+        let start = new.len().saturating_sub(capacity);
+        for i in 0..capacity {
+            let _ = write!(out, "{}", term::move_to((i + 1) as u16, 1));
+            let _ = out.write_all(term::clear_eol().as_bytes());
+            if let Some(r) = new.get(start + i) {
                 let _ = out.write_all(r.as_bytes());
-            } else {
-                let _ = write!(out, "{}", term::move_to(region_bottom, 1));
-                let _ = out.write_all(term::clear_eol().as_bytes());
-                let _ = out.write_all(r.as_bytes());
-                let _ = out.write_all(b"\n");
             }
         }
     }
@@ -1371,47 +1383,30 @@ impl Tui {
         if self.running && self.ctrl_c_pending {
             return format!("{DIM}press ctrl+c again to exit{RESET}");
         }
-        let mut s = String::from(STATUSLINE);
+        let mut segs: Vec<String> = Vec::new();
         if self.cfg.api_key.is_empty() {
-            s.push_str("set OPENAI_API_KEY");
+            segs.push(format!("{DIM}set OPENAI_API_KEY{RESET}"));
         }
-        s.push_str(" · ");
         match self.permission {
-            0 => {
-                s.push_str(PERMISSION_AUTO);
-                s.push_str("auto");
-                s.push_str(RESET);
-                s.push_str(STATUSLINE);
-            }
-            1 => s.push_str("ask"),
-            _ => s.push_str("YOLO"),
+            0 => segs.push(format!(
+                "{PERMISSION_AUTO}auto{RESET}"
+            )),
+            1 => segs.push("ask".into()),
+            _ => segs.push("YOLO".into()),
         }
-        s.push_str(" · ");
-        s.push_str(&self.model_display);
-        if self.sess_in > 0 {
-            s.push_str(" · Context: ");
-            s.push_str(&tok(self.sess_in));
-        }
+        segs.push(self.model_display.clone());
         if let Some(extra) = scroll_hint {
-            s.push_str(extra);
+            segs.push(extra.to_string());
         }
-        s.push_str(RESET);
-        s
+        format!(
+            "{DIM}{}{RESET}",
+            segs.join(" · ")
+        )
     }
 
-    fn draw_footer(&mut self, out: &mut std::io::Stdout, cols: u16, rows: u16) {
-        let input_row = rows.saturating_sub(1).max(1);
-        let hint_row = rows.max(2);
-        let (input_line, cursor_col) = self.input.render(cols as usize);
-        let _ = write!(out, "{}", term::move_to(input_row, 1));
-        let _ = out.write_all(term::clear_eol().as_bytes());
-        let _ = out.write_all(input_line.as_bytes());
-        let _ = write!(out, "{}", term::move_to(hint_row, 1));
-        let _ = out.write_all(term::clear_eol().as_bytes());
-        let hint = self.hint_line(None);
-        let _ = out.write_all(hint.as_bytes());
-        let _ = write!(out, "{}", term::move_to(input_row, cursor_col as u16));
-        let _ = out.write_all(term::cursor_visible().as_bytes());
+    fn chrome_rows(&self) -> Vec<String> {
+        let (input_line, _) = self.input.render(self.cols as usize);
+        vec![input_line, String::new(), self.hint_line(None)]
     }
 
     fn full_view_h(&self) -> usize {
@@ -1697,12 +1692,12 @@ impl Input {
     }
 
     fn render(&self, width: usize) -> (String, usize) {
-        self.render_with("❯ ", width)
+        self.render_with(&format!("{USER_RAIL}┃{RESET} "), width)
     }
 
     fn render_with(&self, prefix: &str, width: usize) -> (String, usize) {
-        let pchars: Vec<char> = prefix.chars().collect();
-        let avail = width.saturating_sub(pchars.len()).max(1);
+        let pwidth = visible_width(prefix);
+        let avail = width.saturating_sub(pwidth).max(1);
         let chars: Vec<char> = self.buf.chars().collect();
         let mut scroll = self.scroll;
         if self.cursor < scroll {
@@ -1712,7 +1707,7 @@ impl Input {
             scroll = self.cursor - avail;
         }
         let visible: String = chars.iter().skip(scroll).take(avail).collect();
-        let cursor_col = pchars.len() + self.cursor.saturating_sub(scroll);
+        let cursor_col = pwidth + 1 + self.cursor.saturating_sub(scroll);
         (format!("{prefix}{visible}"), cursor_col)
     }
 }
@@ -1838,6 +1833,14 @@ fn sgr_kind(seq: &str) -> Option<&'static str> {
     })
 }
 
+fn wrap_gutter(text: &str, width: usize, gutter: usize) -> Vec<String> {
+    let pad = " ".repeat(gutter);
+    wrap_ansi(text, width.saturating_sub(gutter).max(1))
+        .into_iter()
+        .map(|r| if r.is_empty() { r } else { format!("{pad}{r}") })
+        .collect()
+}
+
 pub fn wrap_ansi(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![String::new()];
@@ -1952,6 +1955,16 @@ fn clip(s: &str, n: usize) -> String {
     }
     let head: String = chars.into_iter().take(n).collect();
     format!("{head}…")
+}
+
+fn format_dur(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m {:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h {:02}m", secs / 3600, (secs % 3600) / 60)
+    }
 }
 
 fn tok(n: usize) -> String {
@@ -2157,6 +2170,9 @@ fn stream_request(
                 let _ = tx.send(TurnEvent::AssistantDelta(d));
             }
             StreamEvent::ToolCall(c) => calls.push(c),
+            StreamEvent::Tokens { input, output } => {
+                let _ = tx.send(TurnEvent::Tokens { input, output });
+            }
             StreamEvent::Done => break,
         }
     }
