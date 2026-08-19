@@ -8,6 +8,21 @@ Release binary: **~768 KB** (stripped, `x86_64-linux`, dynamically linked
 against system libcurl). No TUI framework, no markdown library — both are
 hand-rolled ports of fx's presentation layer.
 
+## Install
+
+```
+curl -fsSL https://ax.3lines.studio/install.sh | sh
+```
+
+Installs `ax` to `~/.local/bin` (override with `AX_PREFIX`). Linux and macOS,
+x86_64 and aarch64, one ~768 KB binary — no Rust toolchain, no root.
+The installer verifies the sha256 checksum of every download.
+Pin a version with `AX_VERSION=v0.1.0`. Uninstall: `rm ~/.local/bin/ax`.
+
+The domain redirects to the GitHub release
+(`github.com/3-lines-studio/ax/releases/latest/download/install.sh`);
+the installer script itself always downloads binaries from GitHub.
+
 ## Build
 
 ```
