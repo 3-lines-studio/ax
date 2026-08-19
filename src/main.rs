@@ -41,6 +41,7 @@ fn main() {
             system: resolve_system(&cfg),
             dir: cfg.dir.clone(),
             ax_root: ax_root(),
+            skills_root: skills_root(),
             api_key: api_key(&fc),
             resume: cfg.resume.clone(),
         };
@@ -222,16 +223,22 @@ fn one_shot(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
 
 fn build_agent(cfg: &Config, fc: &FileConfig, on: impl FnMut(Event) + 'static) -> Agent<OpenAI> {
     let system = resolve_system(cfg);
+    let mut tools = vec![
+        ax::tools::read(),
+        ax::tools::write(),
+        ax::tools::edit(),
+        ax::tools::bash(&cfg.dir),
+    ];
+    tools.extend(ax::skills::skill_tools(&skills_root()));
     Agent::new(OpenAI::new(cfg.base.clone(), api_key(fc)))
         .model(cfg.model.clone())
         .system(system)
-        .tools(vec![
-            ax::tools::read(),
-            ax::tools::write(),
-            ax::tools::edit(),
-            ax::tools::bash(&cfg.dir),
-        ])
+        .tools(tools)
         .on(on)
+}
+
+fn skills_root() -> String {
+    ax::skills::skills_root().unwrap_or_default()
 }
 
 fn api_key(fc: &FileConfig) -> String {

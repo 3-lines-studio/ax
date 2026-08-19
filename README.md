@@ -90,10 +90,24 @@ archived automatically, so nothing is lost:
 
 `/help` opens a searchable command catalog. Supported:
 `/help /clear /new /reset /resume /rename /status /stats /model /models
-/copy /version /quit`.
+/copy /skills /version /quit`.
 
 - `/models` browses models from `{base}/models`; Enter selects
 - `/copy` copies the last assistant response (OSC 52)
+- `/skills` lists installed skills
+
+**User commands** are prompt templates: `~/.config/ax/commands/<name>.md`
+(create the dir). `/name [args]` submits the file content as your message;
+`$ARGUMENTS` in the file is replaced by the args. They appear in the
+`/help` catalog and the picker under `User`.
+
+### Skills
+
+Markdown files at `~/.agents/skills/<name>/SKILL.md` (the cross-agent
+standard dir). Optional YAML frontmatter `description:`; the body is the
+skill. Skills are not auto-injected — the model discovers them through
+the `skills` tool and reads one with the `skill` tool, or you list them
+with `/skills`.
 
 ### One-shot
 

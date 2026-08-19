@@ -17,6 +17,7 @@ pub mod term;
 pub mod tui;
 mod http;
 pub mod openai;
+pub mod skills;
 pub mod tools;
 
 pub use openai::OpenAI;

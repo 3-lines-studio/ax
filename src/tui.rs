@@ -36,6 +36,7 @@ pub struct TuiConfig {
     pub system: String,
     pub dir: String,
     pub ax_root: String,
+    pub skills_root: String,
     pub api_key: String,
     /// None = fresh session. Some("") = resume picker. Some("last") or id = load.
     pub resume: Option<String>,
@@ -96,6 +97,40 @@ struct SlashSpec {
     category: &'static str,
 }
 
+struct SlashItem {
+    command: String,
+    help: String,
+    description: String,
+    category: String,
+}
+
+#[derive(Clone)]
+struct UserCommand {
+    name: String,
+    description: String,
+    content: String,
+}
+
+impl SlashItem {
+    fn builtin(spec: &SlashSpec) -> SlashItem {
+        SlashItem {
+            command: spec.command.to_string(),
+            help: spec.help.to_string(),
+            description: spec.description.to_string(),
+            category: spec.category.to_string(),
+        }
+    }
+
+    fn user(uc: &UserCommand) -> SlashItem {
+        SlashItem {
+            command: format!("/{}", uc.name),
+            help: format!("/{} <args>", uc.name),
+            description: uc.description.clone(),
+            category: "User".to_string(),
+        }
+    }
+}
+
 #[derive(PartialEq, Clone, Copy)]
 enum PickerKind {
     Slash,
@@ -109,7 +144,7 @@ struct Picker {
     query: String,
     sel: usize,
     win: usize,
-    slash_matches: Vec<&'static SlashSpec>,
+    slash_matches: Vec<SlashItem>,
     file_matches: Vec<String>,
 }
 
@@ -127,6 +162,7 @@ const SLASH: &[SlashSpec] = &[
     SlashSpec { command: "/model", help: "/model <id-or-query>", description: "choose what model and reasoning effort to use", category: "Model",  },
     SlashSpec { command: "/models", help: "/models", description: "browse available models", category: "Model",  },
     SlashSpec { command: "/copy", help: "/copy", description: "copy the last assistant response", category: "Session",  },
+    SlashSpec { command: "/skills", help: "/skills", description: "list installed skills", category: "Skills",  },
     SlashSpec { command: "/version", help: "/version", description: "show the ax version", category: "General",  },
     SlashSpec { command: "/quit", help: "/quit (/exit)", description: "exit the interactive shell", category: "General",  },
 ];
@@ -202,11 +238,13 @@ struct Tui {
     models_rx: Option<Receiver<Result<Vec<String>, String>>>,
     picker: Option<Picker>,
     picker_dismissed: Option<PickerKind>,
+    user_commands: Vec<UserCommand>,
 }
 
 impl Tui {
     fn new(cfg: TuiConfig) -> Tui {
         let model_display = compact_model_label(&cfg.model);
+        let user_commands = load_user_commands(&cfg.ax_root);
         Tui {
             cfg,
             entries: Vec::new(),
@@ -250,6 +288,7 @@ impl Tui {
             models_rx: None,
             picker: None,
             picker_dismissed: None,
+            user_commands,
         }
     }
 
@@ -694,7 +733,8 @@ impl Tui {
         let model = self.cfg.model.clone();
         let system = self.cfg.system.clone();
         let dir = self.cfg.dir.clone();
-        let tools = build_tools(&dir);
+        let skills_root = self.cfg.skills_root.clone();
+        let tools = build_tools(&dir, &skills_root);
         std::thread::spawn(move || {
             run_turn(provider, model, system, tools, msgs, cancel, tx);
         });
@@ -918,6 +958,7 @@ impl Tui {
             }
             "models" => self.open_screen(Screen::Models),
             "copy" => self.copy_last(),
+            "skills" => self.list_skills(),
             "version" => {
                 self.entries
                     .push(Entry::Notice(format!("{DIM}v{VERSION}{RESET}")));
@@ -926,10 +967,57 @@ impl Tui {
                 self.want_quit = true;
             }
             _ => {
-                self.entries
-                    .push(Entry::Notice(format!("{DIM}unknown command: /{name}{RESET}")));
+                if let Some(idx) = self.user_commands.iter().position(|c| c.name == name) {
+                    let uc = self.user_commands[idx].clone();
+                    self.run_user_command(&uc, rest);
+                } else {
+                    self.entries.push(Entry::Notice(format!(
+                        "{DIM}unknown command: /{name}{RESET}"
+                    )));
+                }
             }
         }
+    }
+
+    fn list_skills(&mut self) {
+        let skills = crate::skills::list_skills(&self.cfg.skills_root);
+        if skills.is_empty() {
+            self.entries.push(Entry::Notice(format!(
+                "{DIM}no skills in ~/.agents/skills{RESET}"
+            )));
+            return;
+        }
+        for s in skills {
+            self.entries.push(Entry::Notice(format!(
+                "{DIM}· {}: {}{RESET}",
+                s.name, s.description
+            )));
+        }
+    }
+
+    fn run_user_command(&mut self, uc: &UserCommand, rest: &str) {
+        if self.running {
+            self.entries.push(Entry::Notice(format!(
+                "{DIM}busy: finish the current turn first{RESET}"
+            )));
+            return;
+        }
+        let prompt = if rest.is_empty() {
+            uc.content.clone()
+        } else if uc.content.contains("$ARGUMENTS") {
+            uc.content.replace("$ARGUMENTS", rest)
+        } else {
+            format!("{}\n\n{rest}", uc.content)
+        };
+        self.entries.push(Entry::User(prompt.clone()));
+        self.input.history.push(prompt.clone());
+        self.msgs.push(Message {
+            role: "user".into(),
+            content: prompt,
+            tool_calls: Vec::new(),
+            tool_call_id: String::new(),
+        });
+        self.start_turn();
     }
 
     fn fresh_session(&mut self, archive: bool) {
@@ -1070,9 +1158,9 @@ impl Tui {
         }
     }
 
-    fn help_items(&self) -> Vec<&'static SlashSpec> {
+    fn help_items(&self) -> Vec<SlashItem> {
         let q = self.input.buf().trim().to_lowercase();
-        SLASH
+        let mut out: Vec<SlashItem> = SLASH
             .iter()
             .filter(|s| {
                 q.is_empty()
@@ -1080,7 +1168,18 @@ impl Tui {
                     || s.description.to_lowercase().contains(&q)
                     || s.category.to_lowercase().contains(&q)
             })
-            .collect()
+            .map(SlashItem::builtin)
+            .collect();
+        for uc in &self.user_commands {
+            let item = SlashItem::user(uc);
+            if q.is_empty()
+                || item.command.to_lowercase().contains(&q)
+                || item.description.to_lowercase().contains(&q)
+            {
+                out.push(item);
+            }
+        }
+        out
     }
 
     fn filtered_sessions(&self) -> Vec<&SessionMeta> {
@@ -1103,8 +1202,8 @@ impl Tui {
         match self.screen {
             Screen::Help => {
                 let items = self.help_items();
-                if let Some(spec) = items.get(self.sel).copied() {
-                    let cmd = spec.command;
+                if let Some(spec) = items.get(self.sel) {
+                    let cmd = spec.command.clone();
                     self.close_screen();
                     if let Some(rest) = cmd.strip_prefix('/') {
                         self.slash(rest);
@@ -1152,18 +1251,10 @@ impl Tui {
         let screen = self.screen;
         match screen {
             Screen::Help => {
-                let items: Vec<&'static SlashSpec> = SLASH
-                    .iter()
-                    .filter(|s| {
-                        q.is_empty()
-                            || s.command.to_lowercase().contains(&q)
-                            || s.description.to_lowercase().contains(&q)
-                            || s.category.to_lowercase().contains(&q)
-                    })
-                    .collect();
+                let items = self.help_items();
                 out.push(format!("{SELECTED}Commands {}{RESET}", items.len()));
                 push_catalog_items(&mut self.window_start, sel, &mut out, items.len(), rows, |i| {
-                    let s = items[i];
+                    let s = &items[i];
                     let style = if i == sel { SELECTED } else { DIM };
                     let mut r = format!("{style}  {}{RESET}", s.help);
                     let desc_col = width * 2 / 3;
@@ -1494,7 +1585,7 @@ impl Tui {
                     rows.push(String::new());
                     let n = p.slash_matches.len();
                     for idx in p.win..(p.win + PICKER_VISIBLE).min(n) {
-                        rows.push(slash_row(p.slash_matches[idx], idx == p.sel, width));
+                        rows.push(slash_row(&p.slash_matches[idx], idx == p.sel, width));
                     }
                 }
                 PickerKind::Files => {
@@ -1709,7 +1800,7 @@ impl Tui {
                     file_matches: Vec::new(),
                 };
                 match p.kind {
-                    PickerKind::Slash => p.slash_matches = slash_matches(&p.query),
+                    PickerKind::Slash => p.slash_matches = slash_matches(&p.query, &self.user_commands),
                     PickerKind::Files => p.file_matches = file_matches(&p.query, &self.cfg.dir),
                 }
                 self.picker = Some(p);
@@ -2103,18 +2194,61 @@ fn line_display_pos(chars: &[char], char_idx: usize, avail: usize) -> (usize, us
     }
 }
 
-fn slash_matches(query: &str) -> Vec<&'static SlashSpec> {
-    let q = query.to_lowercase();
-    if q.is_empty() {
-        return SLASH.iter().collect();
+fn load_user_commands(ax_root: &str) -> Vec<UserCommand> {
+    let dir = std::path::Path::new(ax_root).join("commands");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("md") {
+            continue;
+        }
+        let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let description = content
+            .lines()
+            .map(|l| l.trim())
+            .find(|l| !l.is_empty())
+            .unwrap_or("")
+            .to_string();
+        out.push(UserCommand {
+            name: name.to_string(),
+            description,
+            content,
+        });
     }
-    SLASH
-        .iter()
-        .filter(|s| {
-            let cmd = s.command[1..].to_lowercase();
-            cmd.starts_with(&q) || cmd.contains(&q)
-        })
-        .collect()
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+fn slash_matches(query: &str, users: &[UserCommand]) -> Vec<SlashItem> {
+    let q = query.to_lowercase();
+    let mut out: Vec<SlashItem> = if q.is_empty() {
+        SLASH.iter().map(SlashItem::builtin).collect()
+    } else {
+        SLASH
+            .iter()
+            .filter(|s| {
+                let cmd = s.command[1..].to_lowercase();
+                cmd.starts_with(&q) || cmd.contains(&q)
+            })
+            .map(SlashItem::builtin)
+            .collect()
+    };
+    for uc in users {
+        let item = SlashItem::user(uc);
+        let cmd = uc.name.to_lowercase();
+        if cmd.starts_with(&q) || cmd.contains(&q) {
+            out.push(item);
+        }
+    }
+    out
 }
 
 fn file_matches(query: &str, dir: &str) -> Vec<String> {
@@ -2264,13 +2398,13 @@ fn truncate_wide(s: &str, width: usize) -> String {
     out
 }
 
-fn slash_row(spec: &SlashSpec, sel: bool, width: usize) -> String {
+fn slash_row(spec: &SlashItem, sel: bool, width: usize) -> String {
     let cmd_col = 24usize;
     let cmd_part = format!("  {}", spec.command);
     let pad = cmd_col.saturating_sub(visible_width(&cmd_part));
     let cat = format!("  {}", spec.category);
     let desc_avail = width.saturating_sub(cmd_col + visible_width(&cat) + 1).max(1);
-    let desc = truncate_wide(spec.description, desc_avail);
+    let desc = truncate_wide(&spec.description, desc_avail);
     let left = format!("{cmd_part}{}", " ".repeat(pad));
     let gap = width
         .saturating_sub(cmd_col + visible_width(&desc) + visible_width(&cat))
@@ -2623,13 +2757,15 @@ fn b64_encode(data: &[u8]) -> String {
     out
 }
 
-fn build_tools(dir: &str) -> Vec<Tool> {
-    vec![
+fn build_tools(dir: &str, skills_root: &str) -> Vec<Tool> {
+    let mut tools = vec![
         crate::tools::read(),
         crate::tools::write(),
         crate::tools::edit(),
         crate::tools::bash(dir),
-    ]
+    ];
+    tools.extend(crate::skills::skill_tools(skills_root));
+    tools
 }
 
 fn tool_kind(call: &ToolCall) -> String {
