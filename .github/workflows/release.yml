@@ -44,3 +44,5 @@ jobs:
           cp "$GITHUB_WORKSPACE/scripts/install.sh" install.sh
           gh release create "$GITHUB_REF_NAME" ax-* SHA256SUMS install.sh \
             --repo "$GITHUB_REPOSITORY" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
