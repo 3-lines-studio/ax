@@ -118,6 +118,9 @@ OPENAI_API_KEY=... ./target/release/ax -model gpt-4.1-mini "explain main.go"
 ```
 
 Renders the final answer as markdown with ANSI on a TTY, raw when piped.
+A prompt starting with `/name` expands a user command from
+`~/.config/ax/commands/<name>.md` with the same rules as the TUI
+(`$ARGUMENTS` substitution, trailing args appended otherwise).
 Works with any OpenAI-compatible endpoint (`-base`): OpenRouter, DeepSeek,
 Ollama, vLLM.
 

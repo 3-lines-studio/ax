@@ -104,7 +104,7 @@ impl OpenAI {
             };
             msgs.push(OaMessage {
                 role: m.role.clone(),
-                content: if m.content.is_empty() {
+                content: if m.content.is_empty() && m.role != "tool" {
                     None
                 } else {
                     Some(m.content.clone())

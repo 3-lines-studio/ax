@@ -159,7 +159,9 @@ fn usage() {
          \n\
          With no prompt and a TTY, starts the interactive transcript TUI\n\
          (fresh session; \"/resume\" reopens saved ones).\n\
-         With no prompt and no TTY, reads the prompt from stdin."
+         With no prompt and no TTY, reads the prompt from stdin.
+         A prompt of the form /name [args] expands a user command from
+         ~/.config/ax/commands/<name>.md (same expansion as the TUI)."
     );
 }
 
@@ -184,7 +186,7 @@ fn one_shot(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
     let mut agent = build_agent(cfg, fc, on);
     let user = Message {
         role: "user".into(),
-        content: prompt.join(" "),
+        content: expand_user_command(&prompt.join(" "), &ax_root()),
         tool_calls: Vec::new(),
         tool_call_id: String::new(),
     };
@@ -219,6 +221,23 @@ fn one_shot(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
             }
         }
     }
+}
+
+fn expand_user_command(prompt: &str, ax_root: &str) -> String {
+    let Some(cmd) = prompt.strip_prefix('/') else {
+        return prompt.to_string();
+    };
+    let (name, rest) = match cmd.split_once(' ') {
+        Some((n, r)) => (n, r.trim()),
+        None => (cmd, ""),
+    };
+    let Some(uc) = ax::tui::load_user_commands(ax_root)
+        .into_iter()
+        .find(|c| c.name == name)
+    else {
+        return prompt.to_string();
+    };
+    ax::tui::expand_user_command(&uc, rest)
 }
 
 fn build_agent(cfg: &Config, fc: &FileConfig, on: impl FnMut(Event) + 'static) -> Agent<OpenAI> {
@@ -426,6 +445,31 @@ fn fmt_dur(d: std::time::Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expand_user_command_cases() {
+        let dir = std::env::temp_dir().join(format!("ax-uc-{}", std::process::id()));
+        let cmds = dir.join("commands");
+        std::fs::create_dir_all(&cmds).unwrap();
+        std::fs::write(
+            cmds.join("commit.md"),
+            "---\ndescription: stage and commit\n---\n\nstage everything now",
+        )
+        .unwrap();
+        std::fs::write(cmds.join("args.md"), "say: $ARGUMENTS").unwrap();
+        let root = dir.to_str().unwrap();
+
+        assert_eq!(expand_user_command("/commit", root), "stage everything now");
+        assert_eq!(
+            expand_user_command("/commit blablabla", root),
+            "stage everything now\n\nblablabla"
+        );
+        assert_eq!(expand_user_command("/args hi there", root), "say: hi there");
+        assert_eq!(expand_user_command("/missing x", root), "/missing x");
+        assert_eq!(expand_user_command("not a command", root), "not a command");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn render_args_cases() {

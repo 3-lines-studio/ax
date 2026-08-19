@@ -49,7 +49,7 @@ fn openai_round_trip() {
             serde_json::from_slice(&req[header_end..header_end + cl]).unwrap();
         assert_eq!(body["model"], "m1");
         let msgs = body["messages"].as_array().unwrap();
-        assert_eq!(msgs.len(), 4);
+        assert_eq!(msgs.len(), 5);
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs[0]["content"], "be brief");
         assert_eq!(msgs[2]["tool_calls"][0]["id"], "c9");
@@ -59,7 +59,11 @@ fn openai_round_trip() {
             r#"{"path":"a.txt"}"#
         );
         assert_eq!(msgs[3]["role"], "tool");
+        assert_eq!(msgs[3]["content"], "hi");
         assert_eq!(msgs[3]["tool_call_id"], "c9");
+        assert_eq!(msgs[4]["role"], "tool");
+        assert_eq!(msgs[4]["content"], "");
+        assert_eq!(msgs[4]["tool_call_id"], "c11");
         let tools = body["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0]["function"]["name"], "read");
@@ -100,6 +104,12 @@ fn openai_round_trip() {
                 content: "hi".into(),
                 tool_calls: Vec::new(),
                 tool_call_id: "c9".into(),
+            },
+            Message {
+                role: "tool".into(),
+                content: String::new(),
+                tool_calls: Vec::new(),
+                tool_call_id: "c11".into(),
             },
         ],
         tools: &[new_tool(

@@ -121,10 +121,10 @@ struct SlashItem {
 }
 
 #[derive(Clone)]
-struct UserCommand {
-    name: String,
-    description: String,
-    content: String,
+pub struct UserCommand {
+    pub name: String,
+    pub description: String,
+    pub content: String,
 }
 
 impl SlashItem {
@@ -1088,13 +1088,7 @@ impl Tui {
             )));
             return;
         }
-        let prompt = if rest.is_empty() {
-            uc.content.clone()
-        } else if uc.content.contains("$ARGUMENTS") {
-            uc.content.replace("$ARGUMENTS", rest)
-        } else {
-            format!("{}\n\n{rest}", uc.content)
-        };
+        let prompt = expand_user_command(uc, rest);
         self.entries.push(Entry::User(prompt.clone()));
         self.input.history.push(prompt.clone());
         self.msgs.push(Message {
@@ -2313,7 +2307,7 @@ fn line_display_pos(chars: &[char], char_idx: usize, avail: usize) -> (usize, us
     }
 }
 
-fn load_user_commands(ax_root: &str) -> Vec<UserCommand> {
+pub fn load_user_commands(ax_root: &str) -> Vec<UserCommand> {
     let dir = std::path::Path::new(ax_root).join("commands");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Vec::new();
@@ -2339,6 +2333,16 @@ fn load_user_commands(ax_root: &str) -> Vec<UserCommand> {
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+pub fn expand_user_command(uc: &UserCommand, rest: &str) -> String {
+    if rest.is_empty() {
+        uc.content.clone()
+    } else if uc.content.contains("$ARGUMENTS") {
+        uc.content.replace("$ARGUMENTS", rest)
+    } else {
+        format!("{}\n\n{rest}", uc.content)
+    }
 }
 
 fn slash_matches(query: &str, users: &[UserCommand]) -> Vec<SlashItem> {
