@@ -84,8 +84,8 @@ archived automatically, so nothing is lost:
 - CLI: `ax -r` / `ax resume` / `ax --resume` open the picker;
   `ax --resume last` resumes the most recent session;
   `ax --resume <id>` resumes by id
-- sessions live in `.ax/sessions/`; the live transcript is
-  `.ax/session.jsonl` (ax-go field names, byte-compatible)
+- sessions live in `~/.config/ax/sessions/` (or `$XDG_CONFIG_HOME/ax/sessions/`); the live transcript is
+  `~/.config/ax/session.jsonl` (ax-go field names, byte-compatible)
 
 ### Slash commands
 
@@ -110,8 +110,8 @@ Ollama, vLLM.
 
 | Flag          | Default                     | Meaning                      |
 |---------------|-----------------------------|------------------------------|
-| `-base`       | `https://api.openai.com/v1` | OpenAI-compatible base URL   |
-| `-model`      | `gpt-4.1-mini`              | model name                   |
+| `-base`       | config `base` or `https://api.openai.com/v1` | OpenAI-compatible base URL |
+| `-model`      | config `model` or `gpt-4.1-mini`             | model name                 |
 | `-system`     | built-in                    | system prompt                |
 | `-C`          | current dir                 | working directory for tools  |
 | `-r`, `--resume` | —                        | open the session picker      |
@@ -119,6 +119,20 @@ Ollama, vLLM.
 
 With no prompt and a TTY, starts the TUI (fresh session). With no prompt
 and no TTY, reads the prompt from stdin.
+
+## Config
+
+`~/.config/ax/config` (or `$XDG_CONFIG_HOME/ax/config`) sets defaults;
+CLI flags and environment override it:
+
+```
+api_key = "sk-..."        # used when OPENAI_API_KEY is unset
+model = "glm-4.5"
+base = "http://localhost:11434/v1"
+```
+
+Plain `key = value` lines, `#` comments, quotes optional. Precedence:
+flags > env > config file > built-in defaults.
 
 ## System prompt
 

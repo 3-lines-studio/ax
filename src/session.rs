@@ -1,6 +1,7 @@
-//! Per-workspace session store: live session file plus an archive catalog.
-//! Live file stays byte-compatible with ax-go: `{dir}/.ax/session.jsonl`.
-//! Archived sessions live in `{dir}/.ax/sessions/<unix_ms>.jsonl`.
+//! Per-user session store: live session file plus an archive catalog,
+//! rooted at `~/.config/ax` (or `$XDG_CONFIG_HOME/ax`).
+//! Live file stays byte-compatible with ax-go: `{root}/session.jsonl`.
+//! Archived sessions live in `{root}/sessions/<unix_ms>.jsonl`.
 
 use crate::Message;
 use std::path::{Path, PathBuf};
@@ -14,11 +15,11 @@ pub struct SessionMeta {
 }
 
 fn store_dir(dir: &str) -> PathBuf {
-    Path::new(dir).join(".ax").join("sessions")
+    Path::new(dir).join("sessions")
 }
 
 pub fn live_path(dir: &str) -> PathBuf {
-    Path::new(dir).join(".ax").join("session.jsonl")
+    Path::new(dir).join("session.jsonl")
 }
 
 fn now_ms() -> i64 {
@@ -131,7 +132,7 @@ pub fn archive_live(dir: &str) -> Option<String> {
     if std::fs::copy(live_path(dir), &dest).is_err() {
         return None;
     }
-    let live_title_path = Path::new(dir).join(".ax").join("session.title");
+    let live_title_path = Path::new(dir).join("session.title");
     if let Ok(t) = std::fs::read_to_string(&live_title_path) {
         if !t.trim().is_empty() {
             let _ = std::fs::write(title_path(dir, &id), t.trim());
@@ -156,7 +157,7 @@ fn title_path(dir: &str, id: &str) -> PathBuf {
 }
 
 pub fn set_live_title(dir: &str, title: &str) {
-    let path = Path::new(dir).join(".ax").join("session.title");
+    let path = Path::new(dir).join("session.title");
     let _ = std::fs::create_dir_all(path.parent().unwrap());
     let _ = std::fs::write(path, title);
 }

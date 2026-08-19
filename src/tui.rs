@@ -35,6 +35,7 @@ pub struct TuiConfig {
     pub model: String,
     pub system: String,
     pub dir: String,
+    pub ax_root: String,
     pub api_key: String,
     /// None = fresh session. Some("") = resume picker. Some("last") or id = load.
     pub resume: Option<String>,
@@ -140,7 +141,7 @@ pub fn run(cfg: TuiConfig) -> Result<(), String> {
             tui.resume_by_id(&id);
         }
     } else {
-        session::archive_live(&tui.cfg.dir);
+        session::archive_live(&tui.cfg.ax_root);
     }
     if tui.entries.is_empty() {
         tui.entries.push(Entry::Welcome);
@@ -253,8 +254,8 @@ impl Tui {
     }
 
     fn on_exit(&mut self) {
-        session::save_live(&self.cfg.dir, &self.msgs);
-        session::archive_live(&self.cfg.dir);
+        session::save_live(&self.cfg.ax_root, &self.msgs);
+        session::archive_live(&self.cfg.ax_root);
     }
 
     fn loop_forever(&mut self, term: &mut Terminal) -> Result<(), String> {
@@ -826,7 +827,7 @@ impl Tui {
                         if let Some(err) = err {
                             self.entries.push(Entry::Notice(format!("error: {err}")));
                         }
-                        session::save_live(&self.cfg.dir, &messages);
+                        session::save_live(&self.cfg.ax_root, &messages);
                         self.activity = Activity::Idle;
                     }
                 }
@@ -874,7 +875,7 @@ impl Tui {
             "resume" => self.open_screen(Screen::Resume),
             "rename" => {
                 if !rest.is_empty() {
-                    session::set_live_title(&self.cfg.dir, rest);
+                    session::set_live_title(&self.cfg.ax_root, rest);
                     self.entries.push(Entry::Notice(format!(
                         "{DIM}renamed: {rest}{RESET}"
                     )));
@@ -933,7 +934,7 @@ impl Tui {
 
     fn fresh_session(&mut self, archive: bool) {
         if archive {
-            session::archive_live(&self.cfg.dir);
+            session::archive_live(&self.cfg.ax_root);
         }
         self.entries.clear();
         self.entries.push(Entry::Welcome);
@@ -975,7 +976,7 @@ impl Tui {
     }
 
     fn resume_by_id(&mut self, id: &str) {
-        let dir = self.cfg.dir.clone();
+        let dir = self.cfg.ax_root.clone();
         let msgs = if id == "last" {
             session::list_sessions(&dir)
                 .into_iter()
@@ -1025,13 +1026,13 @@ impl Tui {
             self.full_scroll = 0;
             self.last_frame.clear();
         }
-        session::save_live(&self.cfg.dir, &self.msgs);
+        session::save_live(&self.cfg.ax_root, &self.msgs);
     }
 
     fn open_screen(&mut self, screen: Screen) {
         match screen {
             Screen::Resume => {
-                self.sessions = session::list_sessions(&self.cfg.dir);
+                self.sessions = session::list_sessions(&self.cfg.ax_root);
             }
             Screen::Models => {
                 self.start_models_load();

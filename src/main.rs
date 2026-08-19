@@ -16,9 +16,16 @@ struct Config {
     resume: Option<String>,
 }
 
+struct FileConfig {
+    api_key: String,
+    model: String,
+    base: String,
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (cfg, prompt) = match parse_args(&args) {
+    let fc = load_config();
+    let (cfg, prompt) = match parse_args(&args, &fc) {
         Ok(x) => x,
         Err(e) => {
             eprintln!("error: {e}");
@@ -33,7 +40,8 @@ fn main() {
             model: cfg.model.clone(),
             system: resolve_system(&cfg),
             dir: cfg.dir.clone(),
-            api_key: api_key(),
+            ax_root: ax_root(),
+            api_key: api_key(&fc),
             resume: cfg.resume.clone(),
         };
         if let Err(e) = ax::tui::run(tui_cfg) {
@@ -50,13 +58,21 @@ fn main() {
         }
         prompt = vec![b];
     }
-    one_shot(&cfg, &prompt);
+    one_shot(&cfg, &fc, &prompt);
 }
 
-fn parse_args(args: &[String]) -> Result<(Config, Vec<String>), String> {
+fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>), String> {
     let mut cfg = Config {
-        base: "https://api.openai.com/v1".into(),
-        model: "gpt-4.1-mini".into(),
+        base: if fc.base.is_empty() {
+            "https://api.openai.com/v1".into()
+        } else {
+            fc.base.clone()
+        },
+        model: if fc.model.is_empty() {
+            "gpt-4.1-mini".into()
+        } else {
+            fc.model.clone()
+        },
         system: String::new(),
         dir: String::new(),
         resume: None,
@@ -146,7 +162,7 @@ fn usage() {
     );
 }
 
-fn one_shot(cfg: &Config, prompt: &[String]) {
+fn one_shot(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
     let stats = Rc::new(RefCell::new((0usize, 0usize)));
     let s2 = stats.clone();
     let on = move |e: Event| {
@@ -164,7 +180,7 @@ fn one_shot(cfg: &Config, prompt: &[String]) {
         }
     };
     let start = Instant::now();
-    let mut agent = build_agent(cfg, on);
+    let mut agent = build_agent(cfg, fc, on);
     let user = Message {
         role: "user".into(),
         content: prompt.join(" "),
@@ -204,9 +220,9 @@ fn one_shot(cfg: &Config, prompt: &[String]) {
     }
 }
 
-fn build_agent(cfg: &Config, on: impl FnMut(Event) + 'static) -> Agent<OpenAI> {
+fn build_agent(cfg: &Config, fc: &FileConfig, on: impl FnMut(Event) + 'static) -> Agent<OpenAI> {
     let system = resolve_system(cfg);
-    Agent::new(OpenAI::new(cfg.base.clone(), api_key()))
+    Agent::new(OpenAI::new(cfg.base.clone(), api_key(fc)))
         .model(cfg.model.clone())
         .system(system)
         .tools(vec![
@@ -218,8 +234,13 @@ fn build_agent(cfg: &Config, on: impl FnMut(Event) + 'static) -> Agent<OpenAI> {
         .on(on)
 }
 
-fn api_key() -> String {
-    std::env::var("OPENAI_API_KEY").unwrap_or_default()
+fn api_key(fc: &FileConfig) -> String {
+    if let Ok(k) = std::env::var("OPENAI_API_KEY") {
+        if !k.is_empty() {
+            return k;
+        }
+    }
+    fc.api_key.clone()
 }
 
 fn work_dir(cfg: &Config) -> String {
@@ -271,6 +292,53 @@ fn config_dir() -> Option<std::path::PathBuf> {
     std::env::var("HOME")
         .ok()
         .map(|h| std::path::PathBuf::from(h).join(".config"))
+}
+
+fn ax_root() -> String {
+    match config_dir() {
+        Some(d) => d.join("ax").display().to_string(),
+        None => work_dir_abs(),
+    }
+}
+
+fn work_dir_abs() -> String {
+    std::env::current_dir()
+        .map(|p| p.join(".ax").display().to_string())
+        .unwrap_or_else(|_| ".ax".to_string())
+}
+
+fn load_config() -> FileConfig {
+    let mut c = FileConfig {
+        api_key: String::new(),
+        model: String::new(),
+        base: String::new(),
+    };
+    let Some(dir) = config_dir() else {
+        return c;
+    };
+    let Ok(text) = std::fs::read_to_string(dir.join("ax").join("config")) else {
+        return c;
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        let mut val = v.trim().to_string();
+        if val.len() >= 2 && val.starts_with('"') && val.ends_with('"') {
+            val = val[1..val.len() - 1].to_string();
+        }
+        match k.trim() {
+            "api_key" => c.api_key = val,
+            "model" => c.model = val,
+            "base" => c.base = val,
+            _ => {}
+        }
+    }
+    c
 }
 
 fn render_args(call: &ToolCall) -> String {
