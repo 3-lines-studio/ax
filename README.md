@@ -29,8 +29,7 @@ OPENAI_API_KEY=... ./target/release/ax -model gpt-4.1-mini
 𝒂x v0.1.0 · Run /help for commands
 
 ┃ fix the failing test
-  ● Running go test ./...
-  │ ok ax 0.003s
+  ● Ran go test ./...
 
 fixed the test in ax_test.go
 
@@ -41,7 +40,9 @@ auto · gpt-4.1-mini
 
 - user prompts render as cards on a `┃` rail; assistant answers stream as
   markdown (headings, tables, task lists, blockquotes, highlighted code)
-- tool calls show as `● Running …` / `● Ran …` with `│` output rails
+- tool calls collapse to a single status line — `● Running …` while active,
+  `● Ran …` when done (fx-style; the raw output goes to the model, not the
+  transcript)
 - `• Thinking (Ns)` blinks while the model is working
 - the transcript streams into the **terminal scrollback**: mouse wheel and
   Shift+PgUp scroll the whole session natively, exactly like fx — the chrome

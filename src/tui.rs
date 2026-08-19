@@ -26,7 +26,6 @@ const DIM: &str = "\x1b[38;5;245m";
 const DIVIDER: &str = "\x1b[38;5;240m";
 const PERMISSION_AUTO: &str = "\x1b[38;5;252m";
 const HINT: &str = "\x1b[38;5;255m";
-const SYSTEM_NOTICE_TEXT: &str = "\x1b[38;5;250m";
 const SELECTED: &str = "\x1b[1;38;5;255m";
 const USER_RAIL: &str = "\x1b[38;5;255m";
 const WELCOME_APP: &str = "\x1b[1;38;5;255m";
@@ -49,7 +48,6 @@ enum Entry {
     Table(String),
     Rule,
     Tool { active: bool, label: String },
-    Output { stderr: bool, text: String },
     Notice(String),
     Summary { secs: u64, input: usize, output: usize },
 }
@@ -80,11 +78,7 @@ pub enum TurnEvent {
     AssistantDelta(String),
     AssistantDone,
     ToolStart(String),
-    ToolResult {
-        label: String,
-        output: String,
-        cancelled: bool,
-    },
+    ToolResult { label: String },
     Tokens { input: usize, output: usize },
     Notice(String),
     End {
@@ -657,11 +651,7 @@ impl Tui {
                             label: label.clone(),
                         });
                     }
-                    TurnEvent::ToolResult {
-                        label,
-                        output,
-                        cancelled,
-                    } => {
+                    TurnEvent::ToolResult { label } => {
                         for e in self.entries.iter_mut().rev() {
                             if let Entry::Tool { active, .. } = e {
                                 if *active {
@@ -672,12 +662,6 @@ impl Tui {
                                     break;
                                 }
                             }
-                        }
-                        if !cancelled {
-                            self.entries.push(Entry::Output {
-                                stderr: false,
-                                text: output,
-                            });
                         }
                         self.activity = Activity::Thinking;
                     }
@@ -919,14 +903,6 @@ impl Tui {
                         self.entries.push(Entry::Tool {
                             active: false,
                             label: tool_label(c, false),
-                        });
-                    }
-                }
-                "tool" => {
-                    if !m.content.is_empty() {
-                        self.entries.push(Entry::Output {
-                            stderr: false,
-                            text: m.content.clone(),
                         });
                     }
                 }
@@ -1236,12 +1212,6 @@ impl Tui {
                 )),
                 Entry::Tool { active: _, label } => {
                     rows.push(format!("{USER_RAIL}●{RESET} {label}"));
-                }
-                Entry::Output { stderr, text } => {
-                    for line in text.lines() {
-                        let style = if *stderr { SYSTEM_NOTICE_TEXT } else { DIM };
-                        rows.push(format!("{style}│ {line}{RESET}"));
-                    }
                 }
                 Entry::Notice(text) => rows.push(text.clone()),
                 Entry::Summary {
@@ -2131,8 +2101,6 @@ fn run_turn(
             let output = exec_tool(&tools, &call);
             let _ = tx.send(TurnEvent::ToolResult {
                 label: tool_label(&call, false),
-                output: output.clone(),
-                cancelled: false,
             });
             h.push(Message {
                 role: "tool".into(),
