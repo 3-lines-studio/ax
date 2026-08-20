@@ -1,6 +1,8 @@
+cargo-features = ["panic-immediate-abort"]
+
 [package]
 name = "ax"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Minimal LLM coding agent harness"
 license = "MIT"
@@ -14,7 +16,7 @@ libc = "0.2"
 opt-level = "z"
 lto = "fat"
 codegen-units = 1
-panic = "abort"
+panic = "immediate-abort"
 strip = "symbols"
 
 [profile.dev]

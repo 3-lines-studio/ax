@@ -4,7 +4,7 @@ A minimal LLM coding agent harness with the terminal UX of
 [fx.sh](https://fx.sh): a transcript TUI with streamed markdown, tool
 status lines, and a shell-style input bar.
 
-Release binary: **~920 KB**. No TUI framework, no markdown library — both
+Release binary: **~514 KB**. No TUI framework, no markdown library — both
 hand-rolled. HTTP goes through system libcurl.
 
 ## Install
@@ -21,12 +21,14 @@ Uninstall: `rm ~/.local/bin/ax`.
 ## Build
 
 ```sh
-cargo build --release
+cargo +nightly build --release --config 'build.rustflags="-C force-unwind-tables=no"'
 ./target/release/ax
 ```
 
-Requires stable Rust and libcurl dev headers (`libcurl4-openssl-dev` on
-Debian/Ubuntu).
+Requires nightly Rust (for `-Zbuild-std`, used to rebuild `std` with
+`panic = "immediate-abort"`) with the `rust-src` component
+(`rustup component add rust-src`), plus libcurl dev headers
+(`libcurl4-openssl-dev` on Debian/Ubuntu).
 
 ## Quick start
 
@@ -124,6 +126,11 @@ let msgs = agent.run(&[ax::Message {
 ## Notes
 
 - No permission system — tools always run. Sandboxing lives outside ax.
+- `std` is rebuilt nightly (`-Zbuild-std`) with `panic = "immediate-abort"`
+  and `-C force-unwind-tables=no`; panic messages and `RUST_BACKTRACE` are
+  gone, and any panic aborts the process. That's most of the size story:
+  prebuilt `std` alone drags in ~350 KB of panic/backtrace machinery and
+  unwind tables.
 - libcurl is `dlopen`'d lazily on the first request: exec and first paint
   stay fast, and the binary has no link-time dependency on curl's
   dependency tree.
