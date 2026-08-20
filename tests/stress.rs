@@ -297,7 +297,7 @@ fn fuzz_tools(_rng: &mut Rng, seed: u64, input: &[u8]) {
     let bash = ax::tools::bash(dir.to_str().unwrap());
 
     guard("tool read", seed, || {
-        let args = format!(r#"{{"path":"{path}"}}"#);
+        let args = serde_json::json!({"path": path, "offset": 1, "limit": 2}).to_string();
         let out = (read.run)(&args);
         assert_sane("tool read", seed, &out);
     });
@@ -309,7 +309,9 @@ fn fuzz_tools(_rng: &mut Rng, seed: u64, input: &[u8]) {
     });
     guard("tool edit", seed, || {
         let needle = String::from_utf8_lossy(&input[..input.len().min(32)]);
-        let args = serde_json::json!({"path": path, "old": needle, "new": "X"}).to_string();
+        let args =
+            serde_json::json!({"path": path, "edits": [{"oldText": needle, "newText": "X"}]})
+                .to_string();
         let out = (edit.run)(&args);
         assert_sane("tool edit", seed, &out);
     });
@@ -614,4 +616,249 @@ fn stress_sse_streaming() {
     }
     fuzz_sse(&mut Rng(42), 42, &payloads);
     eprintln!("stress_sse_streaming: {} payloads", payloads.len());
+}
+
+#[test]
+fn edit_multi_edit_and_line_endings() {
+    let dir = std::env::temp_dir().join(format!("ax-edit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("f.txt");
+    let edit = ax::tools::edit();
+    let p = path.to_str().unwrap();
+
+    std::fs::write(&path, "one\ntwo\nthree\n").unwrap();
+    let args = serde_json::json!({"path": p, "edits": [
+        {"oldText": "one", "newText": "ONE"},
+        {"oldText": "three", "newText": "THREE"},
+    ]})
+    .to_string();
+    let out = (edit.run)(&args);
+    assert_eq!(out, format!("Successfully replaced 2 block(s) in {p}."));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "ONE\ntwo\nTHREE\n");
+
+    std::fs::write(&path, "a\r\nb\r\n").unwrap();
+    let args =
+        serde_json::json!({"path": p, "edits": [{"oldText": "b", "newText": "c"}]}).to_string();
+    let out = (edit.run)(&args);
+    assert!(out.starts_with("Successfully"), "{out}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\r\nc\r\n");
+
+    std::fs::write(&path, "x\nx\n").unwrap();
+    let args =
+        serde_json::json!({"path": p, "edits": [{"oldText": "x", "newText": "y"}]}).to_string();
+    let out = (edit.run)(&args);
+    assert!(out.contains("occurrences"), "{out}");
+
+    std::fs::write(&path, "abcdef\n").unwrap();
+    let args = serde_json::json!({"path": p, "edits": [
+        {"oldText": "abc", "newText": "X"},
+        {"oldText": "bcd", "newText": "Y"},
+    ]})
+    .to_string();
+    let out = (edit.run)(&args);
+    assert!(out.contains("overlap"), "{out}");
+
+    std::fs::write(&path, "abc\n").unwrap();
+    let args =
+        serde_json::json!({"path": p, "edits": [{"oldText": "abc", "newText": "abc"}]}).to_string();
+    let out = (edit.run)(&args);
+    assert!(out.contains("No changes"), "{out}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn edit_fuzzy_matches_trailing_whitespace() {
+    let dir = std::env::temp_dir().join(format!("ax-editfz-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("f.txt");
+    std::fs::write(&path, "let x = 1;\n").unwrap();
+    let edit = ax::tools::edit();
+    let p = path.to_str().unwrap();
+
+    let args = serde_json::json!({"path": p, "edits": [{"oldText": "let x = 1; ", "newText": "let y = 2;"}]}).to_string();
+    let out = (edit.run)(&args);
+    assert!(out.starts_with("Successfully"), "{out}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "let y = 2;\n");
+
+    let args = serde_json::json!({"path": p, "edits": [{"oldText": "let z = 9", "newText": "x"}]})
+        .to_string();
+    let out = (edit.run)(&args);
+    assert!(out.contains("Could not find"), "{out}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn edit_fuzzy_matches_smart_quotes_and_dashes() {
+    let dir = std::env::temp_dir().join(format!("ax-editfq-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("f.txt");
+    std::fs::write(&path, "print(\u{2018}hi\u{2019}); // \u{2014} note\n").unwrap();
+    let edit = ax::tools::edit();
+    let p = path.to_str().unwrap();
+
+    let args = serde_json::json!({"path": p, "edits": [{"oldText": "print('hi'); // - note", "newText": "print(\"yo\"); // - note"}]}).to_string();
+    let out = (edit.run)(&args);
+    assert!(out.starts_with("Successfully"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "print(\"yo\"); // - note\n"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn edit_fuzzy_preserves_untouched_lines() {
+    let dir = std::env::temp_dir().join(format!("ax-editfp-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("f.txt");
+    std::fs::write(&path, "keep '\u{2018}quote\u{2019}'\nlet x = 1;\n").unwrap();
+    let edit = ax::tools::edit();
+    let p = path.to_str().unwrap();
+
+    let args = serde_json::json!({"path": p, "edits": [{"oldText": "let x = 1; ", "newText": "let y = 2;"}]}).to_string();
+    let out = (edit.run)(&args);
+    assert!(out.starts_with("Successfully"), "{out}");
+    let result = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        result.starts_with("keep '\u{2018}quote\u{2019}'\n"),
+        "{result}"
+    );
+    assert!(result.contains("let y = 2;"), "{result}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn edit_mixed_exact_and_fuzzy_keeps_exact_line_bytes() {
+    let dir = std::env::temp_dir().join(format!("ax-editmx-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("f.txt");
+    std::fs::write(&path, "flag = '‘q’';\nlet x = 1;\n").unwrap();
+    let edit = ax::tools::edit();
+    let p = path.to_str().unwrap();
+
+    let args = serde_json::json!({"path": p, "edits": [
+        {"oldText": "let x = 1; ", "newText": "let y = 2;"},
+        {"oldText": "q", "newText": "Q"},
+    ]})
+    .to_string();
+    let out = (edit.run)(&args);
+    assert!(out.starts_with("Successfully"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "flag = '‘Q’';\nlet y = 2;\n"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn edit_fuzzy_multiline_replaces_span() {
+    let dir = std::env::temp_dir().join(format!("ax-editml-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("f.txt");
+    std::fs::write(&path, "one\ntwo\nthree\n").unwrap();
+    let edit = ax::tools::edit();
+    let p = path.to_str().unwrap();
+
+    let args = serde_json::json!({"path": p, "edits": [
+        {"oldText": "one\ntwo ", "newText": "X"},
+    ]})
+    .to_string();
+    let out = (edit.run)(&args);
+    assert!(out.starts_with("Successfully"), "{out}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "X\nthree\n");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn edit_fuzzy_keeps_multibyte_chars_before_match() {
+    let dir = std::env::temp_dir().join(format!("ax-editmb-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("f.txt");
+    std::fs::write(&path, "'‘q’' x = 1;\n").unwrap();
+    let edit = ax::tools::edit();
+    let p = path.to_str().unwrap();
+
+    let args = serde_json::json!({"path": p, "edits": [
+        {"oldText": "x = 1; ", "newText": "y = 2;"},
+    ]})
+    .to_string();
+    let out = (edit.run)(&args);
+    assert!(out.starts_with("Successfully"), "{out}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "'‘q’' y = 2;\n");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn read_offset_paging() {
+    let dir = std::env::temp_dir().join(format!("ax-read-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("f.txt");
+    std::fs::write(&path, "line1\nline2\nline3\nline4\n").unwrap();
+    let read = ax::tools::read();
+    let p = path.to_str().unwrap();
+
+    let args = serde_json::json!({"path": p, "offset": 2, "limit": 2}).to_string();
+    let out = (read.run)(&args);
+    assert!(out.starts_with("line2\nline3"), "{out}");
+    assert!(out.contains("2 more lines"), "{out}");
+
+    let args = serde_json::json!({"path": p, "offset": 10}).to_string();
+    let out = (read.run)(&args);
+    assert!(out.contains("beyond end of file"), "{out}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn write_creates_parent_dirs() {
+    let dir = std::env::temp_dir().join(format!("ax-write-{}", std::process::id()));
+    let path = dir.join("sub").join("f.txt");
+    let write = ax::tools::write();
+    let args = serde_json::json!({"path": path.to_str().unwrap(), "content": "hi"}).to_string();
+    let out = (write.run)(&args);
+    assert!(out.starts_with("wrote"), "{out}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "hi");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn bash_timeout_kills() {
+    let bash = ax::tools::bash("");
+    let args = serde_json::json!({"command": "sleep 5", "timeout": 1}).to_string();
+    let start = std::time::Instant::now();
+    let out = (bash.run)(&args);
+    let elapsed = start.elapsed();
+    assert!(out.contains("timed out"), "{out}");
+    assert!(
+        elapsed < std::time::Duration::from_secs(3),
+        "took {elapsed:?}"
+    );
+}
+
+#[test]
+fn bash_rejects_zero_timeout() {
+    let bash = ax::tools::bash("");
+    let args = serde_json::json!({"command": "echo hi", "timeout": 0}).to_string();
+    let out = (bash.run)(&args);
+    assert!(out.contains("invalid timeout"), "{out}");
+}
+
+#[test]
+fn bash_captures_output_and_status() {
+    let bash = ax::tools::bash("");
+    let args = serde_json::json!({"command": "echo hello"}).to_string();
+    assert_eq!((bash.run)(&args), "hello\n");
+    let args = serde_json::json!({"command": "exit 3"}).to_string();
+    let out = (bash.run)(&args);
+    assert_eq!(out, "error: exit status 3");
+    let args = serde_json::json!({"command": "printf 'o' ; printf 'e' >&2"}).to_string();
+    let out = (bash.run)(&args);
+    assert_eq!(out, "o\ne");
 }

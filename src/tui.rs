@@ -582,14 +582,9 @@ impl Tui {
                     }
                 }
             }
-            Key::AltLeft => self.input.move_word_left(),
-            Key::AltRight => self.input.move_word_right(),
-            Key::AltUp
-            | Key::AltDown
-            | Key::CtrlUp
-            | Key::CtrlDown
-            | Key::CtrlLeft
-            | Key::CtrlRight => {}
+            Key::AltLeft | Key::CtrlLeft => self.input.move_word_left(),
+            Key::AltRight | Key::CtrlRight => self.input.move_word_right(),
+            Key::AltUp | Key::AltDown | Key::CtrlUp | Key::CtrlDown => {}
             Key::PageUp | Key::PageDown => {}
             Key::WheelUp | Key::WheelDown | Key::WheelLeft | Key::WheelRight => {}
             Key::MousePress(_, _) | Key::MouseRelease | Key::MouseOther => {}
