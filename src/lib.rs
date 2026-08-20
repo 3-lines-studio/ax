@@ -1,19 +1,23 @@
 //! Minimal LLM coding agent harness.
 //!
 //! The loop is the only logic: messages -> LLM -> tool calls -> results ->
-//! repeat. No memory, sessions, retries, parallel tool execution, or
-//! streaming. `run` never mutates its input.
+//! repeat. It lives in `run`, is shared by the SDK and the TUI, and never
+//! mutates its input.
 //!
 //! Message/ToolCall serialize with PascalCase field names (session
 //! storage); the OpenAI provider maps them to the wire format.
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc;
 
 pub mod curlffi;
 mod http;
 pub mod markdown;
 pub mod openai;
+pub mod run;
 pub mod session;
 pub mod skills;
 pub mod term;
@@ -54,6 +58,37 @@ pub struct Usage {
     pub output: usize,
 }
 
+pub enum StreamEvent {
+    Content(String),
+    ToolCall(ToolCall),
+    Tokens { input: usize, output: usize },
+    Done,
+}
+
+pub struct StreamHandle {
+    rx: mpsc::Receiver<StreamEvent>,
+    thread: std::thread::JoinHandle<Result<Response, Error>>,
+}
+
+impl StreamHandle {
+    pub fn new(
+        rx: mpsc::Receiver<StreamEvent>,
+        thread: std::thread::JoinHandle<Result<Response, Error>>,
+    ) -> Self {
+        StreamHandle { rx, thread }
+    }
+
+    pub fn events(&self) -> &mpsc::Receiver<StreamEvent> {
+        &self.rx
+    }
+
+    pub fn join(self) -> Result<Response, Error> {
+        self.thread
+            .join()
+            .map_err(|_| Error::Provider("request thread panicked".into()))?
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Event {
     pub turn: usize,
@@ -65,6 +100,7 @@ pub struct Event {
 pub enum Error {
     MaxTurns(Vec<Message>),
     Provider(String),
+    Http { status: u16, message: String },
 }
 
 impl std::fmt::Display for Error {
@@ -72,6 +108,7 @@ impl std::fmt::Display for Error {
         match self {
             Error::MaxTurns(_) => write!(f, "ax: max turns reached"),
             Error::Provider(s) => write!(f, "{s}"),
+            Error::Http { message, .. } => write!(f, "{message}"),
         }
     }
 }
@@ -82,34 +119,159 @@ pub struct Tool {
     pub name: &'static str,
     pub description: &'static str,
     pub parameters: Value,
-    pub run: Box<dyn Fn(&str) -> String + Send>,
+    /// One-line hint for the system prompt's tool list.
+    pub snippet: &'static str,
+    /// When true, tool calls in a batch run one after another instead of in
+    /// parallel (used by file-mutating tools to avoid races).
+    pub sequential: bool,
+    #[allow(clippy::type_complexity)]
+    pub run: Box<dyn Fn(&str, &mut dyn FnMut(&str)) -> String + Send + Sync>,
 }
 
 pub fn new_tool<T>(
     name: &'static str,
     description: &'static str,
     schema: &'static str,
-    run: impl Fn(T) -> String + Send + 'static,
+    run: impl Fn(T) -> String + Send + Sync + 'static,
 ) -> Tool
 where
     T: DeserializeOwned,
 {
+    new_tool_with_progress(name, description, schema, move |args, _progress| run(args))
+}
+
+/// Like `new_tool`, but the run closure also receives a progress callback it
+/// can call with partial output while working (e.g. live bash output).
+pub fn new_tool_with_progress<T>(
+    name: &'static str,
+    description: &'static str,
+    schema: &'static str,
+    run: impl Fn(T, &mut dyn FnMut(&str)) -> String + Send + Sync + 'static,
+) -> Tool
+where
+    T: DeserializeOwned,
+{
+    let parameters: Value = serde_json::from_str(schema).unwrap_or(Value::Null);
+    let schema = parameters.clone();
     Tool {
         name,
         description,
-        parameters: serde_json::from_str(schema).unwrap_or(Value::Null),
-        run: Box::new(move |raw| {
+        parameters,
+        snippet: "",
+        sequential: false,
+        run: Box::new(move |raw, progress| {
             let raw = if raw.trim().is_empty() { "{}" } else { raw };
-            match serde_json::from_str::<T>(raw) {
-                Ok(args) => run(args),
-                Err(e) => format!("error: invalid arguments: {e}"),
+            let mut args: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
+            if !args.is_null() {
+                coerce_args(&mut args, &schema);
+            }
+            let coerced = serde_json::to_string(&args).unwrap_or_else(|_| raw.to_string());
+            match serde_json::from_str::<T>(&coerced) {
+                Ok(args) => run(args, progress),
+                Err(e) => format!("error: invalid arguments for {name}: {e}\nReceived: {raw}"),
             }
         }),
     }
 }
 
+/// Coerce LLM arguments toward the declared JSON schema before deserializing.
+/// Models frequently send numbers as strings, booleans as 1/0, or null for
+/// optional fields; serde would reject those outright.
+fn coerce_args(args: &mut Value, schema: &Value) {
+    if let Some(props) = schema.get("properties").and_then(|p| p.as_object())
+        && let Value::Object(map) = args
+    {
+        let required = schema
+            .get("required")
+            .and_then(|r| r.as_array())
+            .map(|r| r.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        for (key, prop) in props {
+            if let Some(v) = map.get_mut(key) {
+                if v.is_null() && !required.contains(&key.as_str()) && !accepts_null(prop) {
+                    map.remove(key);
+                    continue;
+                }
+                coerce_value(v, prop);
+                coerce_args(v, prop);
+            }
+        }
+    }
+    if let Some(items) = schema.get("items")
+        && let Value::Array(arr) = args
+    {
+        for item in arr.iter_mut() {
+            coerce_value(item, items);
+            coerce_args(item, items);
+        }
+    }
+}
+
+fn accepts_null(schema: &Value) -> bool {
+    match schema.get("type") {
+        Some(Value::String(t)) => t == "null",
+        Some(Value::Array(ts)) => ts.iter().any(|t| t.as_str() == Some("null")),
+        _ => false,
+    }
+}
+
+fn coerce_value(value: &mut Value, schema: &Value) {
+    let ty = schema.get("type").and_then(|t| t.as_str());
+    match ty {
+        Some("number") | Some("integer") => {
+            if let Value::String(s) = value {
+                if let Ok(n) = s.trim().parse::<f64>()
+                    && n.is_finite()
+                {
+                    if ty == Some("integer")
+                        && n.fract() == 0.0
+                        && n >= i64::MIN as f64
+                        && n <= i64::MAX as f64
+                    {
+                        *value = Value::Number(serde_json::Number::from(n as i64));
+                    } else if ty == Some("number")
+                        && let Some(num) = serde_json::Number::from_f64(n)
+                    {
+                        *value = Value::Number(num);
+                    }
+                }
+            } else if value.is_null() {
+                *value = Value::Number(serde_json::Number::from(0));
+            } else if let Some(b) = value.as_bool() {
+                *value = Value::Number(serde_json::Number::from(if b { 1 } else { 0 }));
+            }
+        }
+        Some("boolean") => {
+            if let Value::String(s) = value {
+                match s.trim() {
+                    "true" => *value = Value::Bool(true),
+                    "false" => *value = Value::Bool(false),
+                    _ => {}
+                }
+            } else if let Some(n) = value.as_f64() {
+                if n == 1.0 {
+                    *value = Value::Bool(true);
+                } else if n == 0.0 {
+                    *value = Value::Bool(false);
+                }
+            } else if value.is_null() {
+                *value = Value::Bool(false);
+            }
+        }
+        Some("string") => {
+            if value.is_number() || value.is_boolean() {
+                *value = Value::String(value.to_string());
+            } else if value.is_null() {
+                *value = Value::String(String::new());
+            }
+        }
+        _ => {}
+    }
+}
+
 pub trait Provider {
     fn complete(&self, req: &Request) -> Result<Response, Error>;
+    fn stream(&self, req: &Request, cancel: &Arc<AtomicBool>) -> StreamHandle;
 }
 
 pub struct Request<'a> {
@@ -123,6 +285,7 @@ pub struct Request<'a> {
 pub struct Response {
     pub message: Message,
     pub usage: Usage,
+    pub stop_reason: String,
 }
 
 pub struct Agent<P: Provider> {
@@ -176,49 +339,49 @@ impl<P: Provider> Agent<P> {
     }
 
     pub fn run(&mut self, msgs: &[Message]) -> Result<Vec<Message>, Error> {
-        let mut h = msgs.to_vec();
-        for turn in 0..self.max_turns {
-            let resp = self.provider.complete(&Request {
+        let mut sink = AgentSink { on: self.on.take() };
+        let end = run::run_stream(
+            &self.provider,
+            &run::RunOptions {
                 model: &self.model,
                 system: &self.system,
-                messages: &h,
                 tools: &self.tools,
-            })?;
-            h.push(resp.message.clone());
-            self.emit(turn, &resp.message, resp.usage);
-            if resp.message.tool_calls.is_empty() {
-                return Ok(h);
-            }
-            let calls = resp.message.tool_calls.clone();
-            for call in calls {
-                let m = Message {
-                    role: "tool".into(),
-                    content: self.exec(&call),
-                    tool_calls: Vec::new(),
-                    tool_call_id: call.id,
-                };
-                h.push(m.clone());
-                self.emit(turn, &m, Usage::default());
-            }
+                max_turns: self.max_turns,
+            },
+            msgs,
+            &Arc::new(AtomicBool::new(false)),
+            &mut sink,
+        );
+        self.on = sink.on;
+        match end.outcome {
+            run::Outcome::Done | run::Outcome::Cancelled => Ok(end.messages),
+            run::Outcome::MaxTurns => Err(Error::MaxTurns(end.messages)),
+            run::Outcome::Failed(e) => Err(Error::Provider(e)),
         }
-        Err(Error::MaxTurns(h))
     }
+}
 
-    fn exec(&self, call: &ToolCall) -> String {
-        for t in &self.tools {
-            if t.name == call.name {
-                return (t.run)(&call.arguments);
-            }
-        }
-        format!("error: unknown tool: {}", call.name)
-    }
+struct AgentSink {
+    on: Option<Box<dyn FnMut(Event)>>,
+}
 
-    fn emit(&mut self, turn: usize, m: &Message, u: Usage) {
+impl run::Sink for AgentSink {
+    fn assistant(&mut self, turn: usize, msg: &Message, usage: Usage) {
         if let Some(f) = &mut self.on {
             f(Event {
                 turn,
-                message: m.clone(),
-                usage: u,
+                message: msg.clone(),
+                usage,
+            });
+        }
+    }
+
+    fn tool(&mut self, turn: usize, msg: &Message) {
+        if let Some(f) = &mut self.on {
+            f(Event {
+                turn,
+                message: msg.clone(),
+                usage: Usage::default(),
             });
         }
     }

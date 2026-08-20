@@ -155,6 +155,7 @@ fn openai_stream_round_trip() {
             "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n",
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"a\\\"}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
             "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2}}\n\n",
             "data: [DONE]\n\n"
         );
@@ -192,6 +193,7 @@ fn openai_stream_round_trip() {
     assert_eq!(response.message.tool_calls[0].arguments, r#"{"path":"a"}"#);
     assert_eq!(response.usage.input, 4);
     assert_eq!(response.usage.output, 2);
+    assert_eq!(response.stop_reason, "length");
     let events: Vec<_> = rx.into_iter().collect();
     assert!(
         events

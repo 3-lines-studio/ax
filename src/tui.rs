@@ -6,7 +6,8 @@
 //! full-transcript mode with internal PgUp/PgDn/wheel scrolling.
 
 use crate::markdown::{self, Block, Markdown};
-use crate::openai::{OpenAI, StreamEvent};
+use crate::openai::OpenAI;
+use crate::run::{self, Outcome, RunOptions, Sink};
 use crate::session::{self, SessionMeta};
 use crate::term::{self, Key, Terminal};
 use crate::{Message, Tool, ToolCall, Usage};
@@ -40,6 +41,9 @@ pub struct TuiConfig {
     pub api_key: String,
     /// None = fresh session. Some("") = resume picker. Some("last") or id = load.
     pub resume: Option<String>,
+    /// Model context window in tokens; unset means the model's default applies
+    /// and proactive compaction is disabled.
+    pub context_window: Option<usize>,
 }
 
 enum Entry {
@@ -89,6 +93,7 @@ pub enum TurnEvent {
         label: String,
         kind: String,
     },
+    ToolDelta(String),
     ToolResult {
         label: String,
         kind: String,
@@ -212,6 +217,18 @@ const SLASH: &[SlashSpec] = &[
         category: "Session",
     },
     SlashSpec {
+        command: "/compact",
+        help: "/compact",
+        description: "summarize the conversation so far",
+        category: "Session",
+    },
+    SlashSpec {
+        command: "/search",
+        help: "/search <text>",
+        description: "search sessions for text",
+        category: "Session",
+    },
+    SlashSpec {
         command: "/rename",
         help: "/rename <title>",
         description: "rename the current session",
@@ -303,6 +320,9 @@ pub fn run(cfg: TuiConfig) -> Result<(), String> {
 
 type PendingBlocks = Rc<RefCell<Vec<(String, Block)>>>;
 
+#[allow(clippy::type_complexity)]
+type CompactResult = Result<(String, usize, Vec<Message>), String>;
+
 struct Tui {
     cfg: TuiConfig,
     entries: Vec<Entry>,
@@ -315,12 +335,18 @@ struct Tui {
     exit_alt_pending: bool,
     tx: Option<Sender<TurnEvent>>,
     rx: Option<Receiver<TurnEvent>>,
+    steer_tx: Option<Sender<String>>,
+    compacting: bool,
+    compact_rx: Option<Receiver<CompactResult>>,
+    retry_after_compact: bool,
+    overflow_retried: bool,
     cur_text: Option<usize>,
     md: Option<Markdown>,
     md_pending: Option<PendingBlocks>,
     msgs: Vec<Message>,
     activity: Activity,
     tool_running: Option<String>,
+    tool_live: Option<String>,
     turn_start: Instant,
     input: Input,
     model_display: String,
@@ -367,12 +393,18 @@ impl Tui {
             exit_alt_pending: false,
             tx: None,
             rx: None,
+            steer_tx: None,
+            compacting: false,
+            compact_rx: None,
+            retry_after_compact: false,
+            overflow_retried: false,
             cur_text: None,
             md: None,
             md_pending: None,
             msgs: Vec::new(),
             activity: Activity::Idle,
             tool_running: None,
+            tool_live: None,
             turn_start: Instant::now(),
             input: Input::default(),
             model_display,
@@ -405,7 +437,13 @@ impl Tui {
     }
 
     fn on_exit(&mut self) {
-        session::save_live(&self.cfg.ax_root, &self.msgs);
+        let entries = session::load_live(&self.cfg.ax_root);
+        let projected = session::context_messages(&entries).len();
+        let mut entries = entries;
+        for m in &self.msgs[projected.min(self.msgs.len())..] {
+            entries.push(session::Entry::Message { message: m.clone() });
+        }
+        session::save_live(&self.cfg.ax_root, &entries);
         session::archive_live(&self.cfg.ax_root);
     }
 
@@ -531,7 +569,9 @@ impl Tui {
             Key::Enter => {
                 if self.picker.is_some() {
                     self.picker_enter();
-                } else if !self.running {
+                } else if self.running {
+                    self.steer();
+                } else {
                     self.submit();
                     if self.want_quit {
                         return Ok(false);
@@ -802,7 +842,31 @@ impl Tui {
         true
     }
 
+    fn steer(&mut self) {
+        let v = self.input.take();
+        if v.trim().is_empty() {
+            return;
+        }
+        match &self.steer_tx {
+            Some(tx) if tx.send(v.clone()).is_ok() => {
+                self.entries.push(Entry::User(v));
+            }
+            _ => {
+                // The run just ended (worker dropped the steer receiver). Keep
+                // the draft in the input instead of stranding it in the
+                // transcript; the next Enter submits normally.
+                self.input.buf = v;
+                self.entries
+                    .push(Entry::Notice("agent finished; press enter to send".into()));
+            }
+        }
+    }
+
     fn submit(&mut self) {
+        if self.compacting {
+            self.entries.push(Entry::Notice("compacting…".into()));
+            return;
+        }
         let v = self.input.take();
         if self.login.is_some() {
             if let Some(rest) = v.strip_prefix('/') {
@@ -833,11 +897,82 @@ impl Tui {
         self.start_turn();
     }
 
+    /// Append the new messages from a finished run to the session entries,
+    /// save, and schedule compaction when the context is over budget or the
+    /// run failed with a context overflow error (retrying once after).
+    fn persist_session(&mut self, messages: &[Message], err: Option<&str>) {
+        let mut entries = session::load_live(&self.cfg.ax_root);
+        let projected_len = session::context_messages(&entries).len();
+        let new_msgs: Vec<Message> = if messages.len() > projected_len {
+            messages[projected_len..].to_vec()
+        } else {
+            Vec::new()
+        };
+        for m in &new_msgs {
+            entries.push(session::Entry::Message { message: m.clone() });
+        }
+        session::save_live(&self.cfg.ax_root, &entries);
+
+        let overflow = err.map(session::is_overflow_error).unwrap_or(false);
+        if overflow && !self.overflow_retried && !self.compacting {
+            self.overflow_retried = true;
+            self.retry_after_compact = true;
+            self.start_compaction(entries);
+            return;
+        }
+        if !overflow
+            && !self.compacting
+            && let Some(window) = self.cfg.context_window
+        {
+            let tokens = session::estimate_tokens(&session::context_messages(&entries));
+            if tokens > window.saturating_sub(16384) {
+                self.start_compaction(entries);
+            }
+        }
+    }
+
+    fn start_compaction(&mut self, entries: Vec<session::Entry>) {
+        self.compacting = true;
+        self.entries.push(Entry::Notice("compacting…".into()));
+        let provider = OpenAI::new(self.cfg.base.clone(), self.cfg.api_key.clone());
+        let model = self.cfg.model.clone();
+        let (ctx_tx, ctx_rx) = std::sync::mpsc::channel();
+        self.compact_rx = Some(ctx_rx);
+        std::thread::spawn(move || {
+            let result = session::compact(&provider, &model, &entries);
+            let _ = ctx_tx.send(result);
+        });
+    }
+
+    fn finish_compaction(&mut self, summary: String, tokens_before: usize, retained: Vec<Message>) {
+        self.compacting = false;
+        let entry = session::Entry::Compaction {
+            summary,
+            tokens_before,
+            timestamp: session::now_ms(),
+            retained,
+        };
+        let entries = vec![entry];
+        session::save_live(&self.cfg.ax_root, &entries);
+        self.msgs = session::context_messages(&entries);
+        self.entries.push(Entry::Notice("compacted".into()));
+        if self.retry_after_compact {
+            self.retry_after_compact = false;
+            self.start_turn();
+        }
+    }
+
     fn start_turn(&mut self) {
+        if self.compacting {
+            return;
+        }
+        session::trim_trailing_tool_messages(&mut self.msgs);
         let msgs = self.msgs.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         self.tx = Some(tx.clone());
         self.rx = Some(rx);
+        let (steer_tx, steer_rx) = std::sync::mpsc::channel();
+        self.steer_tx = Some(steer_tx);
         self.running = true;
         self.cancel = Arc::new(AtomicBool::new(false));
         self.ctrl_c_pending = false;
@@ -855,7 +990,36 @@ impl Tui {
         let skills_root = self.cfg.skills_root.clone();
         let tools = build_tools(&dir, &skills_root);
         std::thread::spawn(move || {
-            run_turn(provider, model, system, tools, msgs, cancel, tx);
+            let end = {
+                let mut sink = TuiSink {
+                    tx: &tx,
+                    steer: steer_rx,
+                };
+                run::run_stream(
+                    &provider,
+                    &RunOptions {
+                        model: &model,
+                        system: &system,
+                        tools: &tools,
+                        max_turns: 20,
+                    },
+                    &msgs,
+                    &cancel,
+                    &mut sink,
+                )
+            };
+            let (err, cancelled) = match end.outcome {
+                Outcome::Done => (None, false),
+                Outcome::MaxTurns => (Some("stopped: max turns reached".into()), false),
+                Outcome::Cancelled => (None, true),
+                Outcome::Failed(e) => (Some(e), false),
+            };
+            let _ = tx.send(TurnEvent::End {
+                messages: end.messages,
+                usage: end.usage,
+                err,
+                cancelled,
+            });
         });
     }
 
@@ -924,9 +1088,14 @@ impl Tui {
                     }
                     TurnEvent::ToolStart { label, .. } => {
                         self.tool_running = Some(label.clone());
+                        self.tool_live = None;
+                    }
+                    TurnEvent::ToolDelta(text) => {
+                        self.tool_live = Some(text);
                     }
                     TurnEvent::ToolResult { label, kind } => {
                         self.tool_running = None;
+                        self.tool_live = None;
                         self.entries.push(Entry::Tool {
                             label: label.clone(),
                             kind: kind.clone(),
@@ -947,6 +1116,8 @@ impl Tui {
                         cancelled,
                     } => {
                         self.running = false;
+                        self.tool_running = None;
+                        self.tool_live = None;
                         self.sess_in += usage.input;
                         self.sess_out += usage.output;
                         if let Some(mut md) = self.md.take() {
@@ -985,8 +1156,10 @@ impl Tui {
                         }
                         if let Some(err) = err {
                             self.entries.push(Entry::Notice(format!("error: {err}")));
+                            self.persist_session(&messages, Some(&err));
+                        } else {
+                            self.persist_session(&messages, None);
                         }
-                        session::save_live(&self.cfg.ax_root, &messages);
                         self.activity = Activity::Idle;
                     }
                 }
@@ -994,6 +1167,20 @@ impl Tui {
             self.rx = Some(rx);
         }
         self.cur_text = cur;
+        if let Some(rx) = self.compact_rx.take() {
+            match rx.try_recv() {
+                Ok(Ok((summary, tokens_before, retained))) => {
+                    self.finish_compaction(summary, tokens_before, retained);
+                }
+                Ok(Err(e)) => {
+                    self.compacting = false;
+                    self.retry_after_compact = false;
+                    self.entries
+                        .push(Entry::Notice(format!("compaction failed: {e}")));
+                }
+                Err(_) => self.compact_rx = Some(rx),
+            }
+        }
         if let Some(rx) = self.models_rx.take() {
             match rx.try_recv() {
                 Ok(Ok(m)) => {
@@ -1040,6 +1227,52 @@ impl Tui {
                 } else {
                     self.entries
                         .push(Entry::Notice(format!("{DIM}usage: /rename <title>{RESET}")));
+                }
+            }
+            "compact" => {
+                if self.compacting {
+                    self.entries
+                        .push(Entry::Notice("already compacting…".into()));
+                } else {
+                    let entries = session::load_live(&self.cfg.ax_root);
+                    if session::context_messages(&entries).len() < 4 {
+                        self.entries.push(Entry::Notice(format!(
+                            "{DIM}session too small to compact{RESET}"
+                        )));
+                    } else {
+                        self.start_compaction(entries);
+                    }
+                }
+            }
+            "search" => {
+                if rest.is_empty() {
+                    self.entries
+                        .push(Entry::Notice(format!("{DIM}usage: /search <text>{RESET}")));
+                } else {
+                    let hits = session::search(&self.cfg.ax_root, rest);
+                    if hits.is_empty() {
+                        self.entries
+                            .push(Entry::Notice(format!("{DIM}no matches for: {rest}{RESET}")));
+                    } else {
+                        self.entries.push(Entry::Notice(format!(
+                            "{BOLD}{} match(es) for: {rest}{RESET}",
+                            hits.len()
+                        )));
+                        for h in hits.iter().take(20) {
+                            let id = if h.id == "live" {
+                                "live session".to_string()
+                            } else {
+                                format!("session {}", h.id)
+                            };
+                            let head = if h.title.is_empty() {
+                                id
+                            } else {
+                                format!("{} ({id})", h.title)
+                            };
+                            self.entries
+                                .push(Entry::Notice(format!("{DIM}{head}:{RESET} {}", h.text)));
+                        }
+                    }
                 }
             }
             "status" => {
@@ -1316,8 +1549,8 @@ impl Tui {
         }
     }
 
-    fn load_messages(&mut self, msgs: Vec<Message>) {
-        self.msgs = msgs;
+    fn load_messages(&mut self, entries: Vec<session::Entry>) {
+        self.msgs = session::context_messages(&entries);
         self.entries.clear();
         self.entries.push(Entry::Welcome);
         for m in &self.msgs {
@@ -1341,11 +1574,12 @@ impl Tui {
         self.sess_in = 0;
         self.sess_out = 0;
         self.streamed.clear();
+        self.overflow_retried = false;
         if self.mode == Mode::Full {
             self.full_scroll = 0;
             self.last_frame.clear();
         }
-        session::save_live(&self.cfg.ax_root, &self.msgs);
+        session::save_live(&self.cfg.ax_root, &entries);
     }
 
     fn open_screen(&mut self, screen: Screen) {
@@ -1648,6 +1882,15 @@ impl Tui {
             let half = (now.as_millis() as i64 / 500) % 2 == 0;
             let marker = if half { "●" } else { " " };
             rows.push(format!("{ACTIVITY}{marker} {label}{RESET}"));
+            if let Some(live) = &self.tool_live {
+                let width = self.cols.saturating_sub(4) as usize;
+                let count = live.chars().count();
+                let mut t: String = live.chars().take(width).collect();
+                if count > width {
+                    t.push('…');
+                }
+                rows.push(format!("{DIM}  {t}{RESET}"));
+            }
         } else {
             match &self.activity {
                 Activity::Thinking => {
@@ -2555,13 +2798,159 @@ pub fn load_user_commands(ax_root: &str) -> Vec<UserCommand> {
 }
 
 pub fn expand_user_command(uc: &UserCommand, rest: &str) -> String {
+    let content = uc.content.clone();
     if rest.is_empty() {
-        uc.content.clone()
-    } else if uc.content.contains("$ARGUMENTS") {
-        uc.content.replace("$ARGUMENTS", rest)
-    } else {
-        format!("{}\n\n{rest}", uc.content)
+        return content;
     }
+    let args = parse_command_args(rest);
+    let substituted = substitute_args(&content, &args);
+    if substituted == content && !content.contains("$ARGUMENTS") {
+        return format!("{content}\n\n{rest}");
+    }
+    substituted
+}
+
+/// Split command arguments respecting quoted strings (bash-style).
+pub fn parse_command_args(s: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_quote: Option<char> = None;
+    for c in s.chars() {
+        match in_quote {
+            Some(q) => {
+                if c == q {
+                    in_quote = None;
+                } else {
+                    current.push(c);
+                }
+            }
+            None => {
+                if c == '"' || c == '\'' {
+                    in_quote = Some(c);
+                } else if c.is_whitespace() {
+                    if !current.is_empty() {
+                        args.push(std::mem::take(&mut current));
+                    }
+                } else {
+                    current.push(c);
+                }
+            }
+        }
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    args
+}
+
+/// Substitute argument placeholders in a prompt template:
+/// `$1`..`$9`, `$@`/`$ARGUMENTS` for all args, `${2:-default}`, `${@:N}` and
+/// `${@:N:L}` slices.
+pub fn substitute_args(content: &str, args: &[String]) -> String {
+    let all = args.join(" ");
+    let mut out = String::with_capacity(content.len());
+    let mut rest = content;
+    while let Some(start) = rest.find('$') {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start..];
+        let (token, len) = parse_placeholder(tail, args, &all);
+        out.push_str(&token);
+        rest = &tail[len..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn parse_placeholder(tail: &str, args: &[String], all: &str) -> (String, usize) {
+    let chars: Vec<char> = tail.chars().collect();
+    if chars.first() != Some(&'$') {
+        return (String::new(), 0);
+    }
+    if chars.get(1) == Some(&'{') {
+        // ${...}
+        let mut depth = 0usize;
+        let mut end = 0usize;
+        for (i, c) in chars.iter().enumerate() {
+            if *c == '{' {
+                depth += 1;
+            } else if *c == '}' {
+                depth -= 1;
+                if depth == 0 {
+                    end = i;
+                    break;
+                }
+            }
+        }
+        if end == 0 {
+            return (String::new(), 1);
+        }
+        let inner = &chars[2..end].iter().collect::<String>();
+        let (replacement, _) = expand_braced(inner, args, all);
+        return (replacement, end + 1);
+    }
+    if chars.get(1) == Some(&'@') {
+        return (all.to_string(), 2);
+    }
+    if let Some(c) = chars.get(1)
+        && c.is_ascii_digit()
+    {
+        let idx = c.to_digit(10).unwrap() as usize - 1;
+        let value = args.get(idx).cloned().unwrap_or_default();
+        return (value, 2);
+    }
+    let mut id_len = 0usize;
+    while id_len + 1 < chars.len()
+        && (chars[id_len + 1].is_ascii_alphanumeric() || chars[id_len + 1] == '_')
+    {
+        id_len += 1;
+    }
+    if id_len > 0 {
+        let ident: String = chars[1..=id_len].iter().collect();
+        if ident == "ARGUMENTS" {
+            return (all.to_string(), id_len + 1);
+        }
+    }
+    (String::new(), 1)
+}
+
+fn expand_braced(inner: &str, args: &[String], all: &str) -> (String, usize) {
+    // ${N:-default}, ${@:-default}, ${ARGUMENTS:-default}
+    if let Some((target, default)) = inner.split_once(":-") {
+        let value = if target == "@" || target == "ARGUMENTS" {
+            all
+        } else {
+            target
+                .parse::<usize>()
+                .ok()
+                .and_then(|n| args.get(n - 1))
+                .map(String::as_str)
+                .unwrap_or("")
+        };
+        return if value.is_empty() {
+            (default.to_string(), inner.len())
+        } else {
+            (value.to_string(), inner.len())
+        };
+    }
+    // ${@:N} and ${@:N:L}
+    if let Some(slice) = inner.strip_prefix("@:") {
+        let parts: Vec<&str> = slice.split(':').collect();
+        if let Ok(n) = parts[0].parse::<usize>() {
+            let start = n.saturating_sub(1);
+            let sliced: Vec<&str> = args[start..].iter().map(String::as_str).collect();
+            let chosen: Vec<&str> = if parts.len() > 1 {
+                if let Ok(len) = parts[1].parse::<usize>() {
+                    sliced.iter().take(len).copied().collect()
+                } else {
+                    sliced
+                }
+            } else {
+                sliced
+            };
+            return (chosen.join(" "), inner.len());
+        }
+    }
+    (String::new(), inner.len())
 }
 
 fn slash_matches(query: &str, users: &[UserCommand]) -> Vec<SlashItem> {
@@ -3092,7 +3481,7 @@ fn b64_encode(data: &[u8]) -> String {
     out
 }
 
-fn build_tools(dir: &str, skills_root: &str) -> Vec<Tool> {
+pub fn build_tools(dir: &str, skills_root: &str) -> Vec<Tool> {
     let mut tools = vec![
         crate::tools::read(),
         crate::tools::write(),
@@ -3145,127 +3534,45 @@ fn tool_label(call: &ToolCall, running: bool) -> String {
     }
 }
 
-fn run_turn(
-    provider: OpenAI,
-    model: String,
-    system: String,
-    tools: Vec<Tool>,
-    msgs: Vec<Message>,
-    cancel: Arc<AtomicBool>,
-    tx: Sender<TurnEvent>,
-) {
-    let mut h = msgs;
-    let mut usage = Usage::default();
-    let mut err: Option<String> = None;
-    let mut cancelled = false;
-    for _turn in 0..20 {
-        if cancel.load(Ordering::Relaxed) {
-            cancelled = true;
-            break;
-        }
-        let (resp, calls) =
-            match stream_request(&provider, &model, &system, &h, &tools, &cancel, &tx) {
-                Ok(x) => x,
-                Err(e) => {
-                    if cancel.load(Ordering::Relaxed) {
-                        cancelled = true;
-                    } else {
-                        err = Some(e);
-                    }
-                    break;
-                }
-            };
-        usage = Usage {
-            input: usage.input + resp.usage.input,
-            output: usage.output + resp.usage.output,
-        };
-        h.push(resp.message);
-        let _ = tx.send(TurnEvent::AssistantDone);
-        if calls.is_empty() {
-            break;
-        }
-        for call in calls {
-            if cancel.load(Ordering::Relaxed) {
-                cancelled = true;
-                break;
-            }
-            let label = tool_label(&call, true);
-            let kind = tool_kind(&call);
-            let _ = tx.send(TurnEvent::ToolStart {
-                label: label.clone(),
-                kind: kind.clone(),
-            });
-            let output = exec_tool(&tools, &call);
-            let _ = tx.send(TurnEvent::ToolResult {
-                label: tool_label(&call, false),
-                kind,
-            });
-            h.push(Message {
-                role: "tool".into(),
-                content: output,
-                tool_calls: Vec::new(),
-                tool_call_id: call.id,
-            });
-        }
-        if cancelled {
-            break;
-        }
-    }
-    if !cancelled && err.is_none() && h.last().map(|m| !m.tool_calls.is_empty()).unwrap_or(false) {
-        err = Some("stopped: max turns reached".into());
-    }
-    let _ = tx.send(TurnEvent::End {
-        messages: h,
-        usage,
-        err,
-        cancelled,
-    });
+struct TuiSink<'a> {
+    tx: &'a Sender<TurnEvent>,
+    steer: Receiver<String>,
 }
 
-fn stream_request(
-    provider: &OpenAI,
-    model: &str,
-    system: &str,
-    h: &[Message],
-    tools: &[Tool],
-    cancel: &Arc<AtomicBool>,
-    tx: &Sender<TurnEvent>,
-) -> Result<(crate::Response, Vec<ToolCall>), String> {
-    let (etx, erx) = std::sync::mpsc::channel();
-    let req = crate::Request {
-        model,
-        system,
-        messages: h,
-        tools,
-    };
-    let handle = provider.complete_stream(&req, cancel, etx);
-    let mut calls = Vec::new();
-    while let Ok(ev) = erx.recv() {
-        match ev {
-            StreamEvent::Content(d) => {
-                let _ = tx.send(TurnEvent::AssistantDelta(d));
-            }
-            StreamEvent::ToolCall(c) => calls.push(c),
-            StreamEvent::Tokens { input, output } => {
-                let _ = tx.send(TurnEvent::Tokens { input, output });
-            }
-            StreamEvent::Done => break,
-        }
+impl Sink for TuiSink<'_> {
+    fn assistant_delta(&mut self, text: &str) {
+        let _ = self.tx.send(TurnEvent::AssistantDelta(text.to_string()));
     }
-    let resp = handle
-        .join()
-        .map_err(|_| "request thread panicked".to_string())?
-        .map_err(|e| e.to_string())?;
-    Ok((resp, calls))
-}
 
-fn exec_tool(tools: &[Tool], call: &ToolCall) -> String {
-    for t in tools {
-        if t.name == call.name {
-            return (t.run)(&call.arguments);
-        }
+    fn assistant_done(&mut self) {
+        let _ = self.tx.send(TurnEvent::AssistantDone);
     }
-    format!("error: unknown tool: {}", call.name)
+
+    fn tool_start(&mut self, call: &ToolCall) {
+        let _ = self.tx.send(TurnEvent::ToolStart {
+            label: tool_label(call, true),
+            kind: tool_kind(call),
+        });
+    }
+
+    fn tool_delta(&mut self, _call: &ToolCall, text: &str) {
+        let _ = self.tx.send(TurnEvent::ToolDelta(text.to_string()));
+    }
+
+    fn tool_result(&mut self, call: &ToolCall) {
+        let _ = self.tx.send(TurnEvent::ToolResult {
+            label: tool_label(call, false),
+            kind: tool_kind(call),
+        });
+    }
+
+    fn tokens(&mut self, input: usize, output: usize) {
+        let _ = self.tx.send(TurnEvent::Tokens { input, output });
+    }
+
+    fn pending_user_input(&mut self) -> Option<String> {
+        self.steer.try_recv().ok()
+    }
 }
 
 #[cfg(test)]
@@ -3306,6 +3613,254 @@ mod tests {
     }
 
     #[test]
+    fn slash_compact_small_session_shows_notice() {
+        let dir = std::env::temp_dir().join(format!("ax-compact-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = TuiConfig {
+            base: "http://127.0.0.1:1/v1".into(),
+            model: "m".into(),
+            system: String::new(),
+            dir: String::new(),
+            ax_root: dir.to_str().unwrap().to_string(),
+            skills_root: String::new(),
+            api_key: "k".into(),
+            resume: None,
+            context_window: None,
+        };
+        let mut tui = Tui::new(cfg);
+        tui.slash("compact");
+        assert!(!tui.compacting, "small session must not start compaction");
+        assert!(
+            tui.entries
+                .iter()
+                .any(|e| matches!(e, Entry::Notice(n) if n.contains("too small")))
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn steering_response_renders_after_tool() {
+        let dir = std::env::temp_dir().join(format!("ax-steer-tui-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = TuiConfig {
+            base: "http://127.0.0.1:1/v1".into(),
+            model: "m".into(),
+            system: String::new(),
+            dir: String::new(),
+            ax_root: dir.to_str().unwrap().to_string(),
+            skills_root: String::new(),
+            api_key: "k".into(),
+            resume: None,
+            context_window: None,
+        };
+        let mut tui = Tui::new(cfg);
+        let (tx, rx) = std::sync::mpsc::channel::<TurnEvent>();
+        tui.rx = Some(rx);
+        let (steer_tx, _steer_rx) = std::sync::mpsc::channel::<String>();
+        tui.steer_tx = Some(steer_tx);
+
+        let send = |ev: TurnEvent| {
+            tx.send(ev).unwrap();
+        };
+        send(TurnEvent::AssistantDelta("initial ".into()));
+        send(TurnEvent::AssistantDelta("answer".into()));
+        send(TurnEvent::AssistantDone);
+        send(TurnEvent::ToolStart {
+            label: "Running sleep".into(),
+            kind: "command".into(),
+        });
+        send(TurnEvent::ToolDelta("partial".into()));
+        assert!(tui.drain_events());
+
+        tui.input.buf = "continue".into();
+        tui.steer();
+        assert!(
+            tui.entries
+                .iter()
+                .any(|e| matches!(e, Entry::User(u) if u == "continue"))
+        );
+
+        send(TurnEvent::ToolResult {
+            label: "Ran sleep".into(),
+            kind: "command".into(),
+        });
+        send(TurnEvent::AssistantDelta("steered ".into()));
+        send(TurnEvent::AssistantDelta("reply".into()));
+        send(TurnEvent::AssistantDone);
+        assert!(tui.drain_events());
+
+        let user_idx = tui
+            .entries
+            .iter()
+            .position(|e| matches!(e, Entry::User(u) if u == "continue"))
+            .expect("steer user entry");
+        let after: Vec<&String> = tui.entries[user_idx + 1..]
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Text(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            after.iter().any(|t| t.contains("steered reply")),
+            "response not rendered after steer: {after:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn worker_steer_events_reach_transcript() {
+        use crate::run::{self, RunOptions};
+        use std::cell::RefCell;
+        use std::collections::VecDeque;
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
+        use std::sync::mpsc;
+
+        struct SeqProvider {
+            responses: RefCell<VecDeque<crate::Response>>,
+        }
+        impl crate::Provider for SeqProvider {
+            fn complete(&self, _req: &crate::Request) -> Result<crate::Response, crate::Error> {
+                Ok(self
+                    .responses
+                    .borrow_mut()
+                    .pop_front()
+                    .expect("no fake response"))
+            }
+            fn stream(
+                &self,
+                _req: &crate::Request,
+                _cancel: &Arc<AtomicBool>,
+            ) -> crate::StreamHandle {
+                let (tx, rx) = mpsc::channel();
+                let resp = self.complete(_req).expect("no fake response");
+                let thread = std::thread::spawn(move || {
+                    if !resp.message.content.is_empty() {
+                        let _ = tx.send(crate::StreamEvent::Content(resp.message.content.clone()));
+                    }
+                    for c in &resp.message.tool_calls {
+                        let _ = tx.send(crate::StreamEvent::ToolCall(c.clone()));
+                    }
+                    let _ = tx.send(crate::StreamEvent::Done);
+                    Ok(resp)
+                });
+                crate::StreamHandle::new(rx, thread)
+            }
+        }
+
+        let dir = std::env::temp_dir().join(format!("ax-worker-steer-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = TuiConfig {
+            base: "http://127.0.0.1:1/v1".into(),
+            model: "m".into(),
+            system: String::new(),
+            dir: String::new(),
+            ax_root: dir.to_str().unwrap().to_string(),
+            skills_root: String::new(),
+            api_key: "k".into(),
+            resume: None,
+            context_window: None,
+        };
+        let mut tui = Tui::new(cfg);
+        tui.entries.clear();
+        tui.entries.push(Entry::User("go".into()));
+        tui.msgs = vec![crate::Message {
+            role: "user".into(),
+            content: "go".into(),
+            tool_calls: Vec::new(),
+            tool_call_id: String::new(),
+        }];
+
+        let bash_tool = crate::tools::bash("");
+        let p = SeqProvider {
+            responses: RefCell::new(VecDeque::from([
+                crate::Response {
+                    message: crate::Message {
+                        role: "assistant".into(),
+                        content: String::new(),
+                        tool_calls: vec![crate::ToolCall {
+                            id: "c1".into(),
+                            name: "bash".into(),
+                            arguments: r#"{"command":"sleep 0.2"}"#.into(),
+                        }],
+                        tool_call_id: String::new(),
+                    },
+                    usage: crate::Usage::default(),
+                    stop_reason: String::new(),
+                },
+                crate::Response {
+                    message: crate::Message {
+                        role: "assistant".into(),
+                        content: "steered answer".into(),
+                        tool_calls: Vec::new(),
+                        tool_call_id: String::new(),
+                    },
+                    usage: crate::Usage::default(),
+                    stop_reason: String::new(),
+                },
+            ])),
+        };
+
+        let (tx, rx) = mpsc::channel::<TurnEvent>();
+        let (steer_tx, steer_rx) = mpsc::channel::<String>();
+        tui.steer_tx = Some(steer_tx.clone());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let msgs = tui.msgs.clone();
+        let worker = std::thread::spawn(move || {
+            let opts = RunOptions {
+                model: "m",
+                system: "",
+                tools: &[bash_tool],
+                max_turns: 5,
+            };
+            let mut sink = TuiSink {
+                tx: &tx,
+                steer: steer_rx,
+            };
+            let end = run::run_stream(&p, &opts, &msgs, &cancel, &mut sink);
+            let (err, cancelled) = match end.outcome {
+                run::Outcome::Done => (None, false),
+                run::Outcome::MaxTurns => (Some("stopped: max turns reached".into()), false),
+                run::Outcome::Cancelled => (None, true),
+                run::Outcome::Failed(e) => (Some(e), false),
+            };
+            let _ = tx.send(TurnEvent::End {
+                messages: end.messages,
+                usage: end.usage,
+                err,
+                cancelled,
+            });
+        });
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        tui.input.buf = "continue".into();
+        tui.steer();
+        let _ = worker.join();
+
+        tui.rx = Some(rx);
+        tui.drain_events();
+        assert!(
+            tui.entries
+                .iter()
+                .any(|e| matches!(e, Entry::User(u) if u == "continue")),
+            "steer user entry missing"
+        );
+        let texts: Vec<String> = tui
+            .entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Text(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.iter().any(|t| t.contains("steered answer")),
+            "steered response missing from transcript: {texts:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn login_wizard_writes_config() {
         let dir = std::env::temp_dir().join(format!("ax-login-wiz-{}", std::process::id()));
         let cfg = TuiConfig {
@@ -3317,6 +3872,7 @@ mod tests {
             skills_root: String::new(),
             api_key: String::new(),
             resume: None,
+            context_window: None,
         };
         let mut tui = Tui::new(cfg);
         tui.login_start();

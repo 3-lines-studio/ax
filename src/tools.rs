@@ -1,20 +1,63 @@
 //! Built-in tools: bash, read, write, edit.
 
-use crate::{Tool, new_tool};
+use crate::{Tool, new_tool, new_tool_with_progress};
 use serde::Deserialize;
+use serde_json::Value;
 use std::os::unix::process::CommandExt;
 
 const MAX_OUTPUT: usize = 16 * 1024;
 
-fn limit(s: &str) -> String {
+/// Strip control characters (except tab/newline/CR) and Unicode format
+/// interlinear annotation marks from tool output before it reaches the model.
+fn sanitize(s: &str) -> String {
+    s.chars()
+        .filter(|&c| {
+            let code = c as u32;
+            code == 0x09
+                || code == 0x0a
+                || code == 0x0d
+                || !(code <= 0x1f || (0xfff9..=0xfffb).contains(&code))
+        })
+        .collect()
+}
+
+/// Tail of `s` within the output limit, never splitting a UTF-8 codepoint.
+fn tail(s: &str) -> &str {
     if s.len() <= MAX_OUTPUT {
-        return s.to_string();
+        return s;
     }
     let mut start = s.len() - MAX_OUTPUT;
     while !s.is_char_boundary(start) {
         start += 1;
     }
-    format!("[truncated]\n{}", &s[start..])
+    &s[start..]
+}
+
+fn count_lines(s: &str) -> usize {
+    if s.is_empty() {
+        return 0;
+    }
+    let n = s.bytes().filter(|&b| b == b'\n').count();
+    if s.ends_with('\n') { n } else { n + 1 }
+}
+
+fn read_file_tail(path: &std::path::Path) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return String::new();
+    };
+    let Ok(len) = f.metadata().map(|m| m.len()) else {
+        return String::new();
+    };
+    let start = len.saturating_sub(MAX_OUTPUT as u64);
+    if f.seek(SeekFrom::Start(start)).is_err() {
+        return String::new();
+    }
+    let mut buf = Vec::new();
+    if f.read_to_end(&mut buf).is_err() {
+        return String::new();
+    }
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 #[derive(Deserialize)]
@@ -28,11 +71,11 @@ static BASH_TAG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::ne
 
 pub fn bash(dir: &str) -> Tool {
     let dir = dir.to_string();
-    new_tool(
+    let mut t = new_tool_with_progress(
         "bash",
         "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 16KB. Optionally provide a timeout in seconds.",
         r#"{"type":"object","properties":{"command":{"type":"string","description":"bash command to run"},"timeout":{"type":"number","description":"Timeout in seconds (optional, no default timeout)"}},"required":["command"]}"#,
-        move |a: BashArgs| {
+        move |a: BashArgs, progress: &mut dyn FnMut(&str)| {
             if a.timeout == Some(0) {
                 return "error: invalid timeout: must be a positive number of seconds".to_string();
             }
@@ -61,15 +104,21 @@ pub fn bash(dir: &str) -> Tool {
                 Err(e) => return format!("error: {e}"),
             };
             let mut exit: Option<std::process::ExitStatus> = None;
-            let timed_out = if let Some(t) = a.timeout {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(t);
-                loop {
-                    match child.try_wait() {
-                        Ok(Some(st)) => {
-                            exit = Some(st);
-                            break false;
-                        }
-                        Ok(None) if std::time::Instant::now() >= deadline => {
+            let mut timed_out = false;
+            let deadline = a
+                .timeout
+                .map(|t| std::time::Instant::now() + std::time::Duration::from_secs(t));
+            let mut last_progress = std::time::Instant::now();
+            loop {
+                match child.try_wait() {
+                    Ok(Some(st)) => {
+                        exit = Some(st);
+                        break;
+                    }
+                    Ok(None) => {
+                        if let Some(d) = deadline
+                            && std::time::Instant::now() >= d
+                        {
                             unsafe {
                                 libc::kill(-(child.id() as i32), libc::SIGKILL);
                             }
@@ -82,29 +131,29 @@ pub fn bash(dir: &str) -> Tool {
                                     Err(_) => break,
                                 }
                             }
-                            break true;
+                            timed_out = true;
+                            break;
                         }
-                        Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
-                        Err(e) => return format!("error: {e}"),
-                    }
-                }
-            } else {
-                match child.wait() {
-                    Ok(st) => {
-                        exit = Some(st);
-                        false
+                        if last_progress.elapsed() >= std::time::Duration::from_millis(100) {
+                            last_progress = std::time::Instant::now();
+                            let tail = read_file_tail(&out_path);
+                            if !tail.is_empty() {
+                                progress(&sanitize(&tail));
+                            }
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(25));
                     }
                     Err(e) => return format!("error: {e}"),
                 }
-            };
+            }
             let stdout = std::fs::read(&out_path)
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
                 .unwrap_or_default();
             let stderr = std::fs::read(&err_path)
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
                 .unwrap_or_default();
-            let _ = std::fs::remove_file(&out_path);
-            let _ = std::fs::remove_file(&err_path);
+            let stdout = sanitize(&stdout);
+            let stderr = sanitize(&stderr);
             let mut s = stdout;
             if !stderr.is_empty() {
                 if !s.is_empty() && !s.ends_with('\n') {
@@ -112,31 +161,109 @@ pub fn bash(dir: &str) -> Tool {
                 }
                 s.push_str(&stderr);
             }
+            let total_lines = count_lines(&s);
+            let truncated = s.len() > MAX_OUTPUT;
+            if truncated {
+                let _ = std::fs::write(&out_path, &s);
+            } else {
+                let _ = std::fs::remove_file(&out_path);
+            }
+            let _ = std::fs::remove_file(&err_path);
+            let mut display = tail(&s).to_string();
+            if truncated {
+                let shown = count_lines(&display);
+                let start_line = total_lines - shown + 1;
+                display.push_str(&format!(
+                    "\n\n[Showing lines {start_line}-{total_lines} of {total_lines} (16KB limit). Full output: {}]",
+                    out_path.display()
+                ));
+            }
             if timed_out {
-                if !s.is_empty() && !s.ends_with('\n') {
-                    s.push('\n');
+                if !display.is_empty() && !display.ends_with('\n') {
+                    display.push('\n');
                 }
-                s.push_str(&format!(
+                display.push_str(&format!(
                     "error: command timed out after {} seconds",
                     a.timeout.unwrap_or(0)
                 ));
             } else if let Some(st) = exit
                 && !st.success()
             {
-                if !s.is_empty() && !s.ends_with('\n') {
-                    s.push('\n');
+                if !display.is_empty() && !display.ends_with('\n') {
+                    display.push('\n');
                 }
-                s.push_str(&format!("error: {}", status_str(st)));
+                display.push_str(&format!("error: {}", status_str(st)));
             }
-            limit(&s)
+            display
         },
-    )
+    );
+    t.snippet = "Execute bash commands (ls, grep, find, etc.)";
+    t
 }
 
 fn status_str(st: std::process::ExitStatus) -> String {
     match st.code() {
         Some(code) => format!("exit status {code}"),
         None => format!("signal: {st:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_OUTPUT, count_lines, sanitize, tail};
+
+    #[test]
+    fn sanitize_strips_control_characters() {
+        assert_eq!(sanitize("a\x00b\x1bc\x7fd"), "abc\u{7f}d");
+        assert_eq!(sanitize("\x1b[31mred\x1b[0m"), "[31mred[0m");
+        assert_eq!(sanitize("keep\tnewline\ncr\r"), "keep\tnewline\ncr\r");
+        assert_eq!(sanitize("\u{fff9}fmt\u{fffb}"), "fmt");
+        assert_eq!(sanitize("emoji 🙈 ok"), "emoji 🙈 ok");
+    }
+
+    #[test]
+    fn tail_and_line_counts() {
+        assert_eq!(tail("short"), "short");
+        assert_eq!(count_lines(""), 0);
+        assert_eq!(count_lines("a"), 1);
+        assert_eq!(count_lines("a\n"), 1);
+        assert_eq!(count_lines("a\nb"), 2);
+
+        let big = "x".repeat(MAX_OUTPUT + 100);
+        let t = tail(&big);
+        assert_eq!(t.len(), MAX_OUTPUT);
+        assert_eq!(count_lines(&format!("a\nb\n{big}")), 3);
+    }
+
+    #[test]
+    fn bash_truncation_notice() {
+        let bash = crate::tools::bash("");
+        let args = serde_json::json!({"command": "yes | head -c 20000"}).to_string();
+        let out = (bash.run)(&args, &mut |_| {});
+        assert!(
+            out.contains("Showing lines"),
+            "got tail: {}",
+            &out[out.len().saturating_sub(200)..]
+        );
+        assert!(
+            out.contains("Full output:"),
+            "got: {}",
+            &out[out.len().saturating_sub(200)..]
+        );
+        assert!(
+            !out.contains("[truncated]"),
+            "got: {}",
+            &out[out.len().saturating_sub(200)..]
+        );
+        let path = out
+            .split("Full output: ")
+            .nth(1)
+            .and_then(|s| s.trim().split(']').next())
+            .unwrap();
+        assert!(
+            std::path::Path::new(path).exists(),
+            "full output file missing: {path}"
+        );
     }
 }
 
@@ -150,7 +277,7 @@ struct ReadArgs {
 }
 
 pub fn read() -> Tool {
-    new_tool(
+    let mut t = new_tool(
         "read",
         "Read the contents of a file. Output is truncated to 16KB. Use offset/limit for large files. When you need the full file, continue with the suggested offset.",
         r#"{"type":"object","properties":{"path":{"type":"string","description":"Path to the file to read (relative or absolute)"},"offset":{"type":"number","description":"Line number to start reading from (1-indexed)"},"limit":{"type":"number","description":"Maximum number of lines to read"}},"required":["path"]}"#,
@@ -158,6 +285,7 @@ pub fn read() -> Tool {
             Err(e) => format!("error: {e}"),
             Ok(b) => {
                 let text = String::from_utf8_lossy(&b);
+                let text = sanitize(&text);
                 let lines: Vec<&str> = text.split('\n').collect();
                 let total = lines.len();
                 let start = a.offset.unwrap_or(1).saturating_sub(1);
@@ -220,7 +348,9 @@ pub fn read() -> Tool {
                 )
             }
         },
-    )
+    );
+    t.snippet = "Read file contents (truncated, use offset to continue)";
+    t
 }
 
 #[derive(Deserialize)]
@@ -230,7 +360,7 @@ struct WriteArgs {
 }
 
 pub fn write() -> Tool {
-    new_tool(
+    let mut t = new_tool(
         "write",
         "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
         r#"{"type":"object","properties":{"path":{"type":"string","description":"Path to the file to write (relative or absolute)"},"content":{"type":"string","description":"Content to write to the file"}},"required":["path","content"]}"#,
@@ -246,7 +376,10 @@ pub fn write() -> Tool {
                 Err(e) => format!("error: {e}"),
             }
         },
-    )
+    );
+    t.sequential = true;
+    t.snippet = "Write content to a file";
+    t
 }
 
 #[derive(Deserialize)]
@@ -479,23 +612,131 @@ fn apply_edits(path: &str, content: &str, edits: &[EditArg]) -> Result<String, S
     Ok(format!("{bom}{restored}"))
 }
 
-pub fn edit() -> Tool {
-    new_tool(
-        "edit",
-        "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
-        r#"{"type":"object","properties":{"path":{"type":"string","description":"Path to the file to edit (relative or absolute)"},"edits":{"type":"array","description":"One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.","items":{"type":"object","properties":{"oldText":{"type":"string","description":"Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call."},"newText":{"type":"string","description":"Replacement text for this targeted edit."}},"required":["oldText","newText"]}}},"required":["path","edits"]}"#,
-        |a: EditArgs| match std::fs::read_to_string(&a.path) {
-            Err(e) => format!("error: {e}"),
-            Ok(s) => match apply_edits(&a.path, &s, &a.edits) {
-                Ok(out) => {
-                    let n = a.edits.len();
-                    match std::fs::write(&a.path, out) {
-                        Ok(()) => format!("Successfully replaced {n} block(s) in {}.", a.path),
-                        Err(e) => format!("error: {e}"),
-                    }
+const EDIT_SCHEMA: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Path to the file to edit (relative or absolute)"},"edits":{"type":"array","description":"One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.","items":{"type":"object","properties":{"oldText":{"type":"string","description":"Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call."},"newText":{"type":"string","description":"Replacement text for this targeted edit."}},"required":["oldText","newText"]}}},"required":["path","edits"]}"#;
+
+fn is_single_edit(v: &Value) -> bool {
+    v.as_object()
+        .map(|o| o.get("oldText").is_some() || o.get("newText").is_some())
+        .unwrap_or(false)
+}
+
+/// Parse edit arguments, normalizing shapes some models send instead of the
+/// documented one: `edits` as a JSON string, a single edit object, or legacy
+/// top-level `oldText`/`newText`.
+fn parse_edit_args(raw: &str) -> Result<EditArgs, String> {
+    let raw = if raw.trim().is_empty() { "{}" } else { raw };
+    let mut v: Value = serde_json::from_str(raw).map_err(|e| format!("invalid arguments: {e}"))?;
+    if let Some(edits) = v.get_mut("edits") {
+        if let Value::String(s) = edits {
+            let parsed: Value = serde_json::from_str(s)
+                .map_err(|e| format!("invalid arguments: edits string: {e}"))?;
+            *edits = match parsed {
+                Value::Array(_) => parsed,
+                p if is_single_edit(&p) => Value::Array(vec![p]),
+                _ => {
+                    return Err(
+                        "invalid arguments: edits string is not an array or edit object".into(),
+                    );
                 }
-                Err(e) => e,
-            },
-        },
-    )
+            };
+        } else if is_single_edit(edits) {
+            let single = std::mem::replace(edits, Value::Null);
+            *edits = Value::Array(vec![single]);
+        }
+    } else if let Some(obj) = v.as_object_mut()
+        && (obj.contains_key("oldText") || obj.contains_key("newText"))
+    {
+        let mut single = serde_json::Map::new();
+        single.insert(
+            "oldText".into(),
+            obj.remove("oldText").unwrap_or(Value::Null),
+        );
+        single.insert(
+            "newText".into(),
+            obj.remove("newText").unwrap_or(Value::Null),
+        );
+        obj.insert("edits".into(), Value::Array(vec![Value::Object(single)]));
+    }
+    let args: EditArgs =
+        serde_json::from_value(v).map_err(|e| format!("invalid arguments: {e}"))?;
+    if args.edits.is_empty() {
+        return Err("invalid arguments: edits must contain at least one replacement".into());
+    }
+    Ok(args)
+}
+
+/// Line-based diff with line numbers, one hunk per changed region.
+fn diff_lines(old: &str, new: &str) -> String {
+    let a: Vec<&str> = old.split('\n').collect();
+    let b: Vec<&str> = new.split('\n').collect();
+    let mut out = String::new();
+    let mut i = 0usize;
+    let mut j = 0usize;
+    while i < a.len() || j < b.len() {
+        if i < a.len() && j < b.len() && a[i] == b[j] {
+            i += 1;
+            j += 1;
+            continue;
+        }
+        let (start_i, start_j) = (i, j);
+        let mut removed: Vec<&str> = Vec::new();
+        let mut added: Vec<&str> = Vec::new();
+        while i < a.len() || j < b.len() {
+            if i < a.len() && j < b.len() && a[i] == b[j] {
+                break;
+            }
+            if i < a.len() {
+                removed.push(a[i]);
+                i += 1;
+            }
+            if j < b.len() {
+                added.push(b[j]);
+                j += 1;
+            }
+        }
+        for (k, line) in removed.iter().enumerate() {
+            out.push_str(&format!("-{} {}\n", start_i + k + 1, line));
+        }
+        for (k, line) in added.iter().enumerate() {
+            out.push_str(&format!("+{} {}\n", start_j + k + 1, line));
+        }
+    }
+    out.trim_end().to_string()
+}
+
+pub fn edit() -> Tool {
+    Tool {
+        name: "edit",
+        description: "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+        parameters: serde_json::from_str(EDIT_SCHEMA).unwrap_or(Value::Null),
+        snippet: "Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
+        sequential: true,
+        run: Box::new(|raw, _progress| {
+            let a = match parse_edit_args(raw) {
+                Ok(a) => a,
+                Err(e) => return format!("error: {e}"),
+            };
+            match std::fs::read_to_string(&a.path) {
+                Err(e) => format!("error: {e}"),
+                Ok(s) => match apply_edits(&a.path, &s, &a.edits) {
+                    Ok(out) => {
+                        let n = a.edits.len();
+                        match std::fs::write(&a.path, &out) {
+                            Ok(()) => {
+                                let mut msg =
+                                    format!("Successfully replaced {n} block(s) in {}.", a.path);
+                                let diff = diff_lines(&normalize_lf(&s), &normalize_lf(&out));
+                                if !diff.is_empty() {
+                                    msg.push_str(&format!("\n\nDiff:\n{diff}"));
+                                }
+                                msg
+                            }
+                            Err(e) => format!("error: {e}"),
+                        }
+                    }
+                    Err(e) => e,
+                },
+            }
+        }),
+    }
 }

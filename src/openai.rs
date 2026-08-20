@@ -1,6 +1,6 @@
 //! OpenAI-compatible chat completions provider.
 
-use crate::{Error, Message, Provider, Request, Response, ToolCall, Usage};
+use crate::{Error, Message, Provider, Request, Response, StreamHandle, ToolCall, Usage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cell::RefCell;
@@ -17,12 +17,7 @@ pub struct OpenAI {
 
 type BuiltRequest = (String, Vec<(String, String)>, Vec<u8>);
 
-pub enum StreamEvent {
-    Content(String),
-    ToolCall(ToolCall),
-    Tokens { input: usize, output: usize },
-    Done,
-}
+pub use crate::StreamEvent;
 
 impl OpenAI {
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
@@ -209,19 +204,24 @@ fn run_request(
             msg = e.error.message;
         }
         if !msg.is_empty() {
-            return Err(Error::Provider(format!("openai: {}: {}", resp.status, msg)));
+            return Err(Error::Http {
+                status: resp.status,
+                message: format!("openai: {}: {}", resp.status, msg),
+            });
         }
-        return Err(Error::Provider(format!(
-            "openai: unexpected status {}",
-            resp.status
-        )));
+        return Err(Error::Http {
+            status: resp.status,
+            message: format!("openai: unexpected status {}", resp.status),
+        });
     }
 
     let parsed: OaResponse = serde_json::from_slice(&resp.body).map_err(err)?;
     if parsed.choices.is_empty() {
         return Err(Error::Provider("openai: no choices in response".into()));
     }
-    let om = &parsed.choices[0].message;
+    let choice = &parsed.choices[0];
+    let stop_reason = choice.finish_reason.clone().unwrap_or_default();
+    let om = &choice.message;
     let mut calls = Vec::new();
     if let Some(cs) = &om.tool_calls {
         for c in cs {
@@ -243,6 +243,7 @@ fn run_request(
             input: parsed.usage.prompt_tokens,
             output: parsed.usage.completion_tokens,
         },
+        stop_reason,
     })
 }
 impl Provider for OpenAI {
@@ -257,6 +258,11 @@ impl Provider for OpenAI {
             &std::sync::mpsc::channel().0,
         )
     }
+
+    fn stream(&self, req: &Request, cancel: &Arc<AtomicBool>) -> StreamHandle {
+        let (tx, rx) = std::sync::mpsc::channel();
+        StreamHandle::new(rx, self.complete_stream(req, cancel, tx))
+    }
 }
 
 #[derive(Default)]
@@ -266,6 +272,7 @@ struct StreamAcc {
     calls: Vec<OaToolCallDelta>,
     usage: OaUsage,
     out_tokens: usize,
+    finish_reason: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -306,6 +313,8 @@ struct OaStreamChunk {
 struct OaStreamChoice {
     #[serde(default)]
     delta: OaDeltaMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 const MAX_STREAM_TOOL_CALLS: usize = 64;
@@ -345,6 +354,9 @@ impl StreamAcc {
         let Some(choice) = chunk.choices.into_iter().next() else {
             return;
         };
+        if let Some(fr) = &choice.finish_reason {
+            self.finish_reason = Some(fr.clone());
+        }
         if let Some(content) = choice.delta.content
             && !content.is_empty()
         {
@@ -431,6 +443,7 @@ impl StreamAcc {
                 input: self.usage.prompt_tokens,
                 output: self.usage.completion_tokens,
             },
+            stop_reason: self.finish_reason.clone().unwrap_or_default(),
         }
     }
 }
@@ -543,6 +556,8 @@ struct OaResponse {
 #[derive(Deserialize)]
 struct OaChoice {
     message: OaMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize)]

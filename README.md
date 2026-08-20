@@ -4,7 +4,7 @@ A minimal LLM coding agent harness with the terminal UX of
 [fx.sh](https://fx.sh): a transcript TUI with streamed markdown, tool
 status lines, and a shell-style input bar.
 
-Release binary: **~768 KB**. No TUI framework, no markdown library — both
+Release binary: **~920 KB**. No TUI framework, no markdown library — both
 hand-rolled. HTTP goes through system libcurl.
 
 ## Install
@@ -58,10 +58,13 @@ DeepSeek, Ollama, vLLM.
 api_key = "sk-..."        # used when OPENAI_API_KEY is unset
 model = "glm-4.5"
 base = "http://localhost:11434/v1"
+context_window = 131072   # optional: enables proactive context compaction
 ```
 
 Plain `key = value` lines, `#` comments. Precedence: flags > env > config.
-Run `/login` in the TUI to write these interactively.
+Run `/login` in the TUI to write these interactively. Set `context_window`
+to your model's context size to enable automatic compaction; without it,
+compaction only runs after an explicit context-overflow error.
 
 ## Files
 
@@ -70,22 +73,35 @@ Everything is files; there is no state machine.
 - `~/.config/ax/sessions/` — sessions, archived on exit. `/resume` or
   `ax -r` reopens the picker; `ax --resume last` resumes the latest.
 - `~/.config/ax/commands/<name>.md` — user commands: prompt templates for
-  `/name [args]`; `$ARGUMENTS` is replaced by the args.
+  `/name [args]`. `$ARGUMENTS` and `$@` are all args, `$1..$9` positional,
+  `${2:-default}` defaults, `${@:N}` and `${@:N:L}` slices; quoted args are
+  parsed.
 - `~/.agents/skills/<name>/SKILL.md` — skills. The model discovers them
   through the `skills` tool and reads one with the `skill` tool.
 - `~/.config/ax/SYSTEM.md` — optional system prompt, appended to the
   built-in one.
+- Search sessions with `/search <text>` in the TUI or `ax --search <text>`.
+  Sessions are JSONL: one line per message or compaction entry, so line
+  matches map directly to entries.
 
 ## Design
 
 - The loop is the only logic: messages → LLM → tool calls → results →
-  repeat. No memory, retries, or parallel tool execution in the core.
-- `run` is a pure function. It never mutates its input; the transcript is
-  append-only. The agent is frozen after construction.
-- Extend by composition, not hooks: wrap `Provider`, pass your own `Tool`
-  values, own the transcript.
+  repeat. It lives in `run` and is shared by the SDK and the TUI.
+- `run` never mutates its input. The session file is append-only: compaction
+  appends a summary entry (with the recent messages it retains) instead of
+  rewriting history; the LLM context is a projection of the entries.
+- Tool calls in one batch run in parallel, results returned in call order;
+  `edit` and `write` run sequentially to avoid file races.
+- Retries (2×, 408/429/5xx + transport, with backoff) and context-overflow
+  recovery (compact + retry once) live in the transport/session layers, not
+  the turn loop. Tool calls from a response cut off by the output token
+  limit are never executed.
+- Extend by composition: wrap `Provider`, pass your own `Tool` values, own
+  the transcript.
 - Tool errors return to the model as text so it can self-correct; only
-  provider errors abort a run.
+  provider errors abort a run. You can type while the agent runs; the
+  message is injected before the next assistant response.
 
 ## Library
 

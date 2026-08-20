@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-use ax::{Agent, Error, Event, Message, OpenAI, ToolCall};
+use ax::{Agent, Error, Event, Message, OpenAI, Tool, ToolCall};
 use std::cell::RefCell;
 use std::io::{IsTerminal, Read};
 use std::rc::Rc;
@@ -20,10 +20,31 @@ struct FileConfig {
     api_key: String,
     model: String,
     base: String,
+    context_window: Option<usize>,
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(pos) = args.iter().position(|a| a == "--search") {
+        let text = args.get(pos + 1).map(String::as_str).unwrap_or("");
+        if text.is_empty() {
+            eprintln!("usage: ax --search <text>");
+            std::process::exit(1);
+        }
+        for h in ax::session::search(&ax_root(), text) {
+            let id = if h.id == "live" {
+                "live".to_string()
+            } else {
+                h.id.clone()
+            };
+            if h.title.is_empty() {
+                println!("({id}) — {}", h.text);
+            } else {
+                println!("{} ({id}) — {}", h.title, h.text);
+            }
+        }
+        std::process::exit(0);
+    }
     let fc = load_config();
     let (cfg, prompt) = match parse_args(&args, &fc) {
         Ok(x) => x,
@@ -35,15 +56,17 @@ fn main() {
     };
     let mut prompt = prompt;
     if prompt.is_empty() && std::io::stdin().is_terminal() {
+        let tools = ax::tui::build_tools(&cfg.dir, &skills_root());
         let tui_cfg = ax::tui::TuiConfig {
             base: cfg.base.clone(),
             model: cfg.model.clone(),
-            system: resolve_system(&cfg),
+            system: resolve_system(&cfg, &tools),
             dir: cfg.dir.clone(),
             ax_root: ax_root(),
             skills_root: skills_root(),
             api_key: api_key(&fc),
             resume: cfg.resume.clone(),
+            context_window: fc.context_window,
         };
         if let Err(e) = ax::tui::run(tui_cfg) {
             eprintln!("error: {e}");
@@ -241,14 +264,8 @@ fn expand_user_command(prompt: &str, ax_root: &str) -> String {
 }
 
 fn build_agent(cfg: &Config, fc: &FileConfig, on: impl FnMut(Event) + 'static) -> Agent<OpenAI> {
-    let system = resolve_system(cfg);
-    let mut tools = vec![
-        ax::tools::read(),
-        ax::tools::write(),
-        ax::tools::edit(),
-        ax::tools::bash(&cfg.dir),
-    ];
-    tools.extend(ax::skills::skill_tools(&skills_root()));
+    let tools = ax::tui::build_tools(&cfg.dir, &skills_root());
+    let system = resolve_system(cfg, &tools);
     Agent::new(OpenAI::new(cfg.base.clone(), api_key(fc)))
         .model(cfg.model.clone())
         .system(system)
@@ -278,19 +295,33 @@ fn work_dir(cfg: &Config) -> String {
         .unwrap_or_default()
 }
 
-fn resolve_system(cfg: &Config) -> String {
+fn resolve_system(cfg: &Config, tools: &[Tool]) -> String {
     if cfg.system.is_empty() {
-        system_prompt(&work_dir(cfg))
+        system_prompt(tools, &work_dir(cfg))
     } else {
         cfg.system.clone()
     }
 }
 
-fn system_prompt(dir: &str) -> String {
-    let mut out = format!(
-        "You are a coding agent with read, write, edit and bash tools. \
-         Working directory: {dir}."
+fn system_prompt(tools: &[Tool], dir: &str) -> String {
+    let mut out = String::from(
+        "You are an expert coding assistant operating inside ax. You help users by reading files, executing commands, editing code, and writing new files.\n\nAvailable tools:\n",
     );
+    for t in tools {
+        if !t.snippet.is_empty() {
+            out.push_str(&format!("- {}: {}\n", t.name, t.snippet));
+        }
+    }
+    out.push_str(
+        "\nGuidelines:\n\
+         - Be concise in your responses\n\
+         - Show file paths clearly when working with files\n\
+         - Use edit for precise changes; edits[].oldText must match exactly\n\
+         - When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n\
+         - Keep edits[].oldText small while still unique; do not pad with unchanged regions\n\
+         - Tool errors return to you as text; fix them and re-issue\n",
+    );
+    out.push_str(&format!("\nCurrent working directory: {dir}"));
     if let Some(user) = user_system_prompt() {
         out.push_str("\n\n");
         out.push_str(&user);
@@ -338,6 +369,7 @@ fn load_config() -> FileConfig {
         api_key: String::new(),
         model: String::new(),
         base: String::new(),
+        context_window: None,
     };
     let Some(dir) = config_dir() else {
         return c;
@@ -361,6 +393,7 @@ fn load_config() -> FileConfig {
             "api_key" => c.api_key = val,
             "model" => c.model = val,
             "base" => c.base = val,
+            "context_window" => c.context_window = val.parse().ok(),
             _ => {}
         }
     }
@@ -539,6 +572,7 @@ mod tests {
             api_key: String::new(),
             model: String::new(),
             base: String::new(),
+            context_window: None,
         };
         let tokens = [
             "-base",

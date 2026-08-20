@@ -298,13 +298,13 @@ fn fuzz_tools(_rng: &mut Rng, seed: u64, input: &[u8]) {
 
     guard("tool read", seed, || {
         let args = serde_json::json!({"path": path, "offset": 1, "limit": 2}).to_string();
-        let out = (read.run)(&args);
+        let out = (read.run)(&args, &mut |_| {});
         assert_sane("tool read", seed, &out);
     });
     guard("tool write", seed, || {
         let content = String::from_utf8_lossy(input);
         let args = serde_json::json!({"path": path, "content": content}).to_string();
-        let out = (write.run)(&args);
+        let out = (write.run)(&args, &mut |_| {});
         assert_sane("tool write", seed, &out);
     });
     guard("tool edit", seed, || {
@@ -312,13 +312,13 @@ fn fuzz_tools(_rng: &mut Rng, seed: u64, input: &[u8]) {
         let args =
             serde_json::json!({"path": path, "edits": [{"oldText": needle, "newText": "X"}]})
                 .to_string();
-        let out = (edit.run)(&args);
+        let out = (edit.run)(&args, &mut |_| {});
         assert_sane("tool edit", seed, &out);
     });
     guard("tool bash safe", seed, || {
         for cmd in ["echo hi", "true", "pwd", "printf 'x\n'"] {
             let args = serde_json::json!({"command": cmd}).to_string();
-            let out = (bash.run)(&args);
+            let out = (bash.run)(&args, &mut |_| {});
             assert_sane("tool bash", seed, &out);
         }
     });
@@ -336,7 +336,7 @@ fn fuzz_new_tool(_rng: &mut Rng, seed: u64, input: &[u8]) {
     let tool = new_tool("fuzz", "d", "{}", |_: Args| String::new());
     let s = String::from_utf8_lossy(input);
     guard("new_tool args", seed, || {
-        let _ = (tool.run)(&s);
+        let _ = (tool.run)(&s, &mut |_| {});
     });
 }
 
@@ -582,8 +582,9 @@ fn session_load_by_id_sanitizes_paths() {
     let d = dir.to_str().unwrap();
 
     let ok = ax::session::load_by_id(d, "123").expect("valid id loads");
-    assert_eq!(ok.len(), 1);
-    assert_eq!(ok[0].content, "hi");
+    let msgs = ax::session::context_messages(&ok);
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0].content, "hi");
 
     for bad in ["", ".", "..", "../secret", "..\\secret", "/etc/passwd"] {
         assert!(
@@ -632,21 +633,26 @@ fn edit_multi_edit_and_line_endings() {
         {"oldText": "three", "newText": "THREE"},
     ]})
     .to_string();
-    let out = (edit.run)(&args);
-    assert_eq!(out, format!("Successfully replaced 2 block(s) in {p}."));
+    let out = (edit.run)(&args, &mut |_| {});
+    assert!(out.starts_with("Successfully replaced 2 block(s)"), "{out}");
+    assert!(out.contains("Diff:"), "{out}");
+    assert!(out.contains("-1 one"), "{out}");
+    assert!(out.contains("+1 ONE"), "{out}");
+    assert!(out.contains("-3 three"), "{out}");
+    assert!(out.contains("+3 THREE"), "{out}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "ONE\ntwo\nTHREE\n");
 
     std::fs::write(&path, "a\r\nb\r\n").unwrap();
     let args =
         serde_json::json!({"path": p, "edits": [{"oldText": "b", "newText": "c"}]}).to_string();
-    let out = (edit.run)(&args);
+    let out = (edit.run)(&args, &mut |_| {});
     assert!(out.starts_with("Successfully"), "{out}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\r\nc\r\n");
 
     std::fs::write(&path, "x\nx\n").unwrap();
     let args =
         serde_json::json!({"path": p, "edits": [{"oldText": "x", "newText": "y"}]}).to_string();
-    let out = (edit.run)(&args);
+    let out = (edit.run)(&args, &mut |_| {});
     assert!(out.contains("occurrences"), "{out}");
 
     std::fs::write(&path, "abcdef\n").unwrap();
@@ -655,13 +661,13 @@ fn edit_multi_edit_and_line_endings() {
         {"oldText": "bcd", "newText": "Y"},
     ]})
     .to_string();
-    let out = (edit.run)(&args);
+    let out = (edit.run)(&args, &mut |_| {});
     assert!(out.contains("overlap"), "{out}");
 
     std::fs::write(&path, "abc\n").unwrap();
     let args =
         serde_json::json!({"path": p, "edits": [{"oldText": "abc", "newText": "abc"}]}).to_string();
-    let out = (edit.run)(&args);
+    let out = (edit.run)(&args, &mut |_| {});
     assert!(out.contains("No changes"), "{out}");
 
     std::fs::remove_dir_all(&dir).ok();
@@ -677,13 +683,13 @@ fn edit_fuzzy_matches_trailing_whitespace() {
     let p = path.to_str().unwrap();
 
     let args = serde_json::json!({"path": p, "edits": [{"oldText": "let x = 1; ", "newText": "let y = 2;"}]}).to_string();
-    let out = (edit.run)(&args);
+    let out = (edit.run)(&args, &mut |_| {});
     assert!(out.starts_with("Successfully"), "{out}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "let y = 2;\n");
 
     let args = serde_json::json!({"path": p, "edits": [{"oldText": "let z = 9", "newText": "x"}]})
         .to_string();
-    let out = (edit.run)(&args);
+    let out = (edit.run)(&args, &mut |_| {});
     assert!(out.contains("Could not find"), "{out}");
 
     std::fs::remove_dir_all(&dir).ok();
@@ -699,7 +705,7 @@ fn edit_fuzzy_matches_smart_quotes_and_dashes() {
     let p = path.to_str().unwrap();
 
     let args = serde_json::json!({"path": p, "edits": [{"oldText": "print('hi'); // - note", "newText": "print(\"yo\"); // - note"}]}).to_string();
-    let out = (edit.run)(&args);
+    let out = (edit.run)(&args, &mut |_| {});
     assert!(out.starts_with("Successfully"), "{out}");
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
@@ -719,7 +725,7 @@ fn edit_fuzzy_preserves_untouched_lines() {
     let p = path.to_str().unwrap();
 
     let args = serde_json::json!({"path": p, "edits": [{"oldText": "let x = 1; ", "newText": "let y = 2;"}]}).to_string();
-    let out = (edit.run)(&args);
+    let out = (edit.run)(&args, &mut |_| {});
     assert!(out.starts_with("Successfully"), "{out}");
     let result = std::fs::read_to_string(&path).unwrap();
     assert!(
@@ -745,7 +751,7 @@ fn edit_mixed_exact_and_fuzzy_keeps_exact_line_bytes() {
         {"oldText": "q", "newText": "Q"},
     ]})
     .to_string();
-    let out = (edit.run)(&args);
+    let out = (edit.run)(&args, &mut |_| {});
     assert!(out.starts_with("Successfully"), "{out}");
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
@@ -768,7 +774,7 @@ fn edit_fuzzy_multiline_replaces_span() {
         {"oldText": "one\ntwo ", "newText": "X"},
     ]})
     .to_string();
-    let out = (edit.run)(&args);
+    let out = (edit.run)(&args, &mut |_| {});
     assert!(out.starts_with("Successfully"), "{out}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "X\nthree\n");
 
@@ -788,7 +794,7 @@ fn edit_fuzzy_keeps_multibyte_chars_before_match() {
         {"oldText": "x = 1; ", "newText": "y = 2;"},
     ]})
     .to_string();
-    let out = (edit.run)(&args);
+    let out = (edit.run)(&args, &mut |_| {});
     assert!(out.starts_with("Successfully"), "{out}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "'‘q’' y = 2;\n");
 
@@ -805,12 +811,12 @@ fn read_offset_paging() {
     let p = path.to_str().unwrap();
 
     let args = serde_json::json!({"path": p, "offset": 2, "limit": 2}).to_string();
-    let out = (read.run)(&args);
+    let out = (read.run)(&args, &mut |_| {});
     assert!(out.starts_with("line2\nline3"), "{out}");
     assert!(out.contains("2 more lines"), "{out}");
 
     let args = serde_json::json!({"path": p, "offset": 10}).to_string();
-    let out = (read.run)(&args);
+    let out = (read.run)(&args, &mut |_| {});
     assert!(out.contains("beyond end of file"), "{out}");
 
     std::fs::remove_dir_all(&dir).ok();
@@ -822,7 +828,7 @@ fn write_creates_parent_dirs() {
     let path = dir.join("sub").join("f.txt");
     let write = ax::tools::write();
     let args = serde_json::json!({"path": path.to_str().unwrap(), "content": "hi"}).to_string();
-    let out = (write.run)(&args);
+    let out = (write.run)(&args, &mut |_| {});
     assert!(out.starts_with("wrote"), "{out}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "hi");
     std::fs::remove_dir_all(&dir).ok();
@@ -833,7 +839,7 @@ fn bash_timeout_kills() {
     let bash = ax::tools::bash("");
     let args = serde_json::json!({"command": "sleep 5", "timeout": 1}).to_string();
     let start = std::time::Instant::now();
-    let out = (bash.run)(&args);
+    let out = (bash.run)(&args, &mut |_| {});
     let elapsed = start.elapsed();
     assert!(out.contains("timed out"), "{out}");
     assert!(
@@ -846,7 +852,7 @@ fn bash_timeout_kills() {
 fn bash_rejects_zero_timeout() {
     let bash = ax::tools::bash("");
     let args = serde_json::json!({"command": "echo hi", "timeout": 0}).to_string();
-    let out = (bash.run)(&args);
+    let out = (bash.run)(&args, &mut |_| {});
     assert!(out.contains("invalid timeout"), "{out}");
 }
 
@@ -854,11 +860,177 @@ fn bash_rejects_zero_timeout() {
 fn bash_captures_output_and_status() {
     let bash = ax::tools::bash("");
     let args = serde_json::json!({"command": "echo hello"}).to_string();
-    assert_eq!((bash.run)(&args), "hello\n");
+    assert_eq!((bash.run)(&args, &mut |_| {}), "hello\n");
     let args = serde_json::json!({"command": "exit 3"}).to_string();
-    let out = (bash.run)(&args);
+    let out = (bash.run)(&args, &mut |_| {});
     assert_eq!(out, "error: exit status 3");
     let args = serde_json::json!({"command": "printf 'o' ; printf 'e' >&2"}).to_string();
-    let out = (bash.run)(&args);
+    let out = (bash.run)(&args, &mut |_| {});
     assert_eq!(out, "o\ne");
+}
+
+#[test]
+fn edit_normalizes_malformed_args() {
+    let dir = std::env::temp_dir().join(format!("ax-edit-malformed-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("f.txt");
+    let edit = ax::tools::edit();
+    let p = path.to_str().unwrap();
+
+    std::fs::write(&path, "alpha\nbeta\n").unwrap();
+    let edits_str = r#"[{"oldText":"alpha","newText":"ALPHA"}]"#;
+    let args = serde_json::json!({"path": p, "edits": edits_str}).to_string();
+    let out = (edit.run)(&args, &mut |_| {});
+    assert!(out.starts_with("Successfully"), "{out}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "ALPHA\nbeta\n");
+
+    std::fs::write(&path, "alpha\nbeta\n").unwrap();
+    let args =
+        serde_json::json!({"path": p, "edits": {"oldText": "beta", "newText": "BETA"}}).to_string();
+    let out = (edit.run)(&args, &mut |_| {});
+    assert!(out.starts_with("Successfully"), "{out}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "alpha\nBETA\n");
+
+    std::fs::write(&path, "alpha\nbeta\n").unwrap();
+    let args = serde_json::json!({"path": p, "oldText": "alpha", "newText": "A"}).to_string();
+    let out = (edit.run)(&args, &mut |_| {});
+    assert!(out.starts_with("Successfully"), "{out}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "A\nbeta\n");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn session_old_format_and_compaction_roundtrip() {
+    let dir = std::env::temp_dir().join(format!("ax-session-entries-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+
+    std::fs::write(
+        dir.join("session.jsonl"),
+        "{\"Role\":\"user\",\"Content\":\"hi\"}\n",
+    )
+    .unwrap();
+    let entries = ax::session::load_live(d);
+    assert_eq!(entries.len(), 1);
+    let msgs = ax::session::context_messages(&entries);
+    assert_eq!(msgs[0].content, "hi");
+
+    let entry = ax::session::Entry::Compaction {
+        summary: "done stuff".into(),
+        tokens_before: 100,
+        timestamp: 1,
+        retained: vec![Message {
+            role: "assistant".into(),
+            content: "recent".into(),
+            tool_calls: Vec::new(),
+            tool_call_id: String::new(),
+        }],
+    };
+    ax::session::save_live(d, &[entry]);
+    let entries = ax::session::load_live(d);
+    let msgs = ax::session::context_messages(&entries);
+    assert_eq!(msgs.len(), 2);
+    assert!(msgs[0].content.contains("done stuff"));
+    assert!(msgs[0].content.contains("<summary>"));
+    assert_eq!(msgs[1].content, "recent");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn session_overflow_patterns() {
+    assert!(ax::session::is_overflow_error(
+        "openai: 400: This model's maximum context length is 131072 tokens"
+    ));
+    assert!(ax::session::is_overflow_error(
+        "anthropic: prompt is too long: 213462 tokens > 200000 maximum"
+    ));
+    assert!(!ax::session::is_overflow_error(
+        "openai: 429: rate limit reached"
+    ));
+    assert!(!ax::session::is_overflow_error(
+        "openai: 529: Throttling error"
+    ));
+}
+
+#[test]
+fn session_search_finds_text() {
+    let dir = std::env::temp_dir().join(format!("ax-search-{}", std::process::id()));
+    let store = dir.join("sessions");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(
+        store.join("123.jsonl"),
+        "{\"Role\":\"user\",\"Content\":\"fix the overflow bug\"}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("session.jsonl"),
+        "{\"Role\":\"user\",\"Content\":\"unrelated thing\"}\n",
+    )
+    .unwrap();
+    let d = dir.to_str().unwrap();
+    let hits = ax::session::search(d, "overflow");
+    assert_eq!(hits.len(), 1, "hits: {hits:?}");
+    assert!(hits[0].text.contains("overflow"));
+    assert!(ax::session::search(d, "zzz").is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn prompt_template_substitution() {
+    use ax::tui::{UserCommand, expand_user_command, parse_command_args, substitute_args};
+    let uc = |content: &str| UserCommand {
+        name: "x".into(),
+        description: String::new(),
+        content: content.into(),
+    };
+    assert_eq!(parse_command_args("hi there"), vec!["hi", "there"]);
+    assert_eq!(
+        parse_command_args("say \"hi there\" now"),
+        vec!["say", "hi there", "now"]
+    );
+    assert_eq!(parse_command_args("a 'b c'"), vec!["a", "b c"]);
+
+    let args = parse_command_args("one two three");
+    assert_eq!(
+        substitute_args("first=$1 last=$3", &args),
+        "first=one last=three"
+    );
+    assert_eq!(substitute_args("all=$@", &args), "all=one two three");
+    assert_eq!(
+        substitute_args("all=$ARGUMENTS", &args),
+        "all=one two three"
+    );
+    assert_eq!(substitute_args("d=${2:-default}", &args), "d=two");
+    assert_eq!(substitute_args("d=${9:-default}", &args), "d=default");
+    assert_eq!(substitute_args("from=${@:2}", &args), "from=two three");
+    assert_eq!(substitute_args("from=${@:2:1}", &args), "from=two");
+    assert_eq!(substitute_args("d=${1:-fallback}", &[]), "d=fallback");
+
+    assert_eq!(expand_user_command(&uc("say $1"), "hi"), "say hi");
+    assert_eq!(
+        expand_user_command(&uc("say $ARGUMENTS"), "hi there"),
+        "say hi there"
+    );
+    assert_eq!(expand_user_command(&uc("plain"), "hi"), "plain\n\nhi");
+}
+
+#[test]
+fn skill_name_validation() {
+    assert!(ax::skills::validate_skill_name("good-name2").is_none());
+    assert!(ax::skills::validate_skill_name("Bad").is_some());
+    assert!(ax::skills::validate_skill_name("-lead").is_some());
+    assert!(ax::skills::validate_skill_name("trail-").is_some());
+    assert!(ax::skills::validate_skill_name("a--b").is_some());
+    assert!(ax::skills::validate_skill_name("has space").is_some());
+}
+
+#[test]
+fn builtin_tool_snippets_present() {
+    let tools = ax::tui::build_tools("", "");
+    for name in ["read", "write", "edit", "bash"] {
+        let t = tools.iter().find(|t| t.name == name).expect(name);
+        assert!(!t.snippet.is_empty(), "{name} has no snippet");
+    }
 }

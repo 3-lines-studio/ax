@@ -29,7 +29,7 @@ cargo clippy --fix --allow-dirty && cargo fmt && cargo test
 
 ## Project rules
 
-- Release binary stays under 1 MB (currently ~785 KB).
+- Release binary stays under 1 MB (currently ~920 KB).
 - Dependencies are exactly `serde`, `serde_json`, `libc`. No new deps
   without asking. No compile-time curl.
 - Extensibility is files-over-code: skills, user commands, SYSTEM.md. No
