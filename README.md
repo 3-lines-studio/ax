@@ -30,6 +30,18 @@ Requires nightly Rust (for `-Zbuild-std`, used to rebuild `std` with
 (`rustup component add rust-src`), plus libcurl dev headers
 (`libcurl4-openssl-dev` on Debian/Ubuntu).
 
+## Testing
+
+```sh
+make harness   # release build + black-box end-to-end harness
+```
+
+`scripts/harness.py` drives the real binary the way a user would: a hermetic
+HOME and XDG_CONFIG_HOME, a scripted mock OpenAI-compatible endpoint,
+one-shot CLI runs, and a PTY session for the TUI. Run one case with
+`python3 scripts/harness.py --filter <name>`; list cases with `--list`.
+Unit/integration tests stay in `cargo test`.
+
 ## Quick start
 
 Interactive TUI:

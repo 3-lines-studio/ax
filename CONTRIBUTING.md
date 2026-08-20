@@ -2,14 +2,17 @@
 
 ## Quality gate
 
-Run before finishing any change:
+Run `make check` before finishing any change. It runs fmt, clippy,
+`cargo test`, the release build, and the black-box harness:
 
 ```bash
-cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test && cargo build --release
+make check
 ```
 
-All four must pass. The last command catches linker/panic-abort issues that
-tests miss.
+The release build catches linker/panic-abort issues that unit tests miss.
+`scripts/harness.py` (also runnable standalone via `make harness`) drives the
+real binary end to end with a mock OpenAI endpoint and a PTY for the TUI; it
+needs python3, already a dev dependency for `scripts/mock-server.py`.
 
 Cheaper daily loop (autofixes without the gate):
 

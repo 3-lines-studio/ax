@@ -407,10 +407,11 @@ pub fn search(dir: &str, text: &str) -> Vec<SearchHit> {
         let Ok(data) = std::fs::read_to_string(path) else {
             return;
         };
+        let entries = read_entries(path);
         let title = std::fs::read_to_string(title_path(dir, id))
             .ok()
             .filter(|t| !t.trim().is_empty())
-            .unwrap_or_default();
+            .unwrap_or_else(|| title_from_entries(&entries));
         let updated = std::fs::metadata(path)
             .ok()
             .and_then(|m| m.modified().ok())

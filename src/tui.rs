@@ -361,6 +361,7 @@ struct Tui {
     painted_once: bool,
     last_capacity: usize,
     last_frame: Vec<String>,
+    last_chrome: Option<(usize, Vec<String>, usize, usize)>,
     live_in: usize,
     live_out: usize,
     rows: u16,
@@ -419,6 +420,7 @@ impl Tui {
             painted_once: false,
             last_capacity: 0,
             last_frame: Vec::new(),
+            last_chrome: None,
             live_in: 0,
             live_out: 0,
             rows: 24,
@@ -1946,20 +1948,31 @@ impl Tui {
         }
         let vis = content.len().min(capacity);
         self.last_input_row = (vis + 1) as u16;
-        for row in (vis + 1)..=rows {
-            let _ = write!(out, "{}", term::move_to(row as u16, 1));
-            let _ = out.write_all(term::clear_eol().as_bytes());
+        let same_chrome = !resized
+            && self
+                .last_chrome
+                .as_ref()
+                .map(|(v, c, r, col)| {
+                    *v == vis && c == &chrome && *r == cursor_row && *col == cursor_col
+                })
+                .unwrap_or(false);
+        if !same_chrome {
+            for row in (vis + 1)..=rows {
+                let _ = write!(out, "{}", term::move_to(row as u16, 1));
+                let _ = out.write_all(term::clear_eol().as_bytes());
+            }
+            for (i, line) in chrome.iter().enumerate() {
+                let _ = write!(out, "{}", term::move_to((vis + 1 + i) as u16, 1));
+                let _ = out.write_all(line.as_bytes());
+            }
+            let _ = write!(
+                out,
+                "{}",
+                term::move_to((vis + 1 + cursor_row) as u16, cursor_col as u16)
+            );
+            let _ = out.write_all(term::cursor_visible().as_bytes());
+            self.last_chrome = Some((vis, chrome, cursor_row, cursor_col));
         }
-        for (i, line) in chrome.iter().enumerate() {
-            let _ = write!(out, "{}", term::move_to((vis + 1 + i) as u16, 1));
-            let _ = out.write_all(line.as_bytes());
-        }
-        let _ = write!(
-            out,
-            "{}",
-            term::move_to((vis + 1 + cursor_row) as u16, cursor_col as u16)
-        );
-        let _ = out.write_all(term::cursor_visible().as_bytes());
         let _ = out.flush();
     }
 
