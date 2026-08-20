@@ -333,6 +333,7 @@ struct Tui {
     full_scroll: usize,
     streamed: Vec<String>,
     painted_once: bool,
+    last_capacity: usize,
     last_frame: Vec<String>,
     live_in: usize,
     live_out: usize,
@@ -384,6 +385,7 @@ impl Tui {
             full_scroll: 0,
             streamed: Vec::new(),
             painted_once: false,
+            last_capacity: 0,
             last_frame: Vec::new(),
             live_in: 0,
             live_out: 0,
@@ -1697,7 +1699,13 @@ impl Tui {
         let (chrome, cursor_row, cursor_col) = self.chrome_rows();
         let rows = (self.rows as usize).max(1);
         let capacity = rows.saturating_sub(chrome.len()).max(1);
-        self.update_content(out, &content, rows, capacity);
+        if capacity != self.last_capacity {
+            self.repaint_tail(out, &content, capacity);
+            self.streamed = content.to_vec();
+            self.last_capacity = capacity;
+        } else {
+            self.update_content(out, &content, rows, capacity);
+        }
         let vis = content.len().min(capacity);
         self.last_input_row = (vis + 1) as u16;
         for row in (vis + 1)..=rows {

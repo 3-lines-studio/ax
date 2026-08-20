@@ -125,10 +125,17 @@ pub fn archive_live(dir: &str) -> Option<String> {
     if msgs.is_empty() {
         return None;
     }
-    let id = format!("{}", now_ms());
     let store = store_dir(dir);
     let _ = std::fs::create_dir_all(&store);
-    let dest = store.join(format!("{id}.jsonl"));
+    let base = format!("{}", now_ms());
+    let mut id = base.clone();
+    let mut dest = store.join(format!("{id}.jsonl"));
+    let mut n = 1;
+    while dest.exists() {
+        id = format!("{base}-{n}");
+        dest = store.join(format!("{id}.jsonl"));
+        n += 1;
+    }
     if std::fs::copy(live_path(dir), &dest).is_err() {
         return None;
     }
@@ -144,6 +151,9 @@ pub fn archive_live(dir: &str) -> Option<String> {
 }
 
 pub fn load_by_id(dir: &str, id: &str) -> Option<Vec<Message>> {
+    if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
+        return None;
+    }
     let path = store_dir(dir).join(format!("{id}.jsonl"));
     if !path.exists() {
         return None;

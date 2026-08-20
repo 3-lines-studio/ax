@@ -35,5 +35,3 @@ cargo clippy --fix --allow-dirty && cargo fmt && cargo test
 - Extensibility is files-over-code: skills, user commands, SYSTEM.md. No
   plugin system, no MCP, no permissions layer.
 - Config lives at `~/.config/ax/`; skills at `~/.agents/skills/`.
-- Never push to git. Never generate or run DB migrations (there is no DB).
-- Match existing code style. Touch only what a change requires.

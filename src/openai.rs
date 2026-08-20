@@ -308,6 +308,8 @@ struct OaStreamChoice {
     delta: OaDeltaMessage,
 }
 
+const MAX_STREAM_TOOL_CALLS: usize = 64;
+
 impl StreamAcc {
     fn feed(&mut self, data: &[u8], tx: &std::sync::mpsc::Sender<StreamEvent>) {
         self.buf.extend_from_slice(data);
@@ -356,6 +358,9 @@ impl StreamAcc {
         }
         if let Some(calls) = choice.delta.tool_calls {
             for call in calls {
+                if call.index >= MAX_STREAM_TOOL_CALLS {
+                    continue;
+                }
                 let index = call.index;
                 while self.calls.len() <= index {
                     self.calls.push(OaToolCallDelta::default());

@@ -515,4 +515,91 @@ mod tests {
         assert_eq!(fmt_dur(std::time::Duration::from_millis(1500)), "1.5s");
         assert_eq!(fmt_dur(std::time::Duration::from_secs(65)), "1m5s");
     }
+
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            x.wrapping_mul(0x2545F4914F6CDD1D)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+    }
+
+    #[test]
+    fn parse_args_fuzz() {
+        let fc = FileConfig {
+            api_key: String::new(),
+            model: String::new(),
+            base: String::new(),
+        };
+        let tokens = [
+            "-base",
+            "-model",
+            "-system",
+            "-C",
+            "-r",
+            "--resume",
+            "--resume=",
+            "-",
+            "--",
+            "foo",
+            "",
+            "=x",
+            "-x",
+            "--x",
+            "-base=",
+            "-model=x",
+            "prompt",
+            "with space",
+        ];
+        for si in 0..64u64 {
+            let mut rng = Rng(si ^ 0xABCDEF1234567890);
+            for _ in 0..200 {
+                let n = rng.below(6);
+                let mut args = Vec::new();
+                for _ in 0..n {
+                    args.push(tokens[rng.below(tokens.len())].to_string());
+                }
+                if args.iter().any(|a| a == "-h" || a == "--help") {
+                    continue;
+                }
+                let _ = parse_args(&args, &fc);
+            }
+        }
+    }
+
+    #[test]
+    fn load_config_real_file_roundtrip() {
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let path = std::path::Path::new(&home)
+            .join(".config")
+            .join("ax")
+            .join("config");
+        if !path.exists() {
+            return;
+        }
+        let c = load_config();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let expect = |k: &str| -> String {
+            text.lines()
+                .find_map(|l| {
+                    let (kk, v) = l.split_once('=')?;
+                    (kk.trim() == k).then(|| v.trim().trim_matches('"').to_string())
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(c.base, expect("base"), "base round-trip");
+        assert_eq!(c.model, expect("model"), "model round-trip");
+        assert_eq!(c.api_key, expect("api_key"), "api_key round-trip");
+    }
 }
