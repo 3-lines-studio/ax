@@ -33,7 +33,7 @@ impl OpenAI {
             "Authorization".to_string(),
             format!("Bearer {}", self.api_key),
         )];
-        let resp = crate::http::get(&url, &headers).map_err(Error::Provider)?;
+        let resp = crate::http::get(&url, &headers).map_err(Error::Transport)?;
         if resp.status != 200 {
             return Err(Error::Provider(format!(
                 "openai: models: unexpected status {}",
@@ -151,11 +151,12 @@ fn run_request(
     cancel: &Arc<AtomicBool>,
     tx: &Sender<StreamEvent>,
 ) -> Result<Response, Error> {
-    let mut easy = crate::curlffi::Easy::new().map_err(err)?;
+    let mut easy = crate::curlffi::Easy::new().map_err(Error::Transport)?;
     easy.url(url).map_err(err)?;
     easy.post().map_err(err)?;
     easy.post_fields(body).map_err(err)?;
     easy.fail_on_error(false).map_err(err)?;
+    easy.connect_timeout(10).map_err(err)?;
     easy.headers(headers).map_err(err)?;
 
     let acc = Rc::new(RefCell::new(StreamAcc::default()));
@@ -179,7 +180,7 @@ fn run_request(
             if cancel.load(Ordering::Relaxed) {
                 Error::Provider("interrupted".into())
             } else {
-                err(e)
+                Error::Transport(e)
             }
         })?;
         easy.response_code().map_err(err)? as u16
@@ -321,7 +322,20 @@ const MAX_STREAM_TOOL_CALLS: usize = 64;
 
 impl StreamAcc {
     fn feed(&mut self, data: &[u8], tx: &std::sync::mpsc::Sender<StreamEvent>) {
-        self.buf.extend_from_slice(data);
+        if data.contains(&b'\r') || self.buf.last() == Some(&b'\r') {
+            // Normalize CRLF to LF so event splitting works even when a
+            // chunk boundary lands between "\r" and "\n".
+            let mut prev_cr = self.buf.last() == Some(&b'\r');
+            for &b in data {
+                if b == b'\n' && prev_cr {
+                    self.buf.pop();
+                }
+                self.buf.push(b);
+                prev_cr = b == b'\r';
+            }
+        } else {
+            self.buf.extend_from_slice(data);
+        }
         loop {
             let sep = find_bytes(&self.buf, b"\n\n");
             let Some(sep) = sep else { break };
@@ -335,6 +349,10 @@ impl StreamAcc {
         for line in event.split(|&b| b == b'\n') {
             let line = std::str::from_utf8(line).unwrap_or("");
             if let Some(data) = line.strip_prefix("data:") {
+                // SSE joins multiple data: lines with a newline.
+                if !payload.is_empty() {
+                    payload.push('\n');
+                }
                 payload.push_str(data.trim());
             }
         }
@@ -576,4 +594,57 @@ struct OaUsage {
 #[derive(Deserialize)]
 struct OaError {
     error: OaErrorPayload,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn feed_all(acc: &mut StreamAcc, chunks: &[&[u8]]) -> Vec<StreamEvent> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        for c in chunks {
+            acc.feed(c, &tx);
+        }
+        drop(tx);
+        rx.try_iter().collect()
+    }
+
+    #[test]
+    fn sse_parses_crlf_events() {
+        let mut acc = StreamAcc::default();
+        let full = b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\r\n\r\n";
+        let got = feed_all(&mut acc, &[full]);
+        assert!(
+            got.iter()
+                .any(|e| matches!(e, StreamEvent::Content(c) if c == "hi")),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn sse_crlf_split_across_chunk_boundary() {
+        let mut acc = StreamAcc::default();
+        let full = b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\r\n\r\n";
+        let split = full.iter().position(|&b| b == b'\r').unwrap();
+        let got = feed_all(&mut acc, &[&full[..split], &full[split..]]);
+        assert!(
+            got.iter()
+                .any(|e| matches!(e, StreamEvent::Content(c) if c == "hi")),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn sse_joins_multi_line_data_fields() {
+        let mut acc = StreamAcc::default();
+        let got = feed_all(
+            &mut acc,
+            &[b"data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}\ndata: ]}\n\n"],
+        );
+        assert!(
+            got.iter()
+                .any(|e| matches!(e, StreamEvent::Content(c) if c == "x")),
+            "{got:?}"
+        );
+    }
 }

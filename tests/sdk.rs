@@ -555,7 +555,8 @@ fn run_does_not_retry_after_events_were_emitted() {
 
 #[test]
 fn trim_trailing_tool_messages() {
-    let mut msgs = vec![
+    // A complete exchange is kept.
+    let mut complete = vec![
         user("go"),
         call_tool("c1", "read", "{}"),
         Message {
@@ -565,11 +566,130 @@ fn trim_trailing_tool_messages() {
             tool_call_id: "c1".into(),
         },
     ];
-    ax::session::trim_trailing_tool_messages(&mut msgs);
-    assert_eq!(msgs.len(), 2);
-    assert_eq!(msgs[1].role, "assistant");
+    ax::session::trim_trailing_tool_messages(&mut complete);
+    assert_eq!(complete.len(), 3);
+
+    // A partial exchange (2 calls, 1 result) is dropped whole, including
+    // its dangling assistant message.
+    let mut partial = vec![
+        user("go"),
+        Message {
+            role: "assistant".into(),
+            content: String::new(),
+            tool_calls: vec![
+                ToolCall {
+                    id: "c1".into(),
+                    name: "read".into(),
+                    arguments: "{}".into(),
+                },
+                ToolCall {
+                    id: "c2".into(),
+                    name: "read".into(),
+                    arguments: "{}".into(),
+                },
+            ],
+            tool_call_id: String::new(),
+        },
+        Message {
+            role: "tool".into(),
+            content: "file contents".into(),
+            tool_calls: Vec::new(),
+            tool_call_id: "c1".into(),
+        },
+    ];
+    ax::session::trim_trailing_tool_messages(&mut partial);
+    assert_eq!(partial.len(), 1);
+    assert_eq!(partial[0].role, "user");
 
     let mut msgs2 = vec![user("go")];
     ax::session::trim_trailing_tool_messages(&mut msgs2);
     assert_eq!(msgs2.len(), 1);
+}
+
+struct NopSink;
+
+impl ax::run::Sink for NopSink {}
+
+/// Cancelling mid-batch must still produce a provider-valid transcript:
+/// every tool call gets a result, even the ones never executed.
+#[test]
+fn run_cancel_mid_batch_synthesizes_results() {
+    struct CancelProvider;
+
+    impl Provider for CancelProvider {
+        fn complete(&self, _req: &Request) -> Result<Response, Error> {
+            unreachable!("cancel fake only streams")
+        }
+
+        fn stream(&self, _req: &Request, _cancel: &Arc<AtomicBool>) -> StreamHandle {
+            let (tx, rx) = mpsc::channel();
+            let calls = vec![
+                ToolCall {
+                    id: "c1".into(),
+                    name: "boom".into(),
+                    arguments: "{}".into(),
+                },
+                ToolCall {
+                    id: "c2".into(),
+                    name: "boom".into(),
+                    arguments: "{}".into(),
+                },
+            ];
+            let thread = std::thread::spawn(move || {
+                for c in &calls {
+                    let _ = tx.send(StreamEvent::ToolCall(c.clone()));
+                }
+                let _ = tx.send(StreamEvent::Done);
+                Ok(Response {
+                    message: Message {
+                        role: "assistant".into(),
+                        content: String::new(),
+                        tool_calls: calls,
+                        tool_call_id: String::new(),
+                    },
+                    usage: Usage::default(),
+                    stop_reason: String::new(),
+                })
+            });
+            StreamHandle::new(rx, thread)
+        }
+    }
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let c2 = cancel.clone();
+    let mut boom = new_tool("boom", "", "{}", move |_: Empty| {
+        c2.store(true, std::sync::atomic::Ordering::Relaxed);
+        "did work".to_string()
+    });
+    boom.sequential = true;
+    let opts = ax::run::RunOptions {
+        model: "m",
+        system: "",
+        tools: &[boom],
+        max_turns: 5,
+    };
+    let end = ax::run::run_stream(&CancelProvider, &opts, &[user("go")], &cancel, &mut NopSink);
+    assert!(
+        matches!(end.outcome, ax::run::Outcome::Cancelled),
+        "{:?}",
+        end.outcome
+    );
+    let msgs = end.messages;
+    let pos = msgs
+        .iter()
+        .rposition(|m| !m.tool_calls.is_empty())
+        .expect("assistant with tool calls");
+    let results = &msgs[pos + 1..];
+    assert_eq!(results.len(), 2, "every call needs a result");
+    assert_eq!(results[0].content, "did work");
+    assert!(
+        results[1].content.contains("interrupted"),
+        "got: {}",
+        results[1].content
+    );
+
+    // The transcript survives the pre-turn validity trim untouched.
+    let mut trimmed = msgs.clone();
+    ax::session::trim_trailing_tool_messages(&mut trimmed);
+    assert_eq!(trimmed.len(), msgs.len());
 }

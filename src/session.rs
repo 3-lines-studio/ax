@@ -50,16 +50,18 @@ pub fn now_ms() -> i64 {
 pub const COMPACTION_PREFIX: &str = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
 pub const COMPACTION_SUFFIX: &str = "\n</summary>";
 
-/// Project entries into the LLM context: a compaction entry becomes a summary
-/// message followed by its retained recent messages.
+/// Project entries into the LLM context. A compaction entry supersedes every
+/// message before it: the projection restarts from its summary plus the
+/// recent messages it retains. The entry list itself is never rewritten.
 pub fn context_messages(entries: &[Entry]) -> Vec<Message> {
-    let mut out = Vec::new();
+    let mut out: Vec<Message> = Vec::new();
     for e in entries {
         match e {
             Entry::Message { message } => out.push(message.clone()),
             Entry::Compaction {
                 summary, retained, ..
             } => {
+                out.clear();
                 out.push(Message {
                     role: "user".into(),
                     content: format!("{COMPACTION_PREFIX}{summary}{COMPACTION_SUFFIX}"),
@@ -86,6 +88,10 @@ fn read_entries(path: &Path) -> Vec<Entry> {
     let Ok(data) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
+    parse_entries(&data)
+}
+
+fn parse_entries(data: &str) -> Vec<Entry> {
     data.lines()
         .filter(|l| !l.trim().is_empty())
         .filter_map(parse_entry_line)
@@ -195,12 +201,13 @@ pub fn archive_live(dir: &str) -> Option<String> {
         return None;
     }
     let live_title_path = Path::new(dir).join("session.title");
-    if let Ok(t) = std::fs::read_to_string(&live_title_path) {
-        if !t.trim().is_empty() {
-            let _ = std::fs::write(title_path(dir, &id), t.trim());
-        }
-        let _ = std::fs::remove_file(live_title_path);
-    }
+    let title = std::fs::read_to_string(&live_title_path)
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| title_from_entries(&read_entries(&dest)));
+    let _ = std::fs::write(title_path(dir, &id), title);
+    let _ = std::fs::remove_file(live_title_path);
     let _ = std::fs::remove_file(live_path(dir));
     Some(id)
 }
@@ -238,13 +245,20 @@ pub fn estimate_tokens(msgs: &[Message]) -> usize {
     chars / 4
 }
 
-/// Drop trailing tool-result messages. A request whose last message is a
-/// tool result (no following assistant response) is rejected by providers;
-/// this happens after a run failed between turns or a session was resumed
-/// mid-batch.
+/// Ensure the transcript does not end with an unanswered tool-call exchange:
+/// providers reject an assistant message whose tool_calls lack matching tool
+/// results. Drops such an exchange (e.g. from a crash mid-batch in an older
+/// session); complete exchanges are kept.
 pub fn trim_trailing_tool_messages(msgs: &mut Vec<Message>) {
-    while msgs.last().map(|m| m.role == "tool").unwrap_or(false) {
-        msgs.pop();
+    let Some(pos) = msgs
+        .iter()
+        .rposition(|m| m.role == "assistant" && !m.tool_calls.is_empty())
+    else {
+        return;
+    };
+    let answered = msgs[pos + 1..].iter().filter(|m| m.role == "tool").count();
+    if answered < msgs[pos].tool_calls.len() {
+        msgs.truncate(pos);
     }
 }
 
@@ -407,7 +421,7 @@ pub fn search(dir: &str, text: &str) -> Vec<SearchHit> {
         let Ok(data) = std::fs::read_to_string(path) else {
             return;
         };
-        let entries = read_entries(path);
+        let entries = parse_entries(&data);
         let title = std::fs::read_to_string(title_path(dir, id))
             .ok()
             .filter(|t| !t.trim().is_empty())

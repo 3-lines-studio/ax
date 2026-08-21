@@ -107,7 +107,7 @@ Everything is files; there is no state machine.
   rewriting history; the LLM context is a projection of the entries.
 - Tool calls in one batch run in parallel, results returned in call order;
   `edit` and `write` run sequentially to avoid file races.
-- Retries (2×, 408/429/5xx + transport, with backoff) and context-overflow
+- Retries (2×, 408/409/429/5xx + transport, with backoff) and context-overflow
   recovery (compact + retry once) live in the transport/session layers, not
   the turn loop. Tool calls from a response cut off by the output token
   limit are never executed.

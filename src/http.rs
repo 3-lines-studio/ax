@@ -11,6 +11,7 @@ pub fn get(url: &str, headers: &[(String, String)]) -> Result<Response, String> 
     let mut easy = crate::curlffi::Easy::new()?;
     easy.url(url)?;
     easy.http_get()?;
+    easy.connect_timeout(10)?;
     easy.headers(headers)?;
     let mut sink = Vec::new();
     crate::curlffi::perform_with_sink(&mut easy, &mut sink)?;

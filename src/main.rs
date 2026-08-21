@@ -198,6 +198,9 @@ fn one_shot(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
         drop(st);
         let m = &e.message;
         if m.role == "assistant" {
+            if !m.content.is_empty() && !m.tool_calls.is_empty() {
+                eprintln!("{}", m.content);
+            }
             for c in &m.tool_calls {
                 eprintln!("[{}] {} {}", e.turn, c.name, render_args(c));
             }

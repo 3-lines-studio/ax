@@ -18,8 +18,10 @@ fn retryable(e: &Error) -> bool {
         Error::Http { status, .. } => {
             *status == 408 || *status == 409 || *status == 429 || *status >= 500
         }
-        Error::Provider(msg) => msg != "interrupted" && msg != "request thread panicked",
-        Error::MaxTurns(_) => false,
+        // Connection-level failures are worth another attempt; provider
+        // errors (bad responses, parse failures, cancellation) are not.
+        Error::Transport(_) => true,
+        _ => false,
     }
 }
 
@@ -180,12 +182,16 @@ fn run_tool_batch(
             .unwrap_or(false)
     });
     if truncated || any_sequential || calls.len() <= 1 {
+        let mut interrupted = false;
         for call in calls {
-            if cancel.load(Ordering::Relaxed) {
-                return false;
-            }
+            interrupted |= cancel.load(Ordering::Relaxed);
             sink.tool_start(&call);
-            let output = if truncated {
+            let output = if interrupted {
+                // Synthesize a result for every un-executed call so the
+                // transcript stays valid: providers reject an assistant
+                // message whose tool_calls lack matching tool results.
+                "error: tool call not executed: the run was interrupted.".to_string()
+            } else if truncated {
                 "error: tool call not executed: the response hit the output token limit, so its arguments may be truncated. Re-issue the tool call with complete arguments.".to_string()
             } else {
                 exec(tools, &call, sink)

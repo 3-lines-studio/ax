@@ -21,6 +21,7 @@ const CURLOPT_NOPROGRESS: c_int = 43;
 const CURLOPT_FAILONERROR: c_int = 45;
 const CURLOPT_POST: c_int = 47;
 const CURLOPT_POSTFIELDSIZE: c_int = 60;
+const CURLOPT_CONNECTTIMEOUT: c_int = 78;
 const CURLOPT_HTTPGET: c_int = 80;
 const CURLOPT_PROGRESSDATA: c_int = 10057;
 const CURLOPT_WRITEFUNCTION: c_int = 20011;
@@ -176,6 +177,12 @@ impl Easy {
 
     pub fn fail_on_error(&mut self, v: bool) -> Result<(), String> {
         setopt_long(self, CURLOPT_FAILONERROR, v as c_long)
+    }
+
+    /// Seconds to wait for the connection to be established. Without this a
+    /// server that accepts but never responds blocks the run forever.
+    pub fn connect_timeout(&mut self, secs: c_long) -> Result<(), String> {
+        setopt_long(self, CURLOPT_CONNECTTIMEOUT, secs)
     }
 
     pub fn headers(&mut self, headers: &[(String, String)]) -> Result<(), String> {

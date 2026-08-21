@@ -954,7 +954,10 @@ impl Tui {
             timestamp: session::now_ms(),
             retained,
         };
-        let entries = vec![entry];
+        // Append-only: the summary entry joins the existing entries; the
+        // context projection drops what it supersedes.
+        let mut entries = session::load_live(&self.cfg.ax_root);
+        entries.push(entry);
         session::save_live(&self.cfg.ax_root, &entries);
         self.msgs = session::context_messages(&entries);
         self.entries.push(Entry::Notice("compacted".into()));
@@ -1216,6 +1219,14 @@ impl Tui {
             Some((n, r)) => (n, r.trim()),
             None => (cmd, ""),
         };
+        // These replace session state; running them mid-turn would clobber
+        // the transcript the worker is still producing.
+        if self.running && matches!(name, "clear" | "new" | "reset" | "resume" | "compact") {
+            self.entries.push(Entry::Notice(
+                "agent is running; ctrl+c interrupts it first".into(),
+            ));
+            return;
+        }
         match name {
             "help" => self.open_screen(Screen::Help),
             "clear" | "new" => self.fresh_session(true),

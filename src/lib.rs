@@ -58,6 +58,7 @@ pub struct Usage {
     pub output: usize,
 }
 
+#[derive(Debug)]
 pub enum StreamEvent {
     Content(String),
     ToolCall(ToolCall),
@@ -99,14 +100,20 @@ pub struct Event {
 #[derive(Debug)]
 pub enum Error {
     MaxTurns(Vec<Message>),
+    /// Connection-level failure (DNS, TLS, refused, timeout): retryable.
+    Transport(String),
     Provider(String),
-    Http { status: u16, message: String },
+    Http {
+        status: u16,
+        message: String,
+    },
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::MaxTurns(_) => write!(f, "ax: max turns reached"),
+            Error::Transport(s) => write!(f, "{s}"),
             Error::Provider(s) => write!(f, "{s}"),
             Error::Http { message, .. } => write!(f, "{message}"),
         }

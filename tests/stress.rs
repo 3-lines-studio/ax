@@ -939,6 +939,55 @@ fn session_old_format_and_compaction_roundtrip() {
 }
 
 #[test]
+fn session_compaction_is_append_only() {
+    let dir = std::env::temp_dir().join(format!("ax-compact-append-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+
+    let msg = |role: &str, content: &str| Message {
+        role: role.into(),
+        content: content.into(),
+        tool_calls: Vec::new(),
+        tool_call_id: String::new(),
+    };
+    let mut entries = vec![
+        ax::session::Entry::Message {
+            message: msg("user", "findable old detail ZEBRA"),
+        },
+        ax::session::Entry::Message {
+            message: msg("assistant", "noted"),
+        },
+    ];
+    ax::session::save_live(d, &entries);
+
+    // Compaction appends; nothing is rewritten or dropped from disk.
+    entries.push(ax::session::Entry::Compaction {
+        summary: "earlier work summarized".into(),
+        tokens_before: 100,
+        timestamp: 1,
+        retained: vec![msg("assistant", "recent")],
+    });
+    entries.push(ax::session::Entry::Message {
+        message: msg("user", "new question"),
+    });
+    ax::session::save_live(d, &entries);
+    assert_eq!(ax::session::load_live(d).len(), 4, "history stays on disk");
+
+    // The projection supersedes everything before the summary.
+    let msgs = ax::session::context_messages(&ax::session::load_live(d));
+    assert_eq!(msgs.len(), 3);
+    assert!(msgs[0].content.contains("earlier work summarized"));
+    assert_eq!(msgs[1].content, "recent");
+    assert_eq!(msgs[2].content, "new question");
+
+    // Pre-compaction history remains searchable.
+    let hits = ax::session::search(d, "ZEBRA");
+    assert_eq!(hits.len(), 1, "old history must stay searchable");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn session_overflow_patterns() {
     assert!(ax::session::is_overflow_error(
         "openai: 400: This model's maximum context length is 131072 tokens"
