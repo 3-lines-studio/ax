@@ -12,6 +12,8 @@ pub fn get(url: &str, headers: &[(String, String)]) -> Result<Response, String> 
     easy.url(url)?;
     easy.http_get()?;
     easy.connect_timeout(10)?;
+    // No streaming and no cancel hook here: cap the whole transfer.
+    easy.timeout(30)?;
     easy.headers(headers)?;
     let mut sink = Vec::new();
     crate::curlffi::perform_with_sink(&mut easy, &mut sink)?;

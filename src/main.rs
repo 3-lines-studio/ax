@@ -205,7 +205,7 @@ fn one_shot(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
                 eprintln!("[{}] {} {}", e.turn, c.name, render_args(c));
             }
         } else if m.role == "tool" {
-            eprintln!("[{}] -> {}", e.turn, render_result(&m.content, false));
+            eprintln!("[{}] -> {}", e.turn, render_result(&m.content));
         }
     };
     let start = Instant::now();
@@ -443,10 +443,7 @@ fn render_args(call: &ToolCall) -> String {
     call.arguments.trim().to_string()
 }
 
-fn render_result(s: &str, verbose: bool) -> String {
-    if verbose {
-        return s.to_string();
-    }
+fn render_result(s: &str) -> String {
     if s.contains("error:") {
         s.lines()
             .rev()
@@ -540,10 +537,9 @@ mod tests {
     #[test]
     fn render_result_cases() {
         let fail = "# pkg/a\n./a.go:12:3: undefined: Foo\nerror: exit status 1\n";
-        assert_eq!(render_result(fail, false), "error: exit status 1");
-        assert_eq!(render_result("ok ax 0.003s\nmore", false), "ok ax 0.003s");
-        assert_eq!(render_result(fail, true), fail);
-        assert_eq!(render_result("build error: bad\nnext", false), "next");
+        assert_eq!(render_result(fail), "error: exit status 1");
+        assert_eq!(render_result("ok ax 0.003s\nmore"), "ok ax 0.003s");
+        assert_eq!(render_result("build error: bad\nnext"), "next");
     }
 
     #[test]

@@ -63,7 +63,9 @@ impl OpenAI {
             Ok((url, headers, body)) => {
                 let c2 = cancel.clone();
                 let tx2 = tx.clone();
-                std::thread::spawn(move || run_request(&url, &headers, &body, true, &c2, &tx2))
+                std::thread::spawn(move || {
+                    run_request(&url, &headers, &body, true, &c2, Some(&tx2))
+                })
             }
             Err(e) => std::thread::spawn(move || Err(e)),
         }
@@ -149,27 +151,27 @@ fn run_request(
     body: &[u8],
     stream: bool,
     cancel: &Arc<AtomicBool>,
-    tx: &Sender<StreamEvent>,
+    tx: Option<&Sender<StreamEvent>>,
 ) -> Result<Response, Error> {
     let mut easy = crate::curlffi::Easy::new().map_err(Error::Transport)?;
     easy.url(url).map_err(err)?;
     easy.post().map_err(err)?;
+    // SAFETY: curl may or may not copy POSTFIELDS; `body` outlives perform
+    // in every caller either way.
     easy.post_fields(body).map_err(err)?;
     easy.fail_on_error(false).map_err(err)?;
     easy.connect_timeout(10).map_err(err)?;
+    // Abort if the connection stalls (<1 byte/s for 60s): a slow-drip
+    // server must not hang the run forever.
+    easy.low_speed(1, 60).map_err(err)?;
     easy.headers(headers).map_err(err)?;
 
-    let acc = Rc::new(RefCell::new(StreamAcc::default()));
-    let raw = Rc::new(RefCell::new(Vec::<u8>::new()));
-    let sink = if stream {
-        Sink::Stream(acc.clone(), tx.clone())
-    } else {
-        Sink::Raw(raw.clone())
-    };
-    let status = {
+    let (status, acc) = {
+        let acc = Rc::new(RefCell::new(StreamAcc::default()));
         let mut state = ReqState {
-            sink,
+            acc: acc.clone(),
             cancel: cancel.clone(),
+            tx: tx.cloned(),
         };
         let mut transfer = easy.transfer();
         transfer.write_function(write_cb, &mut state as *mut ReqState as *mut c_void);
@@ -183,21 +185,32 @@ fn run_request(
                 Error::Transport(e)
             }
         })?;
-        easy.response_code().map_err(err)? as u16
+        let status = easy.response_code().map_err(err)? as u16;
+        let acc = match Rc::try_unwrap(acc) {
+            Ok(cell) => cell.into_inner(),
+            Err(rc) => rc.borrow().clone(),
+        };
+        (status, acc)
     };
 
-    let mut acc = Rc::try_unwrap(acc).ok().unwrap().into_inner();
     if stream && status == 200 {
+        // A 200 with a body that never produced a recognized SSE event
+        // (plain JSON error, proxy page) must not become a silent empty
+        // assistant turn.
+        if acc.events == 0 {
+            let snippet = String::from_utf8_lossy(&acc.raw[..acc.raw.len().min(200)]).into_owned();
+            return Err(Error::Provider(format!(
+                "openai: invalid response body: {snippet}"
+            )));
+        }
         let response = acc.response();
         acc.finish(tx);
         return Ok(response);
     }
-    let body = if stream {
-        std::mem::take(&mut acc.buf)
-    } else {
-        Rc::try_unwrap(raw).ok().unwrap().into_inner()
+    let resp = crate::http::Response {
+        status,
+        body: acc.raw,
     };
-    let resp = crate::http::Response { status, body };
 
     if resp.status != 200 {
         let mut msg = String::new();
@@ -255,8 +268,8 @@ impl Provider for OpenAI {
             &headers,
             &body,
             false,
-            &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            &std::sync::mpsc::channel().0,
+            &Arc::new(AtomicBool::new(false)),
+            None,
         )
     }
 
@@ -266,17 +279,22 @@ impl Provider for OpenAI {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct StreamAcc {
+    /// Raw bytes as received; the body for non-stream mode.
+    raw: Vec<u8>,
+    /// SSE event buffer (drained as events complete).
     buf: Vec<u8>,
     content: String,
     calls: Vec<OaToolCallDelta>,
     usage: OaUsage,
     out_tokens: usize,
     finish_reason: Option<String>,
+    /// Recognized SSE events seen ([DONE] or a parsed chunk).
+    events: usize,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 struct OaToolCallDelta {
     #[serde(default)]
     index: usize,
@@ -286,7 +304,7 @@ struct OaToolCallDelta {
     function: Option<OaFunctionDelta>,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 struct OaFunctionDelta {
     #[serde(default)]
     name: Option<String>,
@@ -294,7 +312,7 @@ struct OaFunctionDelta {
     arguments: Option<String>,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 struct OaDeltaMessage {
     #[serde(default)]
     content: Option<String>,
@@ -302,7 +320,7 @@ struct OaDeltaMessage {
     tool_calls: Option<Vec<OaToolCallDelta>>,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 struct OaStreamChunk {
     #[serde(default)]
     choices: Vec<OaStreamChoice>,
@@ -310,7 +328,7 @@ struct OaStreamChunk {
     usage: OaUsage,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 struct OaStreamChoice {
     #[serde(default)]
     delta: OaDeltaMessage,
@@ -321,7 +339,8 @@ struct OaStreamChoice {
 const MAX_STREAM_TOOL_CALLS: usize = 64;
 
 impl StreamAcc {
-    fn feed(&mut self, data: &[u8], tx: &std::sync::mpsc::Sender<StreamEvent>) {
+    fn feed(&mut self, data: &[u8], tx: Option<&std::sync::mpsc::Sender<StreamEvent>>) {
+        self.raw.extend_from_slice(data);
         if data.contains(&b'\r') || self.buf.last() == Some(&b'\r') {
             // Normalize CRLF to LF so event splitting works even when a
             // chunk boundary lands between "\r" and "\n".
@@ -344,7 +363,7 @@ impl StreamAcc {
         }
     }
 
-    fn handle_event(&mut self, event: &[u8], tx: &std::sync::mpsc::Sender<StreamEvent>) {
+    fn handle_event(&mut self, event: &[u8], tx: Option<&std::sync::mpsc::Sender<StreamEvent>>) {
         let mut payload = String::new();
         for line in event.split(|&b| b == b'\n') {
             let line = std::str::from_utf8(line).unwrap_or("");
@@ -356,13 +375,19 @@ impl StreamAcc {
                 payload.push_str(data.trim());
             }
         }
+        if payload.is_empty() {
+            return;
+        }
+        self.events += 1;
         if payload == "[DONE]" {
             return;
         }
         let Ok(chunk) = serde_json::from_str::<OaStreamChunk>(&payload) else {
             return;
         };
-        if chunk.usage.prompt_tokens != 0 || chunk.usage.completion_tokens != 0 {
+        if let Some(tx) = tx
+            && (chunk.usage.prompt_tokens != 0 || chunk.usage.completion_tokens != 0)
+        {
             self.usage = chunk.usage;
             let _ = tx.send(StreamEvent::Tokens {
                 input: self.usage.prompt_tokens,
@@ -380,11 +405,13 @@ impl StreamAcc {
         {
             self.content.push_str(&content);
             self.out_tokens += 1;
-            let _ = tx.send(StreamEvent::Content(content));
-            let _ = tx.send(StreamEvent::Tokens {
-                input: self.usage.prompt_tokens,
-                output: self.out_tokens,
-            });
+            if let Some(tx) = tx {
+                let _ = tx.send(StreamEvent::Content(content));
+                let _ = tx.send(StreamEvent::Tokens {
+                    input: self.usage.prompt_tokens,
+                    output: self.out_tokens,
+                });
+            }
         }
         if let Some(calls) = choice.delta.tool_calls {
             for call in calls {
@@ -414,29 +441,10 @@ impl StreamAcc {
         }
     }
 
-    fn finish(&mut self, tx: &std::sync::mpsc::Sender<StreamEvent>) {
-        for call in std::mem::take(&mut self.calls) {
-            let _ = tx.send(StreamEvent::ToolCall(ToolCall {
-                id: call.id.unwrap_or_default(),
-                name: call
-                    .function
-                    .as_ref()
-                    .and_then(|f| f.name.clone())
-                    .unwrap_or_default(),
-                arguments: call
-                    .function
-                    .as_ref()
-                    .and_then(|f| f.arguments.clone())
-                    .unwrap_or_default(),
-            }));
-        }
-        let _ = tx.send(StreamEvent::Done);
-    }
-
-    fn response(&self) -> Response {
-        let mut calls = Vec::new();
-        for call in &self.calls {
-            calls.push(ToolCall {
+    fn tool_calls(&self) -> Vec<ToolCall> {
+        self.calls
+            .iter()
+            .map(|call| ToolCall {
                 id: call.id.clone().unwrap_or_default(),
                 name: call
                     .function
@@ -448,13 +456,25 @@ impl StreamAcc {
                     .as_ref()
                     .and_then(|f| f.arguments.clone())
                     .unwrap_or_default(),
-            });
+            })
+            .collect()
+    }
+
+    fn finish(&self, tx: Option<&std::sync::mpsc::Sender<StreamEvent>>) {
+        if let Some(tx) = tx {
+            for call in self.tool_calls() {
+                let _ = tx.send(StreamEvent::ToolCall(call));
+            }
+            let _ = tx.send(StreamEvent::Done);
         }
+    }
+
+    fn response(&self) -> Response {
         Response {
             message: Message {
                 role: "assistant".into(),
                 content: self.content.clone(),
-                tool_calls: calls,
+                tool_calls: self.tool_calls(),
                 tool_call_id: String::new(),
             },
             usage: Usage {
@@ -470,14 +490,10 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-enum Sink {
-    Stream(Rc<RefCell<StreamAcc>>, Sender<StreamEvent>),
-    Raw(Rc<RefCell<Vec<u8>>>),
-}
-
 struct ReqState {
-    sink: Sink,
+    acc: Rc<RefCell<StreamAcc>>,
     cancel: Arc<AtomicBool>,
+    tx: Option<Sender<StreamEvent>>,
 }
 
 unsafe extern "C" fn write_cb(
@@ -488,10 +504,7 @@ unsafe extern "C" fn write_cb(
 ) -> usize {
     let st = unsafe { &mut *(userdata as *mut ReqState) };
     let data = unsafe { std::slice::from_raw_parts(ptr as *const u8, size * nmemb) };
-    match &st.sink {
-        Sink::Stream(acc, tx) => acc.borrow_mut().feed(data, tx),
-        Sink::Raw(buf) => buf.borrow_mut().extend_from_slice(data),
-    }
+    st.acc.borrow_mut().feed(data, st.tx.as_ref());
     size * nmemb
 }
 
@@ -583,7 +596,7 @@ struct OaErrorPayload {
     message: String,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 struct OaUsage {
     #[serde(default, rename = "prompt_tokens")]
     prompt_tokens: usize,
@@ -603,10 +616,18 @@ mod tests {
     fn feed_all(acc: &mut StreamAcc, chunks: &[&[u8]]) -> Vec<StreamEvent> {
         let (tx, rx) = std::sync::mpsc::channel();
         for c in chunks {
-            acc.feed(c, &tx);
+            acc.feed(c, Some(&tx));
         }
         drop(tx);
         rx.try_iter().collect()
+    }
+
+    #[test]
+    fn malformed_body_produces_no_events() {
+        let mut acc = StreamAcc::default();
+        feed_all(&mut acc, &[b"<html>502 Bad Gateway</html>"]);
+        assert_eq!(acc.events, 0);
+        assert_eq!(acc.raw, b"<html>502 Bad Gateway</html>");
     }
 
     #[test]

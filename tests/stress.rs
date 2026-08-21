@@ -813,7 +813,9 @@ fn read_offset_paging() {
     let args = serde_json::json!({"path": p, "offset": 2, "limit": 2}).to_string();
     let out = (read.run)(&args, &mut |_| {});
     assert!(out.starts_with("line2\nline3"), "{out}");
-    assert!(out.contains("2 more lines"), "{out}");
+    // The file has exactly 4 lines, so one remains after reading 2-3.
+    assert!(out.contains("1 more lines"), "{out}");
+    assert!(out.contains("offset=4"), "{out}");
 
     let args = serde_json::json!({"path": p, "offset": 10}).to_string();
     let out = (read.run)(&args, &mut |_| {});

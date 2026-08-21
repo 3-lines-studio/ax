@@ -224,7 +224,7 @@ fn run_parallel(
     tools: &[Tool],
     calls: Vec<ToolCall>,
     turn: usize,
-    _cancel: &Arc<AtomicBool>,
+    cancel: &Arc<AtomicBool>,
     sink: &mut dyn Sink,
     h: &mut Vec<Message>,
 ) -> bool {
@@ -236,8 +236,19 @@ fn run_parallel(
     std::thread::scope(|scope| {
         for (idx, call) in calls.iter().enumerate() {
             let ptx = ptx.clone();
+            let cancel = cancel.clone();
             scope.spawn(move || {
-                let output = run_tool_parallel(tools, call, &ptx, idx);
+                let output = if cancel.load(Ordering::Relaxed) {
+                    // Synthesize a result so the transcript stays valid.
+                    "error: tool call not executed: the run was interrupted.".to_string()
+                } else {
+                    run_tool(tools, call, &mut |text| {
+                        let _ = ptx.send(ParallelMsg::Delta {
+                            idx,
+                            text: text.to_string(),
+                        });
+                    })
+                };
                 let _ = ptx.send(ParallelMsg::Done { idx, output });
             });
         }
@@ -261,24 +272,13 @@ fn run_parallel(
         push_tool_result(h, call.clone(), content);
         sink.tool(turn, h.last().unwrap());
     }
-    true
+    !cancel.load(Ordering::Relaxed)
 }
 
-fn run_tool_parallel(
-    tools: &[Tool],
-    call: &ToolCall,
-    ptx: &std::sync::mpsc::Sender<ParallelMsg>,
-    idx: usize,
-) -> String {
+fn run_tool(tools: &[Tool], call: &ToolCall, progress: &mut dyn FnMut(&str)) -> String {
     for t in tools {
         if t.name == call.name {
-            let mut progress = |text: &str| {
-                let _ = ptx.send(ParallelMsg::Delta {
-                    idx,
-                    text: text.to_string(),
-                });
-            };
-            return (t.run)(&call.arguments, &mut progress);
+            return (t.run)(&call.arguments, progress);
         }
     }
     format!("error: unknown tool: {}", call.name)
@@ -313,7 +313,6 @@ fn stream<P: Provider>(
                     calls.push(c);
                 }
                 StreamEvent::Tokens { input, output } => {
-                    forwarded += 1;
                     sink.tokens(input, output);
                 }
                 StreamEvent::Done => break,
@@ -335,11 +334,5 @@ fn stream<P: Provider>(
 }
 
 fn exec(tools: &[Tool], call: &ToolCall, sink: &mut dyn Sink) -> String {
-    for t in tools {
-        if t.name == call.name {
-            let mut progress = |text: &str| sink.tool_delta(call, text);
-            return (t.run)(&call.arguments, &mut progress);
-        }
-    }
-    format!("error: unknown tool: {}", call.name)
+    run_tool(tools, call, &mut |text| sink.tool_delta(call, text))
 }

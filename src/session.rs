@@ -104,7 +104,6 @@ fn valid_id(id: &str) -> bool {
 }
 
 fn write_entries(path: &Path, entries: &[Entry]) {
-    let _ = std::fs::create_dir_all(path.parent().unwrap());
     let mut out = String::new();
     for e in entries {
         if let Ok(line) = serde_json::to_string(e) {
@@ -112,7 +111,7 @@ fn write_entries(path: &Path, entries: &[Entry]) {
             out.push('\n');
         }
     }
-    let _ = std::fs::write(path, out);
+    let _ = crate::atomic_write(path, out.as_bytes());
 }
 
 pub fn save_live(dir: &str, entries: &[Entry]) {
@@ -135,7 +134,7 @@ pub fn continue_archived(dir: &str, id: &str, entries: &[Entry]) -> bool {
     if let Ok(t) = std::fs::read_to_string(&live_title) {
         let t = t.trim();
         if !t.is_empty() {
-            let _ = std::fs::write(title_path(dir, id), t);
+            let _ = crate::atomic_write(&title_path(dir, id), t.as_bytes());
         }
     }
     let _ = std::fs::remove_file(&live_title);
@@ -235,7 +234,7 @@ pub fn archive_live(dir: &str) -> Option<String> {
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty())
         .unwrap_or_else(|| title_from_entries(&read_entries(&dest)));
-    let _ = std::fs::write(title_path(dir, &id), title);
+    let _ = crate::atomic_write(&title_path(dir, &id), title.as_bytes());
     let _ = std::fs::remove_file(live_title_path);
     let _ = std::fs::remove_file(live_path(dir));
     Some(id)
@@ -258,8 +257,7 @@ fn title_path(dir: &str, id: &str) -> PathBuf {
 
 pub fn set_live_title(dir: &str, title: &str) {
     let path = Path::new(dir).join("session.title");
-    let _ = std::fs::create_dir_all(path.parent().unwrap());
-    let _ = std::fs::write(path, title);
+    let _ = crate::atomic_write(&path, title.as_bytes());
 }
 
 /// Rough token estimate for context budgeting: chars/4.
@@ -325,7 +323,11 @@ fn serialize_conversation(msgs: &[Message]) -> String {
             }
             "tool" => {
                 let content = if m.content.len() > 2000 {
-                    format!("{}… [truncated]", &m.content[..2000])
+                    let mut end = 2000;
+                    while !m.content.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    format!("{}… [truncated]", &m.content[..end])
                 } else {
                     m.content.clone()
                 };

@@ -23,6 +23,10 @@ const CURLOPT_POST: c_int = 47;
 const CURLOPT_POSTFIELDSIZE: c_int = 60;
 const CURLOPT_CONNECTTIMEOUT: c_int = 78;
 const CURLOPT_HTTPGET: c_int = 80;
+const CURLOPT_TIMEOUT: c_int = 13;
+const CURLOPT_LOW_SPEED_LIMIT: c_int = 19;
+const CURLOPT_LOW_SPEED_TIME: c_int = 20;
+const CURLOPT_NOSIGNAL: c_int = 99;
 const CURLOPT_PROGRESSDATA: c_int = 10057;
 const CURLOPT_WRITEFUNCTION: c_int = 20011;
 const CURLOPT_PROGRESSFUNCTION: c_int = 20056;
@@ -127,7 +131,9 @@ unsafe fn load_syms(handle: *mut libc::c_void) -> Result<Curl, String> {
             ),
         }
     };
-    unsafe { (c.global_init)(CURL_GLOBAL_DEFAULT) };
+    if unsafe { (c.global_init)(CURL_GLOBAL_DEFAULT) } != 0 {
+        return Err("curl_global_init failed".into());
+    }
     Ok(c)
 }
 
@@ -151,6 +157,9 @@ impl Easy {
         if handle.is_null() {
             return Err("curl_easy_init failed".into());
         }
+        // Required for multi-threaded use: without it the sync DNS resolver
+        // can raise SIGALRM into arbitrary threads.
+        setopt_long_raw(handle, CURLOPT_NOSIGNAL, 1)?;
         Ok(Easy {
             handle,
             headers: std::ptr::null_mut(),
@@ -183,6 +192,18 @@ impl Easy {
     /// server that accepts but never responds blocks the run forever.
     pub fn connect_timeout(&mut self, secs: c_long) -> Result<(), String> {
         setopt_long(self, CURLOPT_CONNECTTIMEOUT, secs)
+    }
+
+    /// Hard cap on the whole transfer. Only for non-streaming requests.
+    pub fn timeout(&mut self, secs: c_long) -> Result<(), String> {
+        setopt_long(self, CURLOPT_TIMEOUT, secs)
+    }
+
+    /// Abort when slower than `limit` bytes/s for `time` seconds: kills
+    /// stalled streams without capping long healthy ones.
+    pub fn low_speed(&mut self, limit: c_long, time: c_long) -> Result<(), String> {
+        setopt_long(self, CURLOPT_LOW_SPEED_LIMIT, limit)?;
+        setopt_long(self, CURLOPT_LOW_SPEED_TIME, time)
     }
 
     pub fn headers(&mut self, headers: &[(String, String)]) -> Result<(), String> {
@@ -238,8 +259,12 @@ fn setopt(e: &Easy, opt: c_int, arg: *const c_char) -> Result<(), String> {
 }
 
 fn setopt_long(e: &Easy, opt: c_int, v: c_long) -> Result<(), String> {
+    setopt_long_raw(e.handle, opt, v)
+}
+
+fn setopt_long_raw(handle: *mut c_void, opt: c_int, v: c_long) -> Result<(), String> {
     let c = curl()?;
-    let r = unsafe { (c.setopt_long)(e.handle, opt, v) };
+    let r = unsafe { (c.setopt_long)(handle, opt, v) };
     if r != 0 {
         return Err(curl_err(c, r));
     }

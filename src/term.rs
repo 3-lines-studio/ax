@@ -4,6 +4,7 @@
 #![allow(unsafe_code)]
 
 use std::io::Write;
+use std::os::fd::AsRawFd;
 
 pub struct Terminal {
     original: libc::termios,
@@ -36,6 +37,7 @@ impl Terminal {
         let _ = out.write_all(b"\x1b[?2004h"); // bracketed paste on
         let _ = out.write_all(b"\x1b[?25l"); // hide cursor (we draw it)
         let _ = out.flush();
+        install_fatal_handlers(&original);
         Ok(Terminal { original, out })
     }
 
@@ -80,7 +82,10 @@ impl Terminal {
     pub fn read_key(&mut self) -> Result<Key, String> {
         let fd = libc::STDIN_FILENO;
         loop {
-            let b = read_byte(fd)?;
+            let b = match read_byte(fd)? {
+                Some(b) => b,
+                None => return Ok(Key::Eof),
+            };
             match b {
                 0x03 => return Ok(Key::CtrlC),
                 0x0d | 0x0a => return Ok(Key::Enter),
@@ -102,11 +107,17 @@ impl Terminal {
                     if pfd[0].revents & libc::POLLIN == 0 {
                         return Ok(Key::Esc);
                     }
-                    let next = read_byte(fd)?;
+                    let next = match read_byte(fd)? {
+                        Some(b) => b,
+                        None => return Ok(Key::Esc),
+                    };
                     match next {
                         b'[' => return self.read_csi(),
                         b'O' => {
-                            let c = read_byte(fd)?;
+                            let c = match read_byte(fd)? {
+                                Some(c) => c,
+                                None => return Ok(Key::Esc),
+                            };
                             return Ok(match c {
                                 b'H' => Key::Home,
                                 b'F' => Key::End,
@@ -131,8 +142,8 @@ impl Terminal {
                     let mut bytes = vec![b];
                     for _ in 1..len {
                         match read_byte(fd) {
-                            Ok(c) => bytes.push(c),
-                            Err(_) => break,
+                            Ok(Some(c)) => bytes.push(c),
+                            _ => break,
                         }
                     }
                     let s = String::from_utf8_lossy(&bytes).into_owned();
@@ -148,7 +159,10 @@ impl Terminal {
         let fd = libc::STDIN_FILENO;
         let mut bytes = Vec::new();
         loop {
-            let b = read_byte(fd)?;
+            let b = match read_byte(fd)? {
+                Some(b) => b,
+                None => return Ok(Key::Esc),
+            };
             bytes.push(b);
             if (0x40..=0x7e).contains(&b) {
                 break;
@@ -161,13 +175,18 @@ impl Terminal {
         if bytes == b"200~" {
             let mut content = Vec::new();
             loop {
-                let b = read_byte(fd)?;
+                let b = match read_byte(fd)? {
+                    Some(b) => b,
+                    None => return Ok(Key::Paste(content)),
+                };
                 if b == 0x1b {
                     // Expect ESC [ 201 ~
                     let mut tail = vec![b];
                     loop {
-                        let c = read_byte(fd)?;
-                        tail.push(c);
+                        match read_byte(fd)? {
+                            Some(c) => tail.push(c),
+                            None => return Ok(Key::Paste(content)),
+                        }
                         if tail == b"\x1b[201~" {
                             break;
                         }
@@ -345,16 +364,24 @@ impl Terminal {
     }
 }
 
-fn read_byte(fd: i32) -> Result<u8, String> {
+/// One byte from `fd`; `None` on EOF. EINTR is retried so a caught signal
+/// does not abort the input loop.
+fn read_byte(fd: i32) -> Result<Option<u8>, String> {
     let mut b = [0u8; 1];
-    let n = unsafe { libc::read(fd, b.as_mut_ptr() as *mut libc::c_void, 1) };
-    if n < 0 {
-        return Err(format!("read: {}", std::io::Error::last_os_error()));
+    loop {
+        let n = unsafe { libc::read(fd, b.as_mut_ptr() as *mut libc::c_void, 1) };
+        if n < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(format!("read: {err}"));
+        }
+        if n == 0 {
+            return Ok(None);
+        }
+        return Ok(Some(b[0]));
     }
-    if n == 0 {
-        return Err("eof".into());
-    }
-    Ok(b[0])
 }
 
 fn utf8_len(first: u8) -> usize {
@@ -371,13 +398,46 @@ fn utf8_len(first: u8) -> usize {
     }
 }
 
-pub trait RawFd {
-    fn as_raw_fd(&self) -> i32;
+/// Original termios saved while the terminal is in raw mode, so fatal
+/// signals can restore it before dying.
+static ORIGINAL_TERMIOS: std::sync::Mutex<Option<libc::termios>> = std::sync::Mutex::new(None);
+
+/// Handler for signals that kill the process: put the terminal back in a
+/// usable state (termios, cursor, screen), then die with the default
+/// disposition. Only async-signal-safe calls are used.
+unsafe extern "C" fn fatal_restore(sig: libc::c_int) {
+    if let Ok(g) = ORIGINAL_TERMIOS.lock()
+        && let Some(t) = &*g
+    {
+        unsafe {
+            libc::tcsetattr(libc::STDOUT_FILENO, libc::TCSANOW, t);
+        }
+    }
+    const RESET: &[u8] = b"\x1b[?25h\x1b[0m\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1049l\n";
+    unsafe {
+        libc::write(libc::STDOUT_FILENO, RESET.as_ptr().cast(), RESET.len());
+        libc::signal(sig, libc::SIG_DFL);
+        libc::raise(sig);
+    }
 }
 
-impl RawFd for std::io::Stdout {
-    fn as_raw_fd(&self) -> i32 {
-        libc::STDOUT_FILENO
+fn install_fatal_handlers(original: &libc::termios) {
+    if let Ok(mut g) = ORIGINAL_TERMIOS.lock() {
+        *g = Some(*original);
+    }
+    for sig in [
+        libc::SIGABRT,
+        libc::SIGBUS,
+        libc::SIGSEGV,
+        libc::SIGTERM,
+        libc::SIGHUP,
+    ] {
+        unsafe {
+            libc::signal(
+                sig,
+                fatal_restore as unsafe extern "C" fn(libc::c_int) as usize,
+            );
+        }
     }
 }
 
@@ -421,7 +481,6 @@ pub enum Key {
     CtrlC,
     Eof,
     Paste(Vec<u8>),
-    PasteStart,
     PasteEnd,
 }
 

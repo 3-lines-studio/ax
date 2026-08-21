@@ -26,6 +26,39 @@ pub mod tui;
 
 pub use openai::OpenAI;
 
+/// Write via temp file + rename in the destination directory so a crash or
+/// full disk never leaves a truncated file behind.
+pub fn atomic_write(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static TAG: AtomicU64 = AtomicU64::new(0);
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
+    if let Some(dir) = dir {
+        std::fs::create_dir_all(dir)?;
+    }
+    let parent = dir.unwrap_or(std::path::Path::new("."));
+    let tag = TAG.fetch_add(1, Ordering::Relaxed);
+    let tmp = parent.join(format!(
+        ".ax-tmp-{}-{tag}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() as u64 ^ d.as_secs())
+            .unwrap_or(0)
+    ));
+    let res = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut f| {
+            use std::io::Write;
+            f.write_all(data)
+        })
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    res
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
     #[serde(rename = "ID")]
@@ -230,11 +263,9 @@ fn coerce_value(value: &mut Value, schema: &Value) {
                 if let Ok(n) = s.trim().parse::<f64>()
                     && n.is_finite()
                 {
-                    if ty == Some("integer")
-                        && n.fract() == 0.0
-                        && n >= i64::MIN as f64
-                        && n <= i64::MAX as f64
-                    {
+                    if ty == Some("integer") && n >= i64::MIN as f64 && n <= i64::MAX as f64 {
+                        // Fractional values are truncated: models send "3.5"
+                        // for an integer field more often than they mean it.
                         *value = Value::Number(serde_json::Number::from(n as i64));
                     } else if ty == Some("number")
                         && let Some(num) = serde_json::Number::from_f64(n)
@@ -391,5 +422,35 @@ impl run::Sink for AgentSink {
                 usage: Usage::default(),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomic_write_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("ax-aw-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("f.txt");
+        atomic_write(&path, b"hello").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello");
+        atomic_write(&path, b"world!").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"world!");
+        assert!(dir.join("f.txt").is_file());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn coerce_integer_accepts_float_strings() {
+        let schema: Value = serde_json::from_str(r#"{"type":"integer"}"#).unwrap();
+        let mut v = Value::String("3.5".into());
+        coerce_value(&mut v, &schema);
+        assert_eq!(v, Value::Number(serde_json::Number::from(3)));
+
+        let mut v = Value::String("7".into());
+        coerce_value(&mut v, &schema);
+        assert_eq!(v, Value::Number(serde_json::Number::from(7)));
     }
 }

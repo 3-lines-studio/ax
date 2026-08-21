@@ -21,7 +21,8 @@ fn sanitize(s: &str) -> String {
         .collect()
 }
 
-/// Tail of `s` within the output limit, never splitting a UTF-8 codepoint.
+/// Tail of `s` within the output limit, never splitting a UTF-8 codepoint
+/// or a line, so line counts on the tail stay exact.
 fn tail(s: &str) -> &str {
     if s.len() <= MAX_OUTPUT {
         return s;
@@ -30,7 +31,10 @@ fn tail(s: &str) -> &str {
     while !s.is_char_boundary(start) {
         start += 1;
     }
-    &s[start..]
+    match s[start..].find('\n') {
+        Some(i) => &s[start + i + 1..],
+        None => &s[start..],
+    }
 }
 
 fn count_lines(s: &str) -> usize {
@@ -69,6 +73,44 @@ struct BashArgs {
 
 static BASH_TAG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Process groups of live bash children, so a fatal signal can reap them.
+static CHILD_PGIDS: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
+
+/// Ctrl+C in one-shot mode kills ax but not children in their own process
+/// groups. This handler reaps them, then dies with the default disposition.
+unsafe extern "C" fn sigint_reap_children(_: libc::c_int) {
+    if let Ok(mut v) = CHILD_PGIDS.lock() {
+        for &pgid in v.iter() {
+            unsafe { libc::kill(-pgid, libc::SIGKILL) };
+        }
+        v.clear();
+    }
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+        libc::raise(libc::SIGINT);
+    }
+}
+
+fn ensure_sigint_handler() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        libc::signal(
+            libc::SIGINT,
+            sigint_reap_children as unsafe extern "C" fn(libc::c_int) as usize,
+        );
+    });
+}
+
+struct PgidGuard(i32);
+
+impl Drop for PgidGuard {
+    fn drop(&mut self) {
+        if let Ok(mut v) = CHILD_PGIDS.lock() {
+            v.retain(|&p| p != self.0);
+        }
+    }
+}
+
 pub fn bash(dir: &str) -> Tool {
     let dir = dir.to_string();
     let mut t = new_tool_with_progress(
@@ -80,14 +122,22 @@ pub fn bash(dir: &str) -> Tool {
                 return "error: invalid timeout: must be a positive number of seconds".to_string();
             }
             let tag = BASH_TAG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            ensure_sigint_handler();
             let base = std::env::temp_dir().join(format!("ax-bash-{}-{tag}", std::process::id()));
             let out_path = base.with_extension("out");
             let err_path = base.with_extension("err");
-            let out_file = match std::fs::File::create(&out_path) {
+            // create_new (O_EXCL) refuses to follow a pre-planted symlink.
+            let open_excl = |p: &std::path::Path| {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(p)
+            };
+            let out_file = match open_excl(&out_path) {
                 Ok(f) => f,
                 Err(e) => return format!("error: {e}"),
             };
-            let err_file = match std::fs::File::create(&err_path) {
+            let err_file = match open_excl(&err_path) {
                 Ok(f) => f,
                 Err(e) => return format!("error: {e}"),
             };
@@ -102,6 +152,15 @@ pub fn bash(dir: &str) -> Tool {
             let mut child = match cmd.spawn() {
                 Ok(c) => c,
                 Err(e) => return format!("error: {e}"),
+            };
+            // Registered so sigint_reap_children can kill the group if ax
+            // dies first; dropped (unregistered) when the child is reaped.
+            let _guard = {
+                let pgid = child.id() as i32;
+                if let Ok(mut v) = CHILD_PGIDS.lock() {
+                    v.push(pgid);
+                }
+                PgidGuard(pgid)
             };
             let mut exit: Option<std::process::ExitStatus> = None;
             let mut timed_out = false;
@@ -210,7 +269,7 @@ fn status_str(st: std::process::ExitStatus) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_OUTPUT, count_lines, sanitize, tail};
+    use super::{MAX_OUTPUT, apply_edits, count_lines, sanitize, tail};
 
     #[test]
     fn sanitize_strips_control_characters() {
@@ -233,6 +292,65 @@ mod tests {
         let t = tail(&big);
         assert_eq!(t.len(), MAX_OUTPUT);
         assert_eq!(count_lines(&format!("a\nb\n{big}")), 3);
+    }
+
+    #[test]
+    fn tail_never_splits_a_line() {
+        // Start lands mid-run of y's; the partial line is dropped and the
+        // tail begins at the next full line.
+        let s = format!("{}\n{}\nend", "x".repeat(100), "y".repeat(MAX_OUTPUT));
+        let t = tail(&s);
+        assert_eq!(t, "end");
+        assert_eq!(count_lines(t), 1);
+
+        // No later newline: keep from the boundary as-is.
+        let s = format!("line-one-xxxxxxxx\n{}", "y".repeat(MAX_OUTPUT + 50));
+        let t = tail(&s);
+        assert!(!t.contains("line-one"));
+        assert!(t.starts_with("yyy"), "tail starts mid-line: {t:?}");
+    }
+
+    #[test]
+    fn edit_preserves_mixed_line_endings() {
+        // CRLF file with one LF-only line: editing the CRLF part must not
+        // rewrite the LF line's ending.
+        let body = "a\r\nb\nc\r\n";
+        let edits = vec![super::EditArg {
+            old_text: "a\r\n".into(),
+            new_text: "A\r\n".into(),
+        }];
+        let out = apply_edits("f", body, &edits).unwrap();
+        assert_eq!(out, "A\r\nb\nc\r\n");
+
+        // Editing the LF-only line leaves CRLF lines alone.
+        let edits = vec![super::EditArg {
+            old_text: "b".into(),
+            new_text: "B\nB2".into(),
+        }];
+        let out = apply_edits("f", body, &edits).unwrap();
+        assert_eq!(out, "a\r\nB\nB2\nc\r\n");
+    }
+
+    #[test]
+    fn edit_crlf_roundtrip() {
+        let body = "one\r\ntwo\r\nthree\r\n";
+        let edits = vec![super::EditArg {
+            old_text: "two".into(),
+            new_text: "TWO\nTWO2".into(),
+        }];
+        let out = apply_edits("f", body, &edits).unwrap();
+        assert_eq!(out, "one\r\nTWO\r\nTWO2\r\nthree\r\n");
+    }
+
+    #[test]
+    fn edit_multibyte_content() {
+        let body = "héllo wörld 🙈\nsecond\n";
+        let edits = vec![super::EditArg {
+            old_text: "wörld".into(),
+            new_text: "planet".into(),
+        }];
+        let out = apply_edits("f", body, &edits).unwrap();
+        assert_eq!(out, "héllo planet 🙈\nsecond\n");
     }
 
     #[test]
@@ -286,7 +404,12 @@ pub fn read() -> Tool {
             Ok(b) => {
                 let text = String::from_utf8_lossy(&b);
                 let text = sanitize(&text);
-                let lines: Vec<&str> = text.split('\n').collect();
+                let mut lines: Vec<&str> = text.split('\n').collect();
+                // A trailing newline does not start a new line; an empty
+                // file has no lines at all.
+                if text.ends_with('\n') || text.is_empty() {
+                    lines.pop();
+                }
                 let total = lines.len();
                 let start = a.offset.unwrap_or(1).saturating_sub(1);
                 if a.offset.is_some() && start >= total {
@@ -371,7 +494,7 @@ pub fn write() -> Tool {
             {
                 return format!("error: {e}");
             }
-            match std::fs::write(&a.path, &a.content) {
+            match crate::atomic_write(std::path::Path::new(&a.path), a.content.as_bytes()) {
                 Ok(()) => format!("wrote {} ({} bytes)", a.path, a.content.len()),
                 Err(e) => format!("error: {e}"),
             }
@@ -400,11 +523,55 @@ fn normalize_lf(s: &str) -> String {
     s.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-fn line_ending(s: &str) -> &'static str {
-    match (s.find("\r\n"), s.find('\n')) {
-        (Some(c), Some(l)) if c < l => "\r\n",
-        _ => "\n",
+/// Byte-offset map from `normalize_lf(body)` back into `body`: entry i is
+/// the body offset of normalized offset i. CRLF collapses to one byte, a
+/// lone CR becomes one LF byte, everything else maps 1:1.
+fn lf_map(body: &str) -> Vec<usize> {
+    let b = body.as_bytes();
+    let mut map = Vec::with_capacity(b.len() + 1);
+    let mut i = 0;
+    while i < b.len() {
+        map.push(i);
+        if b[i] == b'\r' {
+            i += if i + 1 < b.len() && b[i + 1] == b'\n' {
+                2
+            } else {
+                1
+            };
+        } else {
+            i += 1;
+        }
     }
+    map.push(b.len());
+    map
+}
+
+/// Re-apply `ending` to an LF-normalized string.
+fn with_ending(s: &str, ending: &str) -> String {
+    if ending == "\r\n" {
+        s.split('\n').collect::<Vec<_>>().join("\r\n")
+    } else {
+        s.to_string()
+    }
+}
+
+/// Line ending to use for newlines introduced into `body[bs..be]`: prefer
+/// the region's own, then the terminator right after / before it, then the
+/// file's dominant style.
+fn region_ending(body: &str, bs: usize, be: usize) -> &'static str {
+    if body[bs..be].contains("\r\n") || body[be..].starts_with("\r\n") {
+        return "\r\n";
+    }
+    if body[be..].starts_with('\n') {
+        return "\n";
+    }
+    if body[..bs].ends_with("\r\n") {
+        return "\r\n";
+    }
+    if body[..bs].ends_with('\n') {
+        return "\n";
+    }
+    if body.contains("\r\n") { "\r\n" } else { "\n" }
 }
 
 fn empty_old_error(path: &str, i: usize, total: usize) -> String {
@@ -597,19 +764,23 @@ fn apply_edits(path: &str, content: &str, edits: &[EditArg]) -> Result<String, S
             ));
         }
     }
-    let mut out = normalized.clone();
-    for &(i, idx, len) in found.iter().rev() {
-        out.replace_range(idx..idx + len, &normalize_lf(&edits[i].new_text));
+    // Apply in body coordinates so each region keeps its own line endings:
+    // untouched lines are never rewritten, even in files with mixed endings.
+    let map = lf_map(body);
+    let mut out = body.to_string();
+    for &(i, start, len) in found.iter().rev() {
+        let bs = map[start];
+        let be = map[start + len];
+        let replacement = with_ending(
+            &normalize_lf(&edits[i].new_text),
+            region_ending(body, bs, be),
+        );
+        out.replace_range(bs..be, &replacement);
     }
-    if out == normalized {
+    if out == body {
         return Err(no_change_error(path, edits.len()));
     }
-    let restored = if line_ending(body) == "\r\n" {
-        out.replace('\n', "\r\n")
-    } else {
-        out
-    };
-    Ok(format!("{bom}{restored}"))
+    Ok(format!("{bom}{out}"))
 }
 
 const EDIT_SCHEMA: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Path to the file to edit (relative or absolute)"},"edits":{"type":"array","description":"One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.","items":{"type":"object","properties":{"oldText":{"type":"string","description":"Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call."},"newText":{"type":"string","description":"Replacement text for this targeted edit."}},"required":["oldText","newText"]}}},"required":["path","edits"]}"#;
@@ -721,7 +892,7 @@ pub fn edit() -> Tool {
                 Ok(s) => match apply_edits(&a.path, &s, &a.edits) {
                     Ok(out) => {
                         let n = a.edits.len();
-                        match std::fs::write(&a.path, &out) {
+                        match crate::atomic_write(std::path::Path::new(&a.path), out.as_bytes()) {
                             Ok(()) => {
                                 let mut msg =
                                     format!("Successfully replaced {n} block(s) in {}.", a.path);

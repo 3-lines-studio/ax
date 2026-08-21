@@ -53,7 +53,9 @@ enum Entry {
     Code(String),
     Table(String),
     Rule,
-    Tool { calls: Vec<String> },
+    Tool {
+        calls: Vec<String>,
+    },
     Notice(String),
     Summary {
         secs: u64,
@@ -655,7 +657,7 @@ impl Tui {
                 }
             }
             Key::Paste(bytes) => self.input.paste(&bytes),
-            Key::PasteStart | Key::PasteEnd => {}
+            Key::PasteEnd => {}
             Key::Eof => return Ok(false),
         }
         Ok(true)
