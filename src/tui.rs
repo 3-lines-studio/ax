@@ -53,10 +53,7 @@ enum Entry {
     Code(String),
     Table(String),
     Rule,
-    Tool {
-        label: String,
-        kind: String,
-    },
+    Tool { calls: Vec<String> },
     Notice(String),
     Summary {
         secs: u64,
@@ -347,6 +344,7 @@ struct Tui {
     activity: Activity,
     tool_running: Option<String>,
     tool_live: Option<String>,
+    pending_tools: Vec<String>,
     turn_start: Instant,
     input: Input,
     model_display: String,
@@ -407,6 +405,7 @@ impl Tui {
             activity: Activity::Idle,
             tool_running: None,
             tool_live: None,
+            pending_tools: Vec::new(),
             turn_start: Instant::now(),
             input: Input::default(),
             model_display,
@@ -1038,6 +1037,7 @@ impl Tui {
                 any = true;
                 match ev {
                     TurnEvent::AssistantDelta(delta) => {
+                        self.flush_tools();
                         if self.md.is_none() {
                             let pending = Rc::new(RefCell::new(Vec::new()));
                             let p2 = pending.clone();
@@ -1071,6 +1071,7 @@ impl Tui {
                         self.activity = Activity::Streaming;
                     }
                     TurnEvent::AssistantDone => {
+                        self.flush_tools();
                         if let Some(mut md) = self.md.take() {
                             let pending = self.md_pending.take();
                             let tail = md.finish();
@@ -1100,13 +1101,10 @@ impl Tui {
                     TurnEvent::ToolDelta(text) => {
                         self.tool_live = Some(text);
                     }
-                    TurnEvent::ToolResult { label, kind } => {
+                    TurnEvent::ToolResult { label, .. } => {
                         self.tool_running = None;
                         self.tool_live = None;
-                        self.entries.push(Entry::Tool {
-                            label: label.clone(),
-                            kind: kind.clone(),
-                        });
+                        self.pending_tools.push(label);
                         self.activity = Activity::Thinking;
                     }
                     TurnEvent::Tokens { input, output } => {
@@ -1114,6 +1112,7 @@ impl Tui {
                         self.live_out = output;
                     }
                     TurnEvent::Notice(text) => {
+                        self.flush_tools();
                         self.entries.push(Entry::Notice(text));
                     }
                     TurnEvent::End {
@@ -1152,6 +1151,7 @@ impl Tui {
                         cur = None;
                         self.cur_text = None;
                         self.msgs = messages.clone();
+                        self.flush_tools();
                         if cancelled {
                             self.entries.push(Entry::Notice("interrupted".into()));
                         } else if err.is_none() {
@@ -1201,6 +1201,14 @@ impl Tui {
             }
         }
         any
+    }
+
+    fn flush_tools(&mut self) {
+        if self.pending_tools.is_empty() {
+            return;
+        }
+        let calls = std::mem::take(&mut self.pending_tools);
+        self.entries.push(Entry::Tool { calls });
     }
 
     fn push_block(&mut self, block: Block) {
@@ -1509,6 +1517,7 @@ impl Tui {
         self.entries.clear();
         self.entries.push(Entry::Welcome);
         self.msgs.clear();
+        self.pending_tools.clear();
         self.sess_in = 0;
         self.sess_out = 0;
         self.input.history.clear();
@@ -1568,26 +1577,40 @@ impl Tui {
         self.msgs = session::context_messages(&entries);
         self.entries.clear();
         self.entries.push(Entry::Welcome);
+        let mut tools: Vec<String> = Vec::new();
         for m in &self.msgs {
             match m.role.as_str() {
-                "user" => self.entries.push(Entry::User(m.content.clone())),
+                "user" => {
+                    if !tools.is_empty() {
+                        self.entries.push(Entry::Tool {
+                            calls: std::mem::take(&mut tools),
+                        });
+                    }
+                    self.entries.push(Entry::User(m.content.clone()));
+                }
                 "assistant" => {
                     if !m.content.is_empty() {
+                        if !tools.is_empty() {
+                            self.entries.push(Entry::Tool {
+                                calls: std::mem::take(&mut tools),
+                            });
+                        }
                         self.entries
                             .push(Entry::Text(markdown::Markdown::render(&m.content)));
                     }
                     for c in &m.tool_calls {
-                        self.entries.push(Entry::Tool {
-                            label: tool_label(c, false),
-                            kind: tool_kind(c),
-                        });
+                        tools.push(tool_label(c, false));
                     }
                 }
                 _ => {}
             }
         }
+        if !tools.is_empty() {
+            self.entries.push(Entry::Tool { calls: tools });
+        }
         self.sess_in = 0;
         self.sess_out = 0;
+        self.pending_tools.clear();
         self.streamed.clear();
         self.overflow_retried = false;
         if self.mode == Mode::Full {
@@ -1875,11 +1898,17 @@ impl Tui {
                     "{DIM}{}{RESET}",
                     "\u{2500}".repeat(markdown::ansi::HORIZONTAL_RULE_WIDTH)
                 )),
-                Entry::Tool { label, kind } => {
+                Entry::Tool { calls } => {
+                    let n = calls.len();
                     rows.push(format!(
-                        "{USER_RAIL}●{RESET} {DIM}1 tool call · 1 {kind}{RESET}"
+                        "{USER_RAIL}●{RESET} {DIM}{n} tool call{}{RESET}",
+                        if n == 1 { "" } else { "s" }
                     ));
-                    rows.push(format!("{DIM}└ {label}{RESET}"));
+                    let last = n.saturating_sub(1);
+                    for (i, label) in calls.iter().enumerate() {
+                        let branch = if i == last { "└" } else { "├" };
+                        rows.push(format!("{DIM}{branch} {label}{RESET}"));
+                    }
                 }
                 Entry::Notice(text) => rows.push(text.clone()),
                 Entry::Summary {
