@@ -342,7 +342,7 @@ impl<P: Provider> Agent<P> {
             model: String::new(),
             system: String::new(),
             tools: Vec::new(),
-            max_turns: 20,
+            max_turns: usize::MAX,
             on: None,
         }
     }

@@ -1085,7 +1085,7 @@ impl Tui {
                         model: &model,
                         system: &system,
                         tools: &tools,
-                        max_turns: 20,
+                        max_turns: usize::MAX,
                     },
                     &msgs,
                     &cancel,
