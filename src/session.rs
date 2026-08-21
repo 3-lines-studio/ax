@@ -24,6 +24,7 @@ pub enum Entry {
     },
 }
 
+#[derive(Clone, Debug)]
 pub struct SessionMeta {
     pub id: String,
     pub title: String,
@@ -98,11 +99,11 @@ fn parse_entries(data: &str) -> Vec<Entry> {
         .collect()
 }
 
-pub fn save_live(dir: &str, entries: &[Entry]) {
-    if entries.is_empty() {
-        return;
-    }
-    let path = live_path(dir);
+fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id != "." && id != ".." && !id.contains('/') && !id.contains('\\')
+}
+
+fn write_entries(path: &Path, entries: &[Entry]) {
     let _ = std::fs::create_dir_all(path.parent().unwrap());
     let mut out = String::new();
     for e in entries {
@@ -112,6 +113,34 @@ pub fn save_live(dir: &str, entries: &[Entry]) {
         }
     }
     let _ = std::fs::write(path, out);
+}
+
+pub fn save_live(dir: &str, entries: &[Entry]) {
+    if entries.is_empty() {
+        return;
+    }
+    write_entries(&live_path(dir), entries);
+}
+
+/// Write a continued session back into its original archive instead of
+/// forking a new one. A live title written by `/rename` during the resumed
+/// session replaces the archived title. Clears the live transcript either
+/// way so the next launch does not re-archive it as a duplicate.
+pub fn continue_archived(dir: &str, id: &str, entries: &[Entry]) -> bool {
+    if !valid_id(id) || entries.is_empty() {
+        return false;
+    }
+    write_entries(&store_dir(dir).join(format!("{id}.jsonl")), entries);
+    let live_title = Path::new(dir).join("session.title");
+    if let Ok(t) = std::fs::read_to_string(&live_title) {
+        let t = t.trim();
+        if !t.is_empty() {
+            let _ = std::fs::write(title_path(dir, id), t);
+        }
+    }
+    let _ = std::fs::remove_file(&live_title);
+    let _ = std::fs::remove_file(live_path(dir));
+    true
 }
 
 pub fn load_live(dir: &str) -> Vec<Entry> {
@@ -213,7 +242,7 @@ pub fn archive_live(dir: &str) -> Option<String> {
 }
 
 pub fn load_by_id(dir: &str, id: &str) -> Option<Vec<Entry>> {
-    if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
+    if !valid_id(id) {
         return None;
     }
     let path = store_dir(dir).join(format!("{id}.jsonl"));

@@ -375,6 +375,8 @@ struct Tui {
     picker_dismissed: Option<PickerKind>,
     user_commands: Vec<UserCommand>,
     login: Option<LoginWizard>,
+    /// Archive id being continued; None = a fresh session that forks on exit.
+    resume_id: Option<String>,
 }
 
 impl Tui {
@@ -436,6 +438,7 @@ impl Tui {
             picker_dismissed: None,
             user_commands,
             login: None,
+            resume_id: None,
         }
     }
 
@@ -446,8 +449,15 @@ impl Tui {
         for m in &self.msgs[projected.min(self.msgs.len())..] {
             entries.push(session::Entry::Message { message: m.clone() });
         }
-        session::save_live(&self.cfg.ax_root, &entries);
-        session::archive_live(&self.cfg.ax_root);
+        match self.resume_id.take() {
+            Some(id) => {
+                session::continue_archived(&self.cfg.ax_root, &id, &entries);
+            }
+            None => {
+                session::save_live(&self.cfg.ax_root, &entries);
+                session::archive_live(&self.cfg.ax_root);
+            }
+        }
     }
 
     fn loop_forever(&mut self, term: &mut Terminal) -> Result<(), String> {
@@ -1512,7 +1522,19 @@ impl Tui {
 
     fn fresh_session(&mut self, archive: bool) {
         if archive {
-            session::archive_live(&self.cfg.ax_root);
+            let entries = session::load_live(&self.cfg.ax_root);
+            match self.resume_id.take() {
+                Some(id) => {
+                    session::continue_archived(&self.cfg.ax_root, &id, &entries);
+                }
+                None => {
+                    session::archive_live(&self.cfg.ax_root);
+                }
+            }
+        } else {
+            // /reset discards in-memory changes; the origin archive keeps
+            // its state from load time.
+            self.resume_id = None;
         }
         self.entries.clear();
         self.entries.push(Entry::Welcome);
@@ -1556,16 +1578,19 @@ impl Tui {
 
     fn resume_by_id(&mut self, id: &str) {
         let dir = self.cfg.ax_root.clone();
-        let msgs = if id == "last" {
+        let loaded = if id == "last" {
             session::list_sessions(&dir)
                 .into_iter()
                 .next()
-                .map(|s| session::load_session(&s.path))
+                .map(|s| (s.id, session::load_session(&s.path)))
         } else {
-            session::load_by_id(&dir, id)
+            session::load_by_id(&dir, id).map(|msgs| (id.to_string(), msgs))
         };
-        match msgs {
-            Some(msgs) => self.load_messages(msgs),
+        match loaded {
+            Some((id, msgs)) => {
+                self.resume_id = Some(id);
+                self.load_messages(msgs);
+            }
             None => {
                 self.entries
                     .push(Entry::Notice(format!("{DIM}no such session: {id}{RESET}")));
@@ -1719,11 +1744,18 @@ impl Tui {
                 }
             }
             Screen::Resume => {
-                let s = self.filtered_sessions().get(self.sel).cloned();
+                let s = self.filtered_sessions().get(self.sel).cloned().cloned();
                 if let Some(s) = s {
+                    // Flush the session being continued so switching targets
+                    // does not drop its transcript.
+                    if let Some(prev) = self.resume_id.take() {
+                        let cur = session::load_live(&self.cfg.ax_root);
+                        session::continue_archived(&self.cfg.ax_root, &prev, &cur);
+                    }
                     let msgs = session::load_session(&s.path);
                     let title = s.title.clone();
                     self.close_screen();
+                    self.resume_id = Some(s.id);
                     self.load_messages(msgs);
                     self.entries
                         .push(Entry::Notice(format!("{DIM}resumed: {title}{RESET}")));
