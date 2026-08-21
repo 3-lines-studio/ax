@@ -362,6 +362,7 @@ struct Tui {
     last_capacity: usize,
     last_frame: Vec<String>,
     last_chrome: Option<(usize, Vec<String>, usize, usize)>,
+    reprint: bool,
     live_in: usize,
     live_out: usize,
     rows: u16,
@@ -421,6 +422,7 @@ impl Tui {
             last_capacity: 0,
             last_frame: Vec::new(),
             last_chrome: None,
+            reprint: false,
             live_in: 0,
             live_out: 0,
             rows: 24,
@@ -1591,6 +1593,11 @@ impl Tui {
         if self.mode == Mode::Full {
             self.full_scroll = 0;
             self.last_frame.clear();
+        } else {
+            // Inline mode: the transcript was replaced wholesale, so the next
+            // paint must reprint everything into scrollback instead of
+            // diffing against the previous session's lines.
+            self.reprint = true;
         }
         session::save_live(&self.cfg.ax_root, &entries);
     }
@@ -1950,7 +1957,24 @@ impl Tui {
         let (chrome, cursor_row, cursor_col) = self.chrome_rows();
         let rows = (self.rows as usize).max(1);
         let capacity = rows.saturating_sub(chrome.len()).max(1);
-        if capacity != self.last_capacity {
+        if std::mem::take(&mut self.reprint) {
+            if content.len() > capacity {
+                // Feed the whole transcript through the bottom row so the
+                // terminal scrollback keeps everything above the viewport.
+                for line in &content {
+                    let _ = write!(out, "{}", term::move_to(rows as u16, 1));
+                    let _ = writeln!(out, "{line}");
+                }
+                self.streamed = content.clone();
+                self.last_capacity = capacity;
+                // Scrolling shifted the chrome rows; force a repaint below.
+                self.last_chrome = None;
+            } else {
+                self.repaint_tail(out, &content, capacity);
+                self.streamed = content.clone();
+                self.last_capacity = capacity;
+            }
+        } else if capacity != self.last_capacity {
             self.repaint_tail(out, &content, capacity);
             self.streamed = content.to_vec();
             self.last_capacity = capacity;
