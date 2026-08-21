@@ -89,13 +89,18 @@ pub struct Message {
 pub struct Usage {
     pub input: usize,
     pub output: usize,
+    pub cached_input: usize,
 }
 
 #[derive(Debug)]
 pub enum StreamEvent {
     Content(String),
     ToolCall(ToolCall),
-    Tokens { input: usize, output: usize },
+    Tokens {
+        input: usize,
+        output: usize,
+        cached_input: usize,
+    },
     Done,
 }
 

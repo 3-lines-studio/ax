@@ -20,6 +20,14 @@ Cheaper daily loop (autofixes without the gate):
 cargo clippy --fix --allow-dirty && cargo fmt && cargo test
 ```
 
+Install the current checkout to `~/.local/bin/ax` for local use:
+
+```bash
+make install
+```
+
+Set `PREFIX` to install elsewhere.
+
 ## Known exceptions
 
 - `src/markdown.rs` is a byte-exact port of fx's markdown renderer. It has

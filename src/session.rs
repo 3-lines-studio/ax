@@ -1,5 +1,4 @@
-//! Per-user session store: live session file plus an archive catalog,
-//! rooted at `~/.config/ax` (or `$XDG_CONFIG_HOME/ax`).
+//! Per-project session store: live session file plus an archive catalog.
 //! Live transcript: `{root}/session.jsonl`.
 //! Archived sessions live in `{root}/sessions/<unix_ms>.jsonl`.
 //!
@@ -22,6 +21,12 @@ pub enum Entry {
         timestamp: i64,
         retained: Vec<Message>,
     },
+    Usage {
+        input: usize,
+        output: usize,
+        cached_input: usize,
+        context_input: usize,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -35,6 +40,20 @@ pub struct SessionMeta {
 
 fn store_dir(dir: &str) -> PathBuf {
     Path::new(dir).join("sessions")
+}
+
+pub fn scope_dir(dir: &str, cwd: &Path) -> String {
+    let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in cwd.as_os_str().as_encoded_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    Path::new(dir)
+        .join("projects")
+        .join(format!("{hash:016x}"))
+        .display()
+        .to_string()
 }
 
 pub fn live_path(dir: &str) -> PathBuf {
@@ -71,6 +90,7 @@ pub fn context_messages(entries: &[Entry]) -> Vec<Message> {
                 });
                 out.extend(retained.iter().cloned());
             }
+            Entry::Usage { .. } => {}
         }
     }
     out
@@ -464,13 +484,18 @@ pub fn search(dir: &str, text: &str) -> Vec<SearchHit> {
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
         for line in data.lines() {
+            let parsed = parse_entry_line(line);
+            if matches!(parsed, Some(Entry::Usage { .. })) {
+                continue;
+            }
             if !line.to_lowercase().contains(&needle) {
                 continue;
             }
-            let text = parse_entry_line(line)
+            let text = parsed
                 .map(|e| match e {
                     Entry::Message { message } => message.content,
                     Entry::Compaction { summary, .. } => summary,
+                    Entry::Usage { .. } => unreachable!(),
                 })
                 .unwrap_or_else(|| line.to_string());
             out.push(SearchHit {

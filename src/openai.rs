@@ -256,6 +256,7 @@ fn run_request(
         usage: Usage {
             input: parsed.usage.prompt_tokens,
             output: parsed.usage.completion_tokens,
+            cached_input: parsed.usage.prompt_tokens_details.cached_tokens,
         },
         stop_reason,
     })
@@ -392,6 +393,7 @@ impl StreamAcc {
             let _ = tx.send(StreamEvent::Tokens {
                 input: self.usage.prompt_tokens,
                 output: self.usage.completion_tokens,
+                cached_input: self.usage.prompt_tokens_details.cached_tokens,
             });
         }
         let Some(choice) = chunk.choices.into_iter().next() else {
@@ -410,6 +412,7 @@ impl StreamAcc {
                 let _ = tx.send(StreamEvent::Tokens {
                     input: self.usage.prompt_tokens,
                     output: self.out_tokens,
+                    cached_input: self.usage.prompt_tokens_details.cached_tokens,
                 });
             }
         }
@@ -480,6 +483,7 @@ impl StreamAcc {
             usage: Usage {
                 input: self.usage.prompt_tokens,
                 output: self.usage.completion_tokens,
+                cached_input: self.usage.prompt_tokens_details.cached_tokens,
             },
             stop_reason: self.finish_reason.clone().unwrap_or_default(),
         }
@@ -602,6 +606,14 @@ struct OaUsage {
     prompt_tokens: usize,
     #[serde(default, rename = "completion_tokens")]
     completion_tokens: usize,
+    #[serde(default)]
+    prompt_tokens_details: OaPromptTokensDetails,
+}
+
+#[derive(Clone, Deserialize, Default)]
+struct OaPromptTokensDetails {
+    #[serde(default)]
+    cached_tokens: usize,
 }
 
 #[derive(Deserialize)]

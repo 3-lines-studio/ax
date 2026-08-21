@@ -237,6 +237,13 @@ class Harness:
     def ax_root(self):
         return self.config / "ax"
 
+    def session_root(self):
+        value = 0xcbf29ce484222325
+        for byte in os.fsencode(self.work.resolve()):
+            value ^= byte
+            value = value * 0x100000001b3 & 0xffffffffffffffff
+        return self.ax_root() / "projects" / f"{value:016x}"
+
     def write_config(self, text):
         (self.ax_root() / "config").write_text(text)
 
@@ -249,7 +256,7 @@ class Harness:
         self.seed_session_msgs(sid, title, [{"Role": "user", "Content": content}])
 
     def seed_session_msgs(self, sid, title, msgs):
-        d = self.ax_root() / "sessions"
+        d = self.session_root() / "sessions"
         d.mkdir(parents=True, exist_ok=True)
         out = "".join(json.dumps({"type": "message", "message": m}) + "\n" for m in msgs)
         (d / (sid + ".jsonl")).write_text(out)
@@ -642,9 +649,9 @@ def tui_full_turn(h, ax):
             check(t.wait_exit() == 0, "exit code %s" % t.proc.poll())
         finally:
             t.close()
-        sessions = list((h.ax_root() / "sessions").glob("*.jsonl"))
+        sessions = list((h.session_root() / "sessions").glob("*.jsonl"))
         check(len(sessions) == 1, "expected 1 archived session, got %d" % len(sessions))
-        check(not (h.ax_root() / "session.jsonl").exists(), "live session not archived")
+        check(not (h.session_root() / "session.jsonl").exists(), "live session not archived")
         text = sessions[0].read_text()
         check("check the tool" in text, "user message missing: %s" % text)
         check("echo hello" in text, "tool call missing: %s" % text)
@@ -739,7 +746,7 @@ def tui_rewind(h, ax):
             check(t.wait_exit() == 0, "exit code %s" % t.proc.poll())
         finally:
             t.close()
-        sessions = list((h.ax_root() / "sessions").glob("*.jsonl"))
+        sessions = list((h.session_root() / "sessions").glob("*.jsonl"))
         check(len(sessions) == 1, "expected 1 archived session, got %d" % len(sessions))
         text = sessions[0].read_text()
         check("first question" in text, "kept user message missing: %s" % text)

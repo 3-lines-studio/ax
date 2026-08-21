@@ -37,6 +37,7 @@ pub struct TuiConfig {
     pub system: String,
     pub dir: String,
     pub ax_root: String,
+    pub session_dir: String,
     pub skills_root: String,
     pub api_key: String,
     /// None = fresh session. Some("") = resume picker. Some("last") or id = load.
@@ -111,6 +112,7 @@ pub enum TurnEvent {
     Tokens {
         input: usize,
         output: usize,
+        cached_input: usize,
     },
     Notice(String),
     End {
@@ -316,7 +318,7 @@ pub fn run(cfg: TuiConfig) -> Result<(), String> {
             tui.resume_by_id(&id);
         }
     } else {
-        session::archive_live(&tui.cfg.ax_root);
+        session::archive_live(&tui.cfg.session_dir);
     }
     if tui.entries.is_empty() {
         tui.entries.push(Entry::Welcome);
@@ -383,6 +385,7 @@ struct Tui {
     reprint: bool,
     live_in: usize,
     live_out: usize,
+    live_cached_in: usize,
     rows: u16,
     cols: u16,
     sel: usize,
@@ -448,6 +451,7 @@ impl Tui {
             reprint: false,
             live_in: 0,
             live_out: 0,
+            live_cached_in: 0,
             rows: 24,
             cols: 80,
             sel: 0,
@@ -466,7 +470,7 @@ impl Tui {
     }
 
     fn on_exit(&mut self) {
-        let entries = session::load_live(&self.cfg.ax_root);
+        let entries = session::load_live(&self.cfg.session_dir);
         let projected = session::context_messages(&entries).len();
         let mut entries = entries;
         for m in &self.msgs[projected.min(self.msgs.len())..] {
@@ -474,11 +478,11 @@ impl Tui {
         }
         match self.resume_id.take() {
             Some(id) => {
-                session::continue_archived(&self.cfg.ax_root, &id, &entries);
+                session::continue_archived(&self.cfg.session_dir, &id, &entries);
             }
             None => {
-                session::save_live(&self.cfg.ax_root, &entries);
-                session::archive_live(&self.cfg.ax_root);
+                session::save_live(&self.cfg.session_dir, &entries);
+                session::archive_live(&self.cfg.session_dir);
             }
         }
     }
@@ -981,8 +985,8 @@ impl Tui {
     /// Append the new messages from a finished run to the session entries,
     /// save, and schedule compaction when the context is over budget or the
     /// run failed with a context overflow error (retrying once after).
-    fn persist_session(&mut self, messages: &[Message], err: Option<&str>) {
-        let mut entries = session::load_live(&self.cfg.ax_root);
+    fn persist_session(&mut self, messages: &[Message], usage: Usage, err: Option<&str>) {
+        let mut entries = session::load_live(&self.cfg.session_dir);
         let projected_len = session::context_messages(&entries).len();
         let new_msgs: Vec<Message> = if messages.len() > projected_len {
             messages[projected_len..].to_vec()
@@ -992,7 +996,15 @@ impl Tui {
         for m in &new_msgs {
             entries.push(session::Entry::Message { message: m.clone() });
         }
-        session::save_live(&self.cfg.ax_root, &entries);
+        if usage.input > 0 || usage.output > 0 {
+            entries.push(session::Entry::Usage {
+                input: usage.input,
+                output: usage.output,
+                cached_input: self.live_cached_in,
+                context_input: self.live_in,
+            });
+        }
+        session::save_live(&self.cfg.session_dir, &entries);
 
         let overflow = err.map(session::is_overflow_error).unwrap_or(false);
         if overflow && !self.overflow_retried && !self.compacting {
@@ -1035,9 +1047,9 @@ impl Tui {
         };
         // Append-only: the summary entry joins the existing entries; the
         // context projection drops what it supersedes.
-        let mut entries = session::load_live(&self.cfg.ax_root);
+        let mut entries = session::load_live(&self.cfg.session_dir);
         entries.push(entry);
-        session::save_live(&self.cfg.ax_root, &entries);
+        session::save_live(&self.cfg.session_dir, &entries);
         self.msgs = session::context_messages(&entries);
         self.entries.push(Entry::Notice("compacted".into()));
         if self.retry_after_compact {
@@ -1066,6 +1078,7 @@ impl Tui {
         self.cur_text = None;
         self.live_in = 0;
         self.live_out = 0;
+        self.live_cached_in = 0;
         let cancel = self.cancel.clone();
         let provider = OpenAI::new(self.cfg.base.clone(), self.cfg.api_key.clone());
         let model = self.cfg.model.clone();
@@ -1185,9 +1198,14 @@ impl Tui {
                         self.pending_tools.push(label);
                         self.activity = Activity::Thinking;
                     }
-                    TurnEvent::Tokens { input, output } => {
+                    TurnEvent::Tokens {
+                        input,
+                        output,
+                        cached_input,
+                    } => {
                         self.live_in = input;
                         self.live_out = output;
+                        self.live_cached_in = cached_input;
                     }
                     TurnEvent::Notice(text) => {
                         self.flush_tools();
@@ -1241,9 +1259,9 @@ impl Tui {
                         }
                         if let Some(err) = err {
                             self.entries.push(Entry::Notice(format!("error: {err}")));
-                            self.persist_session(&messages, Some(&err));
+                            self.persist_session(&messages, usage, Some(&err));
                         } else {
-                            self.persist_session(&messages, None);
+                            self.persist_session(&messages, usage, None);
                         }
                         self.activity = Activity::Idle;
                     }
@@ -1328,7 +1346,7 @@ impl Tui {
             "rewind" => self.open_screen(Screen::Rewind),
             "rename" => {
                 if !rest.is_empty() {
-                    session::set_live_title(&self.cfg.ax_root, rest);
+                    session::set_live_title(&self.cfg.session_dir, rest);
                     self.entries
                         .push(Entry::Notice(format!("{DIM}renamed: {rest}{RESET}")));
                 } else {
@@ -1341,7 +1359,7 @@ impl Tui {
                     self.entries
                         .push(Entry::Notice("already compacting…".into()));
                 } else {
-                    let entries = session::load_live(&self.cfg.ax_root);
+                    let entries = session::load_live(&self.cfg.session_dir);
                     if session::context_messages(&entries).len() < 4 {
                         self.entries.push(Entry::Notice(format!(
                             "{DIM}session too small to compact{RESET}"
@@ -1356,7 +1374,7 @@ impl Tui {
                     self.entries
                         .push(Entry::Notice(format!("{DIM}usage: /search <text>{RESET}")));
                 } else {
-                    let hits = session::search(&self.cfg.ax_root, rest);
+                    let hits = session::search(&self.cfg.session_dir, rest);
                     if hits.is_empty() {
                         self.entries
                             .push(Entry::Notice(format!("{DIM}no matches for: {rest}{RESET}")));
@@ -1596,13 +1614,13 @@ impl Tui {
 
     fn fresh_session(&mut self, archive: bool) {
         if archive {
-            let entries = session::load_live(&self.cfg.ax_root);
+            let entries = session::load_live(&self.cfg.session_dir);
             match self.resume_id.take() {
                 Some(id) => {
-                    session::continue_archived(&self.cfg.ax_root, &id, &entries);
+                    session::continue_archived(&self.cfg.session_dir, &id, &entries);
                 }
                 None => {
-                    session::archive_live(&self.cfg.ax_root);
+                    session::archive_live(&self.cfg.session_dir);
                 }
             }
         } else {
@@ -1616,6 +1634,9 @@ impl Tui {
         self.pending_tools.clear();
         self.sess_in = 0;
         self.sess_out = 0;
+        self.live_in = 0;
+        self.live_out = 0;
+        self.live_cached_in = 0;
         self.input.history.clear();
         self.activity = Activity::Idle;
         self.running = false;
@@ -1651,7 +1672,7 @@ impl Tui {
     }
 
     fn resume_by_id(&mut self, id: &str) {
-        let dir = self.cfg.ax_root.clone();
+        let dir = self.cfg.session_dir.clone();
         let loaded = if id == "last" {
             session::list_sessions(&dir)
                 .into_iter()
@@ -1674,6 +1695,25 @@ impl Tui {
 
     fn load_messages(&mut self, entries: Vec<session::Entry>) {
         self.msgs = session::context_messages(&entries);
+        self.sess_in = 0;
+        self.sess_out = 0;
+        self.live_in = 0;
+        self.live_out = 0;
+        self.live_cached_in = 0;
+        for entry in &entries {
+            if let session::Entry::Usage {
+                input,
+                output,
+                cached_input,
+                context_input,
+            } = entry
+            {
+                self.sess_in += input;
+                self.sess_out += output;
+                self.live_in = *context_input;
+                self.live_cached_in = *cached_input;
+            }
+        }
         self.entries.clear();
         self.entries.push(Entry::Welcome);
         let mut tools: Vec<String> = Vec::new();
@@ -1707,8 +1747,6 @@ impl Tui {
         if !tools.is_empty() {
             self.entries.push(Entry::Tool { calls: tools });
         }
-        self.sess_in = 0;
-        self.sess_out = 0;
         self.pending_tools.clear();
         self.streamed.clear();
         self.overflow_retried = false;
@@ -1721,13 +1759,13 @@ impl Tui {
             // diffing against the previous session's lines.
             self.reprint = true;
         }
-        session::save_live(&self.cfg.ax_root, &entries);
+        session::save_live(&self.cfg.session_dir, &entries);
     }
 
     fn open_screen(&mut self, screen: Screen) {
         match screen {
             Screen::Resume => {
-                self.sessions = session::list_sessions(&self.cfg.ax_root);
+                self.sessions = session::list_sessions(&self.cfg.session_dir);
             }
             Screen::Models => {
                 self.start_models_load();
@@ -1893,8 +1931,8 @@ impl Tui {
                     // Flush the session being continued so switching targets
                     // does not drop its transcript.
                     if let Some(prev) = self.resume_id.take() {
-                        let cur = session::load_live(&self.cfg.ax_root);
-                        session::continue_archived(&self.cfg.ax_root, &prev, &cur);
+                        let cur = session::load_live(&self.cfg.session_dir);
+                        session::continue_archived(&self.cfg.session_dir, &prev, &cur);
                     }
                     let msgs = session::load_session(&s.path);
                     let title = s.title.clone();
@@ -2359,6 +2397,29 @@ impl Tui {
             segs.push(format!("{DIM}no api key: /login or OPENAI_API_KEY{RESET}"));
         }
         segs.push(self.model_display.clone());
+        if let Some(window) = self.cfg.context_window
+            && window > 0
+        {
+            let percent = self.live_in.saturating_mul(100) / window;
+            segs.push(format!(
+                "ctx {}/{} ({percent}%)",
+                tok(self.live_in),
+                tok(window)
+            ));
+        }
+        if self.live_cached_in > 0 {
+            let percent = self
+                .live_cached_in
+                .saturating_mul(100)
+                .checked_div(self.live_in)
+                .unwrap_or(0);
+            segs.push(format!("cache {} ({percent}%)", tok(self.live_cached_in)));
+        }
+        segs.push(format!(
+            "session ↑{} ↓{}",
+            tok(self.sess_in),
+            tok(self.sess_out)
+        ));
         if let Some(extra) = scroll_hint {
             segs.push(extra.to_string());
         }
@@ -3874,8 +3935,12 @@ impl Sink for TuiSink<'_> {
         });
     }
 
-    fn tokens(&mut self, input: usize, output: usize) {
-        let _ = self.tx.send(TurnEvent::Tokens { input, output });
+    fn tokens(&mut self, input: usize, output: usize, cached_input: usize) {
+        let _ = self.tx.send(TurnEvent::Tokens {
+            input,
+            output,
+            cached_input,
+        });
     }
 
     fn pending_user_input(&mut self) -> Option<String> {
@@ -3930,6 +3995,7 @@ mod tests {
             system: String::new(),
             dir: String::new(),
             ax_root: dir.to_str().unwrap().to_string(),
+            session_dir: dir.to_str().unwrap().to_string(),
             skills_root: String::new(),
             api_key: "k".into(),
             resume: None,
@@ -3956,6 +4022,7 @@ mod tests {
             system: String::new(),
             dir: String::new(),
             ax_root: dir.to_str().unwrap().to_string(),
+            session_dir: dir.to_str().unwrap().to_string(),
             skills_root: String::new(),
             api_key: "k".into(),
             resume: None,
@@ -4065,6 +4132,7 @@ mod tests {
             system: String::new(),
             dir: String::new(),
             ax_root: dir.to_str().unwrap().to_string(),
+            session_dir: dir.to_str().unwrap().to_string(),
             skills_root: String::new(),
             api_key: "k".into(),
             resume: None,
@@ -4177,6 +4245,7 @@ mod tests {
             system: String::new(),
             dir: String::new(),
             ax_root: dir.to_str().unwrap().to_string(),
+            session_dir: dir.to_str().unwrap().to_string(),
             skills_root: String::new(),
             api_key: String::new(),
             resume: None,

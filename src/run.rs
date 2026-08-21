@@ -51,7 +51,7 @@ pub trait Sink {
     fn tool_start(&mut self, _call: &ToolCall) {}
     fn tool_delta(&mut self, _call: &ToolCall, _text: &str) {}
     fn tool_result(&mut self, _call: &ToolCall) {}
-    fn tokens(&mut self, _input: usize, _output: usize) {}
+    fn tokens(&mut self, _input: usize, _output: usize, _cached_input: usize) {}
     fn assistant(&mut self, _turn: usize, _msg: &Message, _usage: Usage) {}
     fn tool(&mut self, _turn: usize, _msg: &Message) {}
     /// Poll for a user message typed while the agent was running.
@@ -120,6 +120,7 @@ pub fn run_stream<P: Provider>(
         usage = Usage {
             input: usage.input + resp.usage.input,
             output: usage.output + resp.usage.output,
+            cached_input: usage.cached_input + resp.usage.cached_input,
         };
         h.push(resp.message);
         sink.assistant(turn, h.last().unwrap(), resp.usage);
@@ -312,8 +313,12 @@ fn stream<P: Provider>(
                     forwarded += 1;
                     calls.push(c);
                 }
-                StreamEvent::Tokens { input, output } => {
-                    sink.tokens(input, output);
+                StreamEvent::Tokens {
+                    input,
+                    output,
+                    cached_input,
+                } => {
+                    sink.tokens(input, output, cached_input);
                 }
                 StreamEvent::Done => break,
             }

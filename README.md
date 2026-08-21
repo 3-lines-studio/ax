@@ -88,8 +88,9 @@ compaction only runs after an explicit context-overflow error.
 
 Everything is files; there is no state machine.
 
-- `~/.config/ax/sessions/` — sessions, archived on exit. `/resume` or
-  `ax -r` reopens the picker; `ax --resume last` resumes the latest.
+- `~/.config/ax/projects/<cwd-hash>/sessions/` — sessions scoped to the work
+  dir and archived on exit. `/resume` or `ax -r` reopens the picker;
+  `ax --resume last` resumes the latest session for that work dir.
 - `~/.config/ax/commands/<name>.md` — user commands: prompt templates for
   `/name [args]`. `$ARGUMENTS` and `$@` are all args, `$1..$9` positional,
   `${2:-default}` defaults, `${@:N}` and `${@:N:L}` slices; quoted args are

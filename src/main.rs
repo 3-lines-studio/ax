@@ -31,7 +31,9 @@ fn main() {
             eprintln!("usage: ax --search <text>");
             std::process::exit(1);
         }
-        for h in ax::session::search(&ax_root(), text) {
+        let session_dir =
+            ax::session::scope_dir(&ax_root(), &std::env::current_dir().unwrap_or_default());
+        for h in ax::session::search(&session_dir, text) {
             let id = if h.id == "live" {
                 "live".to_string()
             } else {
@@ -57,12 +59,14 @@ fn main() {
     let mut prompt = prompt;
     if prompt.is_empty() && std::io::stdin().is_terminal() {
         let tools = ax::tui::build_tools(&cfg.dir, &skills_root());
+        let session_dir = ax::session::scope_dir(&ax_root(), std::path::Path::new(&work_dir(&cfg)));
         let tui_cfg = ax::tui::TuiConfig {
             base: cfg.base.clone(),
             model: cfg.model.clone(),
             system: resolve_system(&cfg, &tools),
             dir: cfg.dir.clone(),
             ax_root: ax_root(),
+            session_dir,
             skills_root: skills_root(),
             api_key: api_key(&fc),
             resume: cfg.resume.clone(),

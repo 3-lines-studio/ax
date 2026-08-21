@@ -1,6 +1,7 @@
 RELEASE = cargo +nightly build --release --config 'build.rustflags="-C force-unwind-tables=no"'
+PREFIX ?= $(HOME)/.local
 
-.PHONY: check run dev harness
+.PHONY: check run dev harness install
 
 check:
 	cargo fmt
@@ -20,3 +21,8 @@ dev:
 harness:
 	$(RELEASE)
 	python3 scripts/harness.py --bin target/release/ax
+
+install:
+	$(RELEASE)
+	install -d "$(PREFIX)/bin"
+	install -m 0755 target/release/ax "$(PREFIX)/bin/ax"

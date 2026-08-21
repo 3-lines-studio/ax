@@ -40,6 +40,7 @@ impl Provider for Fake {
             let _ = tx.send(StreamEvent::Tokens {
                 input: resp.usage.input,
                 output: resp.usage.output,
+                cached_input: resp.usage.cached_input,
             });
             let _ = tx.send(StreamEvent::Done);
             Ok(resp)
@@ -164,6 +165,7 @@ fn run_executes_tools_and_returns_transcript() {
                 usage: Usage {
                     input: 10,
                     output: 5,
+                    cached_input: 0,
                 },
                 stop_reason: String::new(),
             },
@@ -172,6 +174,7 @@ fn run_executes_tools_and_returns_transcript() {
                 usage: Usage {
                     input: 20,
                     output: 2,
+                    cached_input: 0,
                 },
                 stop_reason: String::new(),
             },

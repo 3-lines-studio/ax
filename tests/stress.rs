@@ -929,8 +929,23 @@ fn session_old_format_and_compaction_roundtrip() {
             tool_call_id: String::new(),
         }],
     };
-    ax::session::save_live(d, &[entry]);
+    let usage = ax::session::Entry::Usage {
+        input: 120,
+        output: 8,
+        cached_input: 80,
+        context_input: 100,
+    };
+    ax::session::save_live(d, &[entry, usage]);
     let entries = ax::session::load_live(d);
+    assert!(matches!(
+        entries[1],
+        ax::session::Entry::Usage {
+            input: 120,
+            output: 8,
+            cached_input: 80,
+            context_input: 100
+        }
+    ));
     let msgs = ax::session::context_messages(&entries);
     assert_eq!(msgs.len(), 2);
     assert!(msgs[0].content.contains("done stuff"));

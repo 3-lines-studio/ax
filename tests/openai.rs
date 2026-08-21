@@ -75,7 +75,7 @@ fn openai_round_trip() {
             tools[0]["function"]["parameters"],
             serde_json::json!({"x": 1})
         );
-        let resp = br#"{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"c10","type":"function","function":{"name":"read","arguments":"{\"path\":\"b.txt\"}"}}]}}],"usage":{"prompt_tokens":123,"completion_tokens":7}}"#;
+        let resp = br#"{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"c10","type":"function","function":{"name":"read","arguments":"{\"path\":\"b.txt\"}"}}]}}],"usage":{"prompt_tokens":123,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":100}}}"#;
         let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: ");
         let _ = sock.write_all(resp.len().to_string().as_bytes());
         let _ = sock.write_all(b"\r\nConnection: close\r\n\r\n");
@@ -134,6 +134,7 @@ fn openai_round_trip() {
     assert_eq!(c.arguments, r#"{"path":"b.txt"}"#);
     assert_eq!(resp.usage.input, 123);
     assert_eq!(resp.usage.output, 7);
+    assert_eq!(resp.usage.cached_input, 100);
 }
 
 #[test]
@@ -156,7 +157,7 @@ fn openai_stream_round_trip() {
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n",
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"a\\\"}\"}}]}}]}\n\n",
             "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
-            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2}}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":3}}}\n\n",
             "data: [DONE]\n\n"
         );
         write!(
@@ -193,6 +194,7 @@ fn openai_stream_round_trip() {
     assert_eq!(response.message.tool_calls[0].arguments, r#"{"path":"a"}"#);
     assert_eq!(response.usage.input, 4);
     assert_eq!(response.usage.output, 2);
+    assert_eq!(response.usage.cached_input, 3);
     assert_eq!(response.stop_reason, "length");
     let events: Vec<_> = rx.into_iter().collect();
     assert!(
