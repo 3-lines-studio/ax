@@ -83,7 +83,18 @@ enum Screen {
     Help,
     Resume,
     Models,
+    Rewind,
 }
+
+#[derive(Clone)]
+struct RewindItem {
+    msg_idx: usize,
+    role: String,
+    preview: String,
+}
+
+/// Two Esc presses within this window open the rewind screen.
+const REWIND_ESC_MS: u128 = 800;
 
 pub enum TurnEvent {
     AssistantDelta(String),
@@ -216,6 +227,12 @@ const SLASH: &[SlashSpec] = &[
         category: "Session",
     },
     SlashSpec {
+        command: "/rewind",
+        help: "/rewind",
+        description: "rewind the session to an earlier message",
+        category: "Session",
+    },
+    SlashSpec {
         command: "/compact",
         help: "/compact",
         description: "summarize the conversation so far",
@@ -329,6 +346,7 @@ struct Tui {
     cancel: Arc<AtomicBool>,
     ctrl_c_pending: bool,
     ctrl_c_armed_ms: Option<Instant>,
+    esc_armed_ms: Option<Instant>,
     last_input_row: u16,
     toggle_full_pending: bool,
     exit_alt_pending: bool,
@@ -377,6 +395,7 @@ struct Tui {
     picker_dismissed: Option<PickerKind>,
     user_commands: Vec<UserCommand>,
     login: Option<LoginWizard>,
+    rewind_items: Vec<RewindItem>,
     /// Archive id being continued; None = a fresh session that forks on exit.
     resume_id: Option<String>,
 }
@@ -392,6 +411,7 @@ impl Tui {
             cancel: Arc::new(AtomicBool::new(false)),
             ctrl_c_pending: false,
             ctrl_c_armed_ms: None,
+            esc_armed_ms: None,
             last_input_row: 1,
             toggle_full_pending: false,
             exit_alt_pending: false,
@@ -440,6 +460,7 @@ impl Tui {
             picker_dismissed: None,
             user_commands,
             login: None,
+            rewind_items: Vec::new(),
             resume_id: None,
         }
     }
@@ -493,6 +514,11 @@ impl Tui {
                 self.ctrl_c_armed_ms = None;
                 self.ctrl_c_pending = false;
             }
+            if let Some(t) = self.esc_armed_ms
+                && t.elapsed().as_millis() >= REWIND_ESC_MS
+            {
+                self.esc_armed_ms = None;
+            }
             self.drain_events();
             self.paint(term);
         }
@@ -515,6 +541,7 @@ impl Tui {
             _ => {
                 self.ctrl_c_pending = false;
                 self.ctrl_c_armed_ms = None;
+                self.esc_armed_ms = None;
             }
         }
         if self.screen != Screen::None {
@@ -550,6 +577,18 @@ impl Tui {
                     if self.picker.is_some() {
                         self.picker_dismiss();
                         return Ok(true);
+                    }
+                    if self.double_esc() {
+                        if self.busy_for_rewind() {
+                            self.entries.push(Entry::Notice(
+                                "agent is running; ctrl+c interrupts it first".into(),
+                            ));
+                        } else {
+                            self.open_screen(Screen::Rewind);
+                            return Ok(true);
+                        }
+                    } else {
+                        self.esc_armed_ms = Some(Instant::now());
                     }
                     self.toggle_full_pending = true;
                     return Ok(true);
@@ -654,6 +693,17 @@ impl Tui {
                         .push(Entry::Notice(format!("{DIM}login cancelled{RESET}")));
                 } else {
                     self.input.esc();
+                    if self.double_esc() {
+                        if self.busy_for_rewind() {
+                            self.entries.push(Entry::Notice(
+                                "agent is running; ctrl+c interrupts it first".into(),
+                            ));
+                        } else {
+                            self.open_screen(Screen::Rewind);
+                        }
+                    } else {
+                        self.esc_armed_ms = Some(Instant::now());
+                    }
                 }
             }
             Key::Paste(bytes) => self.input.paste(&bytes),
@@ -797,6 +847,22 @@ impl Tui {
             self.mode = Mode::Inline;
             self.streamed.clear();
         }
+    }
+
+    /// Consume an Esc press: true when it completes a double-Esc within
+    /// REWIND_ESC_MS of the previous one.
+    fn double_esc(&mut self) -> bool {
+        let now = Instant::now();
+        let within = self
+            .esc_armed_ms
+            .map(|t| now.duration_since(t).as_millis() < REWIND_ESC_MS)
+            .unwrap_or(false);
+        self.esc_armed_ms = None;
+        within
+    }
+
+    fn busy_for_rewind(&self) -> bool {
+        self.running || self.compacting
     }
 
     fn ctrl_c(&mut self) {
@@ -1243,7 +1309,12 @@ impl Tui {
         };
         // These replace session state; running them mid-turn would clobber
         // the transcript the worker is still producing.
-        if self.running && matches!(name, "clear" | "new" | "reset" | "resume" | "compact") {
+        if self.running
+            && matches!(
+                name,
+                "clear" | "new" | "reset" | "resume" | "rewind" | "compact"
+            )
+        {
             self.entries.push(Entry::Notice(
                 "agent is running; ctrl+c interrupts it first".into(),
             ));
@@ -1254,6 +1325,7 @@ impl Tui {
             "clear" | "new" => self.fresh_session(true),
             "reset" => self.fresh_session(false),
             "resume" => self.open_screen(Screen::Resume),
+            "rewind" => self.open_screen(Screen::Rewind),
             "rename" => {
                 if !rest.is_empty() {
                     session::set_live_title(&self.cfg.ax_root, rest);
@@ -1660,13 +1732,82 @@ impl Tui {
             Screen::Models => {
                 self.start_models_load();
             }
+            Screen::Rewind => {
+                self.rewind_items = self.build_rewind_items();
+            }
             _ => {}
         }
         self.screen = screen;
         self.input.take();
         self.sel = 0;
         self.window_start = 0;
+        if screen == Screen::Rewind {
+            // Start on the most recent message: rewinding usually means
+            // going back just a turn or two.
+            self.sel = self.filtered_rewind_items().len().saturating_sub(1);
+        }
         self.last_frame.clear();
+    }
+
+    fn build_rewind_items(&self) -> Vec<RewindItem> {
+        let mut out = Vec::new();
+        for (i, m) in self.msgs.iter().enumerate() {
+            let role = m.role.as_str();
+            if role != "user" && role != "assistant" {
+                continue;
+            }
+            if role == "user" && m.content.starts_with(session::COMPACTION_PREFIX) {
+                continue;
+            }
+            let mut preview = m.content.lines().next().unwrap_or("").trim().to_string();
+            if preview.is_empty() {
+                if role == "assistant" && !m.tool_calls.is_empty() {
+                    let n = m.tool_calls.len();
+                    preview = format!("({n} tool call{})", if n == 1 { "" } else { "s" });
+                } else {
+                    continue;
+                }
+            }
+            out.push(RewindItem {
+                msg_idx: i,
+                role: m.role.clone(),
+                preview,
+            });
+        }
+        out
+    }
+
+    fn filtered_rewind_items(&self) -> Vec<RewindItem> {
+        let q = self.input.buf().trim().to_lowercase();
+        self.rewind_items
+            .iter()
+            .filter(|it| {
+                q.is_empty()
+                    || it.preview.to_lowercase().contains(&q)
+                    || it.role.to_lowercase().contains(&q)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Drop everything from message `idx` onward, in memory and on disk.
+    /// The session file is append-only with compaction markers, so the
+    /// truncated transcript is rewritten as a flat message list; a later
+    /// compaction will re-summarize as usual.
+    fn rewind_to(&mut self, idx: usize) {
+        let idx = idx.min(self.msgs.len());
+        let entries: Vec<session::Entry> = self.msgs[..idx]
+            .iter()
+            .map(|message| session::Entry::Message {
+                message: message.clone(),
+            })
+            .collect();
+        self.load_messages(entries);
+        let n = self.msgs.len();
+        self.entries.push(Entry::Notice(format!(
+            "{DIM}rewound · {n} message{} remaining{RESET}",
+            if n == 1 { "" } else { "s" }
+        )));
     }
 
     fn start_models_load(&mut self) {
@@ -1689,6 +1830,7 @@ impl Tui {
             Screen::Help => self.help_items().len(),
             Screen::Resume => self.filtered_sessions().len(),
             Screen::Models => self.filtered_models().len(),
+            Screen::Rewind => self.filtered_rewind_items().len(),
             _ => 0,
         }
     }
@@ -1773,6 +1915,14 @@ impl Tui {
                         "{DIM}model: {}{RESET}",
                         self.cfg.model
                     )));
+                }
+            }
+            Screen::Rewind => {
+                let item = self.filtered_rewind_items().get(self.sel).cloned();
+                if let Some(it) = item {
+                    let idx = it.msg_idx;
+                    self.close_screen();
+                    self.rewind_to(idx);
                 }
             }
             Screen::None => {}
@@ -1880,12 +2030,44 @@ impl Tui {
                     }
                 }
             }
+            Screen::Rewind => {
+                let items = self.filtered_rewind_items();
+                out.push(format!("{SELECTED}Rewind {}{RESET}", items.len()));
+                push_catalog_items(
+                    &mut self.window_start,
+                    sel,
+                    &mut out,
+                    items.len(),
+                    rows,
+                    |i| {
+                        let it = &items[i];
+                        let desc_col = width * 2 / 3;
+                        let style = if i == sel { SELECTED } else { DIM };
+                        let mut r = format!(
+                            "{style}  {}{RESET}",
+                            clip(&it.preview, desc_col.saturating_sub(4))
+                        );
+                        let pad = desc_col.saturating_sub(visible_width(&r));
+                        r.push_str(&" ".repeat(pad));
+                        r.push_str(&format!(
+                            "{DIM}{}{RESET}",
+                            if it.role == "user" {
+                                "you"
+                            } else {
+                                "assistant"
+                            }
+                        ));
+                        r
+                    },
+                );
+            }
             Screen::None => {}
         }
         let hint = match screen {
             Screen::Help => "↑↓ Navigate     Enter Open     Esc Close",
             Screen::Resume => "↑↓ Navigate     Enter Open     Esc Close",
             Screen::Models => "↑↓ Navigate     Enter Open     Esc Close",
+            Screen::Rewind => "↑↓ Navigate     Enter Rewind     Esc Close",
             Screen::None => "",
         };
         out.push(format!("{DIM}{hint}{RESET}"));

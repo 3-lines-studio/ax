@@ -107,6 +107,11 @@ WRITE_FILE_SCENARIO = [
     {"stream": [content_chunk("file written.", "stop"), usage_chunk(20, 8)]},
 ]
 
+REWIND_SCENARIO = [
+    {"stream": [content_chunk("FIRST ANSWER", "stop"), usage_chunk(5, 3)]},
+    {"stream": [content_chunk("SECOND ANSWER", "stop"), usage_chunk(5, 3)]},
+]
+
 
 class MockServer:
     def __init__(self, scenario, chunk_delay=0.01):
@@ -708,6 +713,38 @@ def tui_search_command(h, ax):
             check(t2.wait_exit() == 0, "search session exit")
         finally:
             t2.close()
+
+
+@case
+def tui_rewind(h, ax):
+    with h.mock(REWIND_SCENARIO) as srv:
+        t = h.tui(ax, base=srv.base_url)
+        try:
+            t.expect("Run /help")
+            t.type("first question\r")
+            t.expect("FIRST ANSWER")
+            t.type("second question\r")
+            t.expect("SECOND ANSWER")
+            # Double-esc opens the rewind screen, preselected on the most
+            # recent message; up moves to "second question", enter rewinds.
+            t.key("esc")
+            time.sleep(0.05)
+            t.key("esc")
+            t.expect("Rewind 4")
+            t.expect("second question")
+            t.key("up")
+            t.key("enter")
+            t.expect("rewound · 2 messages remaining")
+            t.type("/quit\r")
+            check(t.wait_exit() == 0, "exit code %s" % t.proc.poll())
+        finally:
+            t.close()
+        sessions = list((h.ax_root() / "sessions").glob("*.jsonl"))
+        check(len(sessions) == 1, "expected 1 archived session, got %d" % len(sessions))
+        text = sessions[0].read_text()
+        check("first question" in text, "kept user message missing: %s" % text)
+        check("FIRST ANSWER" in text, "kept answer missing: %s" % text)
+        check("second question" not in text, "rewound turn not truncated: %s" % text)
 
 
 @case
