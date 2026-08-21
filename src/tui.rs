@@ -2012,6 +2012,9 @@ impl Tui {
                 let _ = write!(out, "{}", term::move_to(rows as u16, 1));
                 let _ = writeln!(out, "{}", line);
             }
+            // Scrolling the screen shifted the chrome rows too; force a
+            // chrome repaint below.
+            self.last_chrome = None;
             self.streamed = new.to_vec();
             return;
         }
@@ -2040,6 +2043,9 @@ impl Tui {
                         let _ = write!(out, "{}", term::move_to(rows as u16, 1));
                         let _ = out.write_all(b"\n");
                     }
+                    // The newlines scrolled the chrome rows up as well;
+                    // force a chrome repaint below.
+                    self.last_chrome = None;
                 }
                 for i in 0..new.len() {
                     if old.get(i) != new.get(i) {
