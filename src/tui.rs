@@ -3787,6 +3787,9 @@ pub fn build_tools(dir: &str, skills_root: &str) -> Vec<Tool> {
         crate::tools::edit(),
         crate::tools::bash(dir),
     ];
+    if let Some(tool) = crate::tools::web_fetch() {
+        tools.push(tool);
+    }
     tools.extend(crate::skills::skill_tools(skills_root));
     tools
 }
@@ -3806,6 +3809,7 @@ fn tool_label(call: &ToolCall, running: bool) -> String {
     struct Args {
         path: Option<String>,
         command: Option<String>,
+        url: Option<String>,
     }
     let args: Option<Args> = serde_json::from_str(&call.arguments).ok();
     let path = args
@@ -3815,6 +3819,10 @@ fn tool_label(call: &ToolCall, running: bool) -> String {
     let command = args
         .as_ref()
         .and_then(|a| a.command.clone())
+        .unwrap_or_default();
+    let url = args
+        .as_ref()
+        .and_then(|a| a.url.clone())
         .unwrap_or_default();
     match call.name.as_str() {
         "bash" => {
@@ -3829,6 +3837,7 @@ fn tool_label(call: &ToolCall, running: bool) -> String {
         "read" => format!("{} {path}", if running { "Reading" } else { "Read" }),
         "write" => format!("{} {path}", if running { "Writing" } else { "Wrote" }),
         "edit" => format!("{} {path}", if running { "Editing" } else { "Edited" }),
+        "web_fetch" => format!("{} {url}", if running { "Fetching" } else { "Fetched" }),
         _ => format!("Working: {}", call.name),
     }
 }

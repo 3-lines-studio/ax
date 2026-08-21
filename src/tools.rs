@@ -269,7 +269,10 @@ fn status_str(st: std::process::ExitStatus) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_OUTPUT, apply_edits, count_lines, sanitize, tail};
+    use super::{
+        MAX_OUTPUT, WEB_FETCH_HEAD, WEB_FETCH_OUTPUT, apply_edits, count_lines, find_wax, sanitize,
+        tail, truncate_web_fetch,
+    };
 
     #[test]
     fn sanitize_strips_control_characters() {
@@ -354,6 +357,38 @@ mod tests {
     }
 
     #[test]
+    fn finds_executable_wax() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("ax-wax-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        let wax = dir.join("wax");
+        std::fs::write(&wax, "").unwrap();
+        std::fs::set_permissions(&wax, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(find_wax(Some(dir.clone().into_os_string())), Some(wax));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn web_fetch_keeps_head_and_tail() {
+        let text = format!(
+            "{}{}",
+            "a".repeat(WEB_FETCH_HEAD + 100),
+            "b".repeat(WEB_FETCH_OUTPUT)
+        );
+        let path = std::path::Path::new("/tmp/full.md");
+        let out = truncate_web_fetch(&text, Some(path));
+        assert!(out.starts_with(&"a".repeat(WEB_FETCH_HEAD)));
+        assert!(out.ends_with(&"b".repeat(WEB_FETCH_OUTPUT - WEB_FETCH_HEAD)));
+        assert!(out.contains("content truncated by AX"));
+        assert!(out.contains("Full content: /tmp/full.md"));
+        assert!(out.contains("Use read with offset/limit to continue"));
+    }
+
+    #[test]
     fn bash_truncation_notice() {
         let bash = crate::tools::bash("");
         let args = serde_json::json!({"command": "yes | head -c 20000"}).to_string();
@@ -383,6 +418,99 @@ mod tests {
             "full output file missing: {path}"
         );
     }
+}
+
+#[derive(Deserialize)]
+struct WebFetchArgs {
+    url: String,
+}
+
+const WEB_FETCH_OUTPUT: usize = 64 * 1024;
+const WEB_FETCH_HEAD: usize = 48 * 1024;
+
+static WEB_FETCH_TAG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn web_fetch() -> Option<Tool> {
+    let wax = find_wax(std::env::var_os("PATH"))?;
+    let mut t = new_tool(
+        "web_fetch",
+        "Fetch a URL with Wax and return its content as Markdown. Uses system Chromium when needed. Output is truncated to 64KB.",
+        r#"{"type":"object","properties":{"url":{"type":"string","description":"HTTP or HTTPS URL to fetch"}},"required":["url"]}"#,
+        move |a: WebFetchArgs| {
+            let output = match std::process::Command::new(&wax).arg(&a.url).output() {
+                Ok(output) => output,
+                Err(e) => return format!("error: {e}"),
+            };
+            if !output.status.success() {
+                let error = sanitize(&String::from_utf8_lossy(&output.stderr));
+                if error.trim().is_empty() {
+                    return format!("error: wax exited with {}", status_str(output.status));
+                }
+                return tail(&error).trim().to_string();
+            }
+            let text = sanitize(&String::from_utf8_lossy(&output.stdout));
+            if text.len() <= WEB_FETCH_OUTPUT {
+                return text;
+            }
+            let path = match store_web_fetch(&text) {
+                Ok(path) => path,
+                Err(e) => return format!("error: preserve full web content: {e}"),
+            };
+            truncate_web_fetch(&text, Some(&path))
+        },
+    );
+    t.snippet = "Fetch URL as Markdown with Wax";
+    Some(t)
+}
+
+fn find_wax(path: Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    for dir in std::env::split_paths(&path?) {
+        let candidate = dir.join("wax");
+        let Ok(metadata) = candidate.metadata() else {
+            continue;
+        };
+        if metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn store_web_fetch(text: &str) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write;
+
+    let tag = WEB_FETCH_TAG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("ax-web-fetch-{}-{tag}.md", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    file.write_all(text.as_bytes())?;
+    Ok(path)
+}
+
+fn truncate_web_fetch(text: &str, full_path: Option<&std::path::Path>) -> String {
+    if text.len() <= WEB_FETCH_OUTPUT {
+        return text.to_string();
+    }
+    let mut head = WEB_FETCH_HEAD;
+    while !text.is_char_boundary(head) {
+        head -= 1;
+    }
+    let mut tail = text.len() - (WEB_FETCH_OUTPUT - WEB_FETCH_HEAD);
+    while !text.is_char_boundary(tail) {
+        tail += 1;
+    }
+    let notice = match full_path {
+        Some(path) => format!(
+            "content truncated by AX: showing first 48 KiB and final 16 KiB. Full content: {}. Use read with offset/limit to continue.",
+            path.display()
+        ),
+        None => "content truncated by AX: showing first 48 KiB and final 16 KiB".to_string(),
+    };
+    format!("{}\n\n[{notice}]\n\n{}", &text[..head], &text[tail..])
 }
 
 #[derive(Deserialize)]
