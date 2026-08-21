@@ -52,6 +52,9 @@ pub trait Sink {
     fn tool_delta(&mut self, _call: &ToolCall, _text: &str) {}
     fn tool_result(&mut self, _call: &ToolCall) {}
     fn tokens(&mut self, _input: usize, _output: usize, _cached_input: usize) {}
+    fn should_compact(&mut self, _input: usize, _output: usize) -> bool {
+        false
+    }
     fn assistant(&mut self, _turn: usize, _msg: &Message, _usage: Usage) {}
     fn tool(&mut self, _turn: usize, _msg: &Message) {}
     /// Poll for a user message typed while the agent was running.
@@ -72,6 +75,7 @@ pub enum Outcome {
     Done,
     MaxTurns,
     Cancelled,
+    Compact,
     Failed(String),
 }
 pub struct RunEnd {
@@ -145,6 +149,16 @@ pub fn run_stream<P: Provider>(
                 messages: h,
                 usage,
                 outcome: Outcome::Cancelled,
+            };
+        }
+        if sink.should_compact(resp.usage.input, resp.usage.output) {
+            if let Some(text) = sink.pending_user_input() {
+                h.push(user_message(text));
+            }
+            return RunEnd {
+                messages: h,
+                usage,
+                outcome: Outcome::Compact,
             };
         }
     }

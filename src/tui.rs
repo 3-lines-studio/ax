@@ -42,9 +42,9 @@ pub struct TuiConfig {
     pub api_key: String,
     /// None = fresh session. Some("") = resume picker. Some("last") or id = load.
     pub resume: Option<String>,
-    /// Model context window in tokens; unset means the model's default applies
-    /// and proactive compaction is disabled.
+    /// Model context window in tokens; unset means the model's default applies.
     pub context_window: Option<usize>,
+    pub compaction_threshold: Option<usize>,
 }
 
 enum Entry {
@@ -120,6 +120,7 @@ pub enum TurnEvent {
         usage: Usage,
         err: Option<String>,
         cancelled: bool,
+        compact: bool,
     },
 }
 
@@ -985,7 +986,13 @@ impl Tui {
     /// Append the new messages from a finished run to the session entries,
     /// save, and schedule compaction when the context is over budget or the
     /// run failed with a context overflow error (retrying once after).
-    fn persist_session(&mut self, messages: &[Message], usage: Usage, err: Option<&str>) {
+    fn persist_session(
+        &mut self,
+        messages: &[Message],
+        usage: Usage,
+        err: Option<&str>,
+        resume_after_compaction: bool,
+    ) {
         let mut entries = session::load_live(&self.cfg.session_dir);
         let projected_len = session::context_messages(&entries).len();
         let new_msgs: Vec<Message> = if messages.len() > projected_len {
@@ -1002,10 +1009,16 @@ impl Tui {
                 output: usage.output,
                 cached_input: self.live_cached_in,
                 context_input: self.live_in,
+                context_output: self.live_out,
             });
         }
         session::save_live(&self.cfg.session_dir, &entries);
 
+        if resume_after_compaction && !self.compacting {
+            self.retry_after_compact = true;
+            self.start_compaction(entries);
+            return;
+        }
         let overflow = err.map(session::is_overflow_error).unwrap_or(false);
         if overflow && !self.overflow_retried && !self.compacting {
             self.overflow_retried = true;
@@ -1013,14 +1026,18 @@ impl Tui {
             self.start_compaction(entries);
             return;
         }
-        if !overflow
-            && !self.compacting
-            && let Some(window) = self.cfg.context_window
+        if overflow || self.compacting {
+            return;
+        }
+        let threshold = self.cfg.compaction_threshold.or_else(|| {
+            self.cfg
+                .context_window
+                .map(|window| window.saturating_sub(16384))
+        });
+        if let Some(threshold) = threshold
+            && session::latest_context_tokens(&entries).is_some_and(|tokens| tokens > threshold)
         {
-            let tokens = session::estimate_tokens(&session::context_messages(&entries));
-            if tokens > window.saturating_sub(16384) {
-                self.start_compaction(entries);
-            }
+            self.start_compaction(entries);
         }
     }
 
@@ -1051,6 +1068,9 @@ impl Tui {
         entries.push(entry);
         session::save_live(&self.cfg.session_dir, &entries);
         self.msgs = session::context_messages(&entries);
+        self.live_in = 0;
+        self.live_out = 0;
+        self.live_cached_in = 0;
         self.entries.push(Entry::Notice("compacted".into()));
         if self.retry_after_compact {
             self.retry_after_compact = false;
@@ -1086,11 +1106,17 @@ impl Tui {
         let dir = self.cfg.dir.clone();
         let skills_root = self.cfg.skills_root.clone();
         let tools = build_tools(&dir, &skills_root);
+        let compaction_threshold = self.cfg.compaction_threshold.or_else(|| {
+            self.cfg
+                .context_window
+                .map(|window| window.saturating_sub(16384))
+        });
         std::thread::spawn(move || {
             let end = {
                 let mut sink = TuiSink {
                     tx: &tx,
                     steer: steer_rx,
+                    compaction_threshold,
                 };
                 run::run_stream(
                     &provider,
@@ -1105,17 +1131,19 @@ impl Tui {
                     &mut sink,
                 )
             };
-            let (err, cancelled) = match end.outcome {
-                Outcome::Done => (None, false),
-                Outcome::MaxTurns => (Some("stopped: max turns reached".into()), false),
-                Outcome::Cancelled => (None, true),
-                Outcome::Failed(e) => (Some(e), false),
+            let (err, cancelled, compact) = match end.outcome {
+                Outcome::Done => (None, false, false),
+                Outcome::MaxTurns => (Some("stopped: max turns reached".into()), false, false),
+                Outcome::Cancelled => (None, true, false),
+                Outcome::Compact => (None, false, true),
+                Outcome::Failed(e) => (Some(e), false, false),
             };
             let _ = tx.send(TurnEvent::End {
                 messages: end.messages,
                 usage: end.usage,
                 err,
                 cancelled,
+                compact,
             });
         });
     }
@@ -1216,6 +1244,7 @@ impl Tui {
                         usage,
                         err,
                         cancelled,
+                        compact,
                     } => {
                         self.running = false;
                         self.tool_running = None;
@@ -1259,9 +1288,9 @@ impl Tui {
                         }
                         if let Some(err) = err {
                             self.entries.push(Entry::Notice(format!("error: {err}")));
-                            self.persist_session(&messages, usage, Some(&err));
+                            self.persist_session(&messages, usage, Some(&err), compact);
                         } else {
-                            self.persist_session(&messages, usage, None);
+                            self.persist_session(&messages, usage, None, compact);
                         }
                         self.activity = Activity::Idle;
                     }
@@ -1706,6 +1735,7 @@ impl Tui {
                 output,
                 cached_input,
                 context_input,
+                ..
             } = entry
             {
                 self.sess_in += input;
@@ -3906,6 +3936,7 @@ fn tool_label(call: &ToolCall, running: bool) -> String {
 struct TuiSink<'a> {
     tx: &'a Sender<TurnEvent>,
     steer: Receiver<String>,
+    compaction_threshold: Option<usize>,
 }
 
 impl Sink for TuiSink<'_> {
@@ -3941,6 +3972,11 @@ impl Sink for TuiSink<'_> {
             output,
             cached_input,
         });
+    }
+
+    fn should_compact(&mut self, input: usize, output: usize) -> bool {
+        self.compaction_threshold
+            .is_some_and(|threshold| input.saturating_add(output) > threshold)
     }
 
     fn pending_user_input(&mut self) -> Option<String> {
@@ -4000,6 +4036,7 @@ mod tests {
             api_key: "k".into(),
             resume: None,
             context_window: None,
+            compaction_threshold: None,
         };
         let mut tui = Tui::new(cfg);
         tui.slash("compact");
@@ -4027,6 +4064,7 @@ mod tests {
             api_key: "k".into(),
             resume: None,
             context_window: None,
+            compaction_threshold: None,
         };
         let mut tui = Tui::new(cfg);
         let (tx, rx) = std::sync::mpsc::channel::<TurnEvent>();
@@ -4137,6 +4175,7 @@ mod tests {
             api_key: "k".into(),
             resume: None,
             context_window: None,
+            compaction_threshold: None,
         };
         let mut tui = Tui::new(cfg);
         tui.entries.clear();
@@ -4193,19 +4232,22 @@ mod tests {
             let mut sink = TuiSink {
                 tx: &tx,
                 steer: steer_rx,
+                compaction_threshold: None,
             };
             let end = run::run_stream(&p, &opts, &msgs, &cancel, &mut sink);
-            let (err, cancelled) = match end.outcome {
-                run::Outcome::Done => (None, false),
-                run::Outcome::MaxTurns => (Some("stopped: max turns reached".into()), false),
-                run::Outcome::Cancelled => (None, true),
-                run::Outcome::Failed(e) => (Some(e), false),
+            let (err, cancelled, compact) = match end.outcome {
+                run::Outcome::Done => (None, false, false),
+                run::Outcome::MaxTurns => (Some("stopped: max turns reached".into()), false, false),
+                run::Outcome::Cancelled => (None, true, false),
+                run::Outcome::Compact => (None, false, true),
+                run::Outcome::Failed(e) => (Some(e), false, false),
             };
             let _ = tx.send(TurnEvent::End {
                 messages: end.messages,
                 usage: end.usage,
                 err,
                 cancelled,
+                compact,
             });
         });
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -4250,6 +4292,7 @@ mod tests {
             api_key: String::new(),
             resume: None,
             context_window: None,
+            compaction_threshold: None,
         };
         let mut tui = Tui::new(cfg);
         tui.login_start();

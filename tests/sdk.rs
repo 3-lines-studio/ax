@@ -485,7 +485,9 @@ fn run_injects_steering_between_turns() {
 fn compact_generates_structured_summary() {
     let p = Fake {
         responses: RefCell::new(VecDeque::from([Response {
-            message: assistant("## Goal\nbuild the thing"),
+            message: assistant(
+                "## Goal\nbuild the thing\n## User Requirements\n- none\n## Progress\n### Done\n- none\n### In Progress\n- build\n### Blocked\n- none\n## Key Decisions\n- none\n## Files\n- none\n## Commands and Results\n- none\n## Open Questions\n- none\n## Next Steps\n1. build\n## Critical Context\n- none",
+            ),
             usage: Usage::default(),
             stop_reason: String::new(),
         }])),
@@ -498,8 +500,8 @@ fn compact_generates_structured_summary() {
         .collect();
     let (summary, tokens_before, retained) =
         ax::session::compact(&p, "m1", &entries).expect("compact");
-    assert_eq!(summary, "## Goal\nbuild the thing");
-    assert!(tokens_before > 20_000);
+    assert!(summary.starts_with("## Goal\nbuild the thing"));
+    assert_eq!(tokens_before, 0);
     assert!(!retained.is_empty() && retained.len() < entries.len());
     let reqs = p.requests.borrow();
     let last = reqs.last().unwrap();
@@ -695,4 +697,51 @@ fn run_cancel_mid_batch_synthesizes_results() {
     let mut trimmed = msgs.clone();
     ax::session::trim_trailing_tool_messages(&mut trimmed);
     assert_eq!(trimmed.len(), msgs.len());
+}
+
+#[test]
+fn run_compacts_after_complete_tool_batch() {
+    struct CompactSink;
+
+    impl ax::run::Sink for CompactSink {
+        fn should_compact(&mut self, input: usize, output: usize) -> bool {
+            input + output > 250_000
+        }
+    }
+
+    let provider = Fake {
+        responses: RefCell::new(VecDeque::from([Response {
+            message: call_tool("call-1", "upper", r#"{"s":"done"}"#),
+            usage: Usage {
+                input: 249_900,
+                output: 200,
+                cached_input: 0,
+            },
+            stop_reason: String::new(),
+        }])),
+        ..Default::default()
+    };
+    let tool = new_tool("upper", "", r#"{"type":"object"}"#, |args: Upper| {
+        args.s.to_uppercase()
+    });
+    let opts = ax::run::RunOptions {
+        model: "m",
+        system: "",
+        tools: &[tool],
+        max_turns: 5,
+    };
+    let mut sink = CompactSink;
+    let end = ax::run::run_stream(
+        &provider,
+        &opts,
+        &[user("work")],
+        &Arc::new(AtomicBool::new(false)),
+        &mut sink,
+    );
+    assert!(matches!(end.outcome, ax::run::Outcome::Compact));
+    assert_eq!(end.messages.len(), 3);
+    assert_eq!(end.messages[1].tool_calls[0].id, "call-1");
+    assert_eq!(end.messages[2].role, "tool");
+    assert_eq!(end.messages[2].tool_call_id, "call-1");
+    assert_eq!(end.messages[2].content, "DONE");
 }

@@ -76,13 +76,18 @@ rendering.
 api_key = "sk-..."        # used when OPENAI_API_KEY is unset
 model = "glm-4.5"
 base = "http://localhost:11434/v1"
-context_window = 131072   # optional: enables proactive context compaction
+context_window = 1000000       # optional: model context size
+compaction_threshold = 250000  # optional: compact before the model limit
 ```
 
 Plain `key = value` lines, `#` comments. Precedence: flags > env > config.
 Run `/login` in the TUI to write these interactively. Set `context_window`
-to your model's context size to enable automatic compaction; without it,
-compaction only runs after an explicit context-overflow error.
+to enable automatic compaction 16,384 tokens before the model limit. Set
+`compaction_threshold` to compact at a lower token count. AX uses the provider's
+reported context usage. During tool-driven work, AX finishes the current model
+response and its full tool batch, compacts, then resumes the same run. Without
+usage data or either setting, compaction runs only after an explicit
+context-overflow error.
 
 ## Files
 

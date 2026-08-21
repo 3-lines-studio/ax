@@ -397,7 +397,9 @@ impl<P: Provider> Agent<P> {
         );
         self.on = sink.on;
         match end.outcome {
-            run::Outcome::Done | run::Outcome::Cancelled => Ok(end.messages),
+            run::Outcome::Done | run::Outcome::Cancelled | run::Outcome::Compact => {
+                Ok(end.messages)
+            }
             run::Outcome::MaxTurns => Err(Error::MaxTurns(end.messages)),
             run::Outcome::Failed(e) => Err(Error::Provider(e)),
         }

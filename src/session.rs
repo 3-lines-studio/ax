@@ -26,6 +26,8 @@ pub enum Entry {
         output: usize,
         cached_input: usize,
         context_input: usize,
+        #[serde(default)]
+        context_output: usize,
     },
 }
 
@@ -309,23 +311,71 @@ pub fn trim_trailing_tool_messages(msgs: &mut Vec<Message>) {
     }
 }
 
-/// Recent messages to keep verbatim after compaction (approximate 20k tokens).
 const RETAIN_TOKENS: usize = 20_000;
 
-fn split_retained(msgs: &[Message]) -> (Vec<Message>, Vec<Message>) {
-    let mut kept = Vec::new();
-    let mut tokens = 0usize;
-    for m in msgs.iter().rev() {
-        let t = estimate_tokens(std::slice::from_ref(m));
-        if tokens + t > RETAIN_TOKENS && !kept.is_empty() {
-            break;
+pub fn latest_context_tokens(entries: &[Entry]) -> Option<usize> {
+    for entry in entries.iter().rev() {
+        match entry {
+            Entry::Usage {
+                context_input,
+                context_output,
+                ..
+            } if *context_input > 0 => {
+                return Some(context_input.saturating_add(*context_output));
+            }
+            Entry::Compaction { .. } => return None,
+            _ => {}
         }
-        kept.push(m.clone());
-        tokens += t;
     }
-    kept.reverse();
-    let summarize_len = msgs.len() - kept.len();
-    (kept, msgs[..summarize_len].to_vec())
+    None
+}
+
+fn split_retained(entries: &[Entry]) -> (Vec<Message>, Vec<Message>) {
+    let msgs = context_messages(entries);
+    let Some(current_tokens) = latest_context_tokens(entries) else {
+        return split_last_turn(msgs);
+    };
+    let mut message_count = msgs.len();
+    let mut retained_start = message_count;
+    let active_start = entries
+        .iter()
+        .rposition(|entry| matches!(entry, Entry::Compaction { .. }))
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    for entry in entries[active_start..].iter().rev() {
+        match entry {
+            Entry::Message { .. } => {
+                message_count = message_count.saturating_sub(1);
+            }
+            Entry::Usage {
+                context_input,
+                context_output,
+                ..
+            } if *context_input > 0 => {
+                let boundary_tokens = context_input.saturating_add(*context_output);
+                if current_tokens.saturating_sub(boundary_tokens) > RETAIN_TOKENS {
+                    break;
+                }
+                retained_start = message_count;
+            }
+            _ => {}
+        }
+    }
+    if retained_start == msgs.len() {
+        return split_last_turn(msgs);
+    }
+    (
+        msgs[retained_start..].to_vec(),
+        msgs[..retained_start].to_vec(),
+    )
+}
+
+fn split_last_turn(msgs: Vec<Message>) -> (Vec<Message>, Vec<Message>) {
+    let start = msgs
+        .iter()
+        .rposition(|message| message.role == "user")
+        .unwrap_or(msgs.len());
+    (msgs[start..].to_vec(), msgs[..start].to_vec())
 }
 
 fn serialize_conversation(msgs: &[Message]) -> String {
@@ -342,12 +392,20 @@ fn serialize_conversation(msgs: &[Message]) -> String {
                 }
             }
             "tool" => {
-                let content = if m.content.len() > 2000 {
-                    let mut end = 2000;
-                    while !m.content.is_char_boundary(end) {
-                        end -= 1;
+                let content = if m.content.len() > 4000 {
+                    let mut head_end = 2000;
+                    while !m.content.is_char_boundary(head_end) {
+                        head_end -= 1;
                     }
-                    format!("{}… [truncated]", &m.content[..end])
+                    let mut tail_start = m.content.len() - 2000;
+                    while !m.content.is_char_boundary(tail_start) {
+                        tail_start += 1;
+                    }
+                    format!(
+                        "{}\n… [middle truncated] …\n{}",
+                        &m.content[..head_end],
+                        &m.content[tail_start..]
+                    )
                 } else {
                     m.content.clone()
                 };
@@ -361,67 +419,104 @@ fn serialize_conversation(msgs: &[Message]) -> String {
 
 const SUMMARY_SYSTEM: &str = "You are a context summarization assistant. Read the conversation and produce a structured summary so another LLM can continue the work. Do NOT continue the conversation. Do NOT respond to questions in it. ONLY output the summary.";
 
-const SUMMARY_PROMPT: &str = "Create a structured context checkpoint summary that another LLM will use to continue the work.
+const SUMMARY_PROMPT: &str = "Create a factual context checkpoint that another coding agent will use to continue the work.
 
-Use this EXACT format:
+Use these exact headings:
 
 ## Goal
-[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
-
-## Constraints & Preferences
-- [Any constraints, preferences, or requirements mentioned by user]
-- [Or \"(none)\" if none were mentioned]
-
+## User Requirements
 ## Progress
 ### Done
-- [x] [Completed tasks/changes]
-
 ### In Progress
-- [ ] [Current work]
-
 ### Blocked
-- [Issues preventing progress, if any]
-
 ## Key Decisions
-- **[Decision]**: [Brief rationale]
-
+## Files
+## Commands and Results
+## Open Questions
 ## Next Steps
-1. [Ordered list of what should happen next]
-
 ## Critical Context
-- [Any data, examples, or references needed to continue]
-- [Or \"(none)\" if not applicable]
 
-Keep each section concise. Preserve exact file paths, function names, and error messages.";
+Use concise bullets. Record only facts supported by the conversation. Distinguish completed work from proposed work. Preserve exact file paths, symbol names, commands, exit status, error messages, values, and user requirements. Keep still-active facts from an earlier checkpoint. Remove superseded facts. Do not copy large tool outputs or source files; retain only details needed to continue.";
+
+const SUMMARY_HEADINGS: [&str; 12] = [
+    "## Goal",
+    "## User Requirements",
+    "## Progress",
+    "### Done",
+    "### In Progress",
+    "### Blocked",
+    "## Key Decisions",
+    "## Files",
+    "## Commands and Results",
+    "## Open Questions",
+    "## Next Steps",
+    "## Critical Context",
+];
+
+fn valid_summary(summary: &str) -> bool {
+    let summary = summary.trim();
+    summary.len() >= 100
+        && SUMMARY_HEADINGS
+            .iter()
+            .all(|heading| summary.contains(heading))
+}
+
+fn request_summary(
+    provider: &impl Provider,
+    model: &str,
+    conversation: &str,
+    correction: Option<&str>,
+) -> Result<String, String> {
+    let correction = correction.unwrap_or("");
+    let prompt = format!(
+        "<conversation>\n{conversation}\n</conversation>\n\n{SUMMARY_PROMPT}\n\n{correction}"
+    );
+    let message = Message {
+        role: "user".into(),
+        content: prompt,
+        tool_calls: Vec::new(),
+        tool_call_id: String::new(),
+    };
+    let req = Request {
+        model,
+        system: SUMMARY_SYSTEM,
+        messages: std::slice::from_ref(&message),
+        tools: &[],
+    };
+    provider
+        .complete(&req)
+        .map(|response| response.message.content.trim().to_string())
+        .map_err(|error| error.to_string())
+}
 
 /// Summarize the conversation in `entries`, returning the summary text, the
-/// estimated tokens before compaction, and the retained recent messages.
+/// provider-reported context tokens before compaction, and retained recent messages.
 pub fn compact(
     provider: &impl Provider,
     model: &str,
     entries: &[Entry],
 ) -> Result<(String, usize, Vec<Message>), String> {
-    let msgs = context_messages(entries);
-    let tokens_before = estimate_tokens(&msgs);
-    let (retained, to_summarize) = split_retained(&msgs);
+    let tokens_before = latest_context_tokens(entries).unwrap_or(0);
+    let (retained, to_summarize) = split_retained(entries);
     if to_summarize.is_empty() {
         return Err("nothing to summarize".into());
     }
     let conversation = serialize_conversation(&to_summarize);
-    let prompt = format!("<conversation>\n{conversation}\n</conversation>\n\n{SUMMARY_PROMPT}");
-    let req = Request {
-        model,
-        system: SUMMARY_SYSTEM,
-        messages: &[Message {
-            role: "user".into(),
-            content: prompt,
-            tool_calls: Vec::new(),
-            tool_call_id: String::new(),
-        }],
-        tools: &[],
-    };
-    let resp = provider.complete(&req).map_err(|e| e.to_string())?;
-    Ok((resp.message.content, tokens_before, retained))
+    let mut summary = request_summary(provider, model, &conversation, None)?;
+    if !valid_summary(&summary) {
+        summary = request_summary(
+            provider,
+            model,
+            &conversation,
+            Some(
+                "Your previous response was invalid. Return all required headings and substantive factual content.",
+            ),
+        )?;
+    }
+    if !valid_summary(&summary) {
+        return Err("invalid compaction summary".into());
+    }
+    Ok((summary, tokens_before, retained))
 }
 
 /// Provider error messages that indicate the context window was exceeded.
@@ -529,4 +624,88 @@ pub fn search(dir: &str, text: &str) -> Vec<SearchHit> {
     }
     out.sort_by_key(|h| std::cmp::Reverse(h.updated));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(role: &str, content: &str) -> Message {
+        Message {
+            role: role.into(),
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: String::new(),
+        }
+    }
+
+    fn usage(context_input: usize, context_output: usize) -> Entry {
+        Entry::Usage {
+            input: context_input,
+            output: context_output,
+            cached_input: 0,
+            context_input,
+            context_output,
+        }
+    }
+
+    #[test]
+    fn retained_context_uses_usage_and_complete_turns() {
+        let mut tool_call = message("assistant", "");
+        tool_call.tool_calls.push(crate::ToolCall {
+            id: "call-1".into(),
+            name: "read".into(),
+            arguments: "{\"path\":\"src/main.rs\"}".into(),
+        });
+        let mut tool_result = message("tool", "file contents");
+        tool_result.tool_call_id = "call-1".into();
+        let entries = vec![
+            Entry::Message {
+                message: message("user", "old"),
+            },
+            Entry::Message {
+                message: message("assistant", "old answer"),
+            },
+            usage(100_000, 100),
+            Entry::Message {
+                message: message("user", "middle"),
+            },
+            Entry::Message {
+                message: message("assistant", "middle answer"),
+            },
+            usage(110_000, 100),
+            Entry::Message {
+                message: message("user", "latest"),
+            },
+            Entry::Message { message: tool_call },
+            Entry::Message {
+                message: tool_result,
+            },
+            Entry::Message {
+                message: message("assistant", "latest answer"),
+            },
+            usage(125_000, 100),
+        ];
+        let (retained, summarized) = split_retained(&entries);
+        assert_eq!(latest_context_tokens(&entries), Some(125_100));
+        assert_eq!(retained.len(), 4);
+        assert_eq!(retained[0].content, "latest");
+        assert_eq!(retained[1].tool_calls[0].id, "call-1");
+        assert_eq!(retained[2].tool_call_id, "call-1");
+        assert_eq!(summarized.last().unwrap().content, "middle answer");
+    }
+
+    #[test]
+    fn compaction_resets_persisted_context_usage() {
+        let entries = vec![
+            usage(250_000, 500),
+            Entry::Compaction {
+                summary: "summary".into(),
+                tokens_before: 250_500,
+                timestamp: 1,
+                retained: Vec::new(),
+            },
+        ];
+        assert_eq!(latest_context_tokens(&entries), None);
+    }
 }

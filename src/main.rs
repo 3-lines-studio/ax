@@ -21,6 +21,7 @@ struct FileConfig {
     model: String,
     base: String,
     context_window: Option<usize>,
+    compaction_threshold: Option<usize>,
 }
 
 fn main() {
@@ -71,6 +72,7 @@ fn main() {
             api_key: api_key(&fc),
             resume: cfg.resume.clone(),
             context_window: fc.context_window,
+            compaction_threshold: fc.compaction_threshold,
         };
         if let Err(e) = ax::tui::run(tui_cfg) {
             eprintln!("error: {e}");
@@ -377,6 +379,7 @@ fn load_config() -> FileConfig {
         model: String::new(),
         base: String::new(),
         context_window: None,
+        compaction_threshold: None,
     };
     let Some(dir) = config_dir() else {
         return c;
@@ -401,6 +404,7 @@ fn load_config() -> FileConfig {
             "model" => c.model = val,
             "base" => c.base = val,
             "context_window" => c.context_window = val.parse().ok(),
+            "compaction_threshold" => c.compaction_threshold = val.parse().ok(),
             _ => {}
         }
     }
@@ -576,6 +580,7 @@ mod tests {
             model: String::new(),
             base: String::new(),
             context_window: None,
+            compaction_threshold: None,
         };
         let tokens = [
             "-base",
