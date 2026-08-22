@@ -508,15 +508,9 @@ fn one_shot(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
             fmt_dur(start.elapsed())
         );
     }
-    let pretty = std::io::stdout().is_terminal();
     for m in &msgs[old_len..] {
         if m.role == "assistant" && !m.content.is_empty() && m.tool_calls.is_empty() {
-            if pretty {
-                let rendered = ax::markdown::Markdown::render(&m.content);
-                print!("{rendered}");
-            } else {
-                println!("{}", m.content);
-            }
+            println!("{}", m.content);
         }
     }
 }
@@ -529,13 +523,13 @@ fn expand_user_command(prompt: &str, ax_root: &str) -> String {
         Some((n, r)) => (n, r.trim()),
         None => (cmd, ""),
     };
-    let Some(uc) = ax::tui::load_user_commands(ax_root)
+    let Some(uc) = ax::commands::load_user_commands(ax_root)
         .into_iter()
         .find(|c| c.name == name)
     else {
         return prompt.to_string();
     };
-    ax::tui::expand_user_command(&uc, rest)
+    ax::commands::expand_user_command(&uc, rest)
 }
 
 fn build_agent(cfg: &Config, fc: &FileConfig, on: impl FnMut(Event) + 'static) -> Agent<OpenAI> {

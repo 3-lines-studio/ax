@@ -13,16 +13,14 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 
+pub mod commands;
 pub mod curlffi;
 mod http;
-pub mod markdown;
 pub mod openai;
 pub mod run;
 pub mod session;
 pub mod skills;
-pub mod term;
 pub mod tools;
-pub mod tui;
 
 pub use openai::OpenAI;
 

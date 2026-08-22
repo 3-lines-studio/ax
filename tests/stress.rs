@@ -6,7 +6,6 @@
 //!
 //! Run: cargo test --release --test stress
 
-use ax::markdown::{Markdown, ansi};
 use ax::openai::StreamEvent;
 use ax::{Message, OpenAI, Request, new_tool};
 use std::io::{Read, Write};
@@ -140,38 +139,6 @@ fn assert_sane(name: &str, seed: u64, out: &str) {
     }
 }
 
-fn fuzz_markdown(rng: &mut Rng, seed: u64, input: &[u8]) {
-    let s = String::from_utf8_lossy(input);
-    guard("markdown render", seed, || {
-        assert_sane("markdown render", seed, &Markdown::render(&s));
-    });
-    guard("markdown stream", seed, || {
-        let mut md = Markdown::new();
-        let n = s.len();
-        let mut i = 0;
-        while i < n {
-            let step = 1 + rng.below(64);
-            let end = (i + step).min(n);
-            md.push(&s[i..end]);
-            i = end;
-        }
-        let out = md.finish();
-        assert_sane("markdown stream", seed, &out);
-    });
-    guard("markdown on_block", seed, || {
-        let mut md = Markdown::new();
-        let blocks = std::rc::Rc::new(std::cell::Cell::new(0usize));
-        let count = std::rc::Rc::clone(&blocks);
-        md.set_on_block(move |_b: ax::markdown::Block, _out: &mut String| {
-            count.set(count.get() + 1);
-        });
-        md.push(&s);
-        let out = md.finish();
-        assert_sane("markdown on_block", seed, &out);
-        assert!(blocks.get() <= 4096, "too many blocks {}", blocks.get());
-    });
-}
-
 const TOKENS: [&str; 20] = [
     "```", "``", "`", "**", "__", "*", "_", "[", "]", "(", ")", "|", "^", "<", ">", "\n\n", "\n",
     "#", "-", "\\",
@@ -227,24 +194,6 @@ fn fuzz_frontmatter(_rng: &mut Rng, seed: u64, input: &[u8]) {
     });
 }
 
-fn fuzz_ansi(rng: &mut Rng, seed: u64, input: &[u8]) {
-    guard("ansi writers", seed, || {
-        let mut out = String::new();
-        ansi::write_dim(&mut out, input);
-        ansi::write_horizontal_rule(&mut out);
-        assert_sane("ansi writers", seed, &out);
-    });
-    guard("highlight", seed, || {
-        for label in ["rust", "python", "js", "go", "json", "markdown", "none"] {
-            if let Some(p) = ax::markdown::highlight::resolve(label) {
-                let out = ax::markdown::highlight::highlight(input, p);
-                assert_sane("highlight", seed, &out);
-            }
-        }
-    });
-    let _ = rng;
-}
-
 fn fuzz_session(_rng: &mut Rng, seed: u64, input: &[u8]) {
     let dir = std::env::temp_dir().join(format!("ax-stress-session-{seed}-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
@@ -273,10 +222,10 @@ fn fuzz_commands(_rng: &mut Rng, seed: u64, input: &[u8]) {
     let _ = std::fs::create_dir_all(dir.join("commands"));
     let _ = std::fs::write(dir.join("commands").join("fuzz.md"), input);
     guard("commands load+expand", seed, || {
-        let cmds = ax::tui::load_user_commands(dir.to_str().unwrap());
+        let cmds = ax::commands::load_user_commands(dir.to_str().unwrap());
         if let Some(uc) = cmds.into_iter().find(|c| c.name == "fuzz") {
             for rest in ["", "arg one", "a".repeat(64).as_str()] {
-                let out = ax::tui::expand_user_command(&uc, rest);
+                let out = ax::commands::expand_user_command(&uc, rest);
                 assert_sane("commands expand", seed, &out);
             }
         }
@@ -337,18 +286,6 @@ fn fuzz_new_tool(_rng: &mut Rng, seed: u64, input: &[u8]) {
     let s = String::from_utf8_lossy(input);
     guard("new_tool args", seed, || {
         let _ = (tool.run)(&s, &mut |_| {});
-    });
-}
-
-fn fuzz_tui_text(rng: &mut Rng, seed: u64, input: &[u8]) {
-    let s = String::from_utf8_lossy(input);
-    guard("tui wrap_ansi", seed, || {
-        let width = 1 + rng.below(40);
-        let rows = ax::tui::wrap_ansi(&s, width);
-        assert!(rows.len() <= s.chars().count().max(1) + 1);
-        for row in rows {
-            assert_sane("tui wrap row", seed, &row);
-        }
     });
 }
 
@@ -458,24 +395,6 @@ fn sse_payload(rng: &mut Rng, input: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn stress_markdown_and_ansi() {
-    let seeds = corpus();
-    let mut cases = 0;
-    for (si, base) in seeds.iter().enumerate() {
-        let mut rng = Rng(si as u64 ^ 0x9E3779B97F4A7C15);
-        for it in 0..3000 {
-            let seed = (si as u64) << 20 | it;
-            let mut buf = base.clone();
-            mutate(&mut rng, &mut buf, 24);
-            fuzz_markdown(&mut rng, seed, &buf);
-            fuzz_ansi(&mut rng, seed, &buf);
-            cases += 1;
-        }
-    }
-    eprintln!("stress_markdown_and_ansi: {cases} cases");
-}
-
-#[test]
 #[ignore]
 fn stress_text_and_session() {
     let seeds = corpus();
@@ -491,7 +410,6 @@ fn stress_text_and_session() {
             fuzz_commands(&mut rng, seed, &buf);
             fuzz_tools(&mut rng, seed, &buf);
             fuzz_new_tool(&mut rng, seed, &buf);
-            fuzz_tui_text(&mut rng, seed, &buf);
             cases += 1;
         }
     }
@@ -1047,7 +965,7 @@ fn session_search_finds_text() {
 
 #[test]
 fn prompt_template_substitution() {
-    use ax::tui::{UserCommand, expand_user_command, parse_command_args, substitute_args};
+    use ax::commands::{UserCommand, expand_user_command, parse_command_args, substitute_args};
     let uc = |content: &str| UserCommand {
         name: "x".into(),
         description: String::new(),
@@ -1096,7 +1014,7 @@ fn skill_name_validation() {
 
 #[test]
 fn builtin_tool_snippets_present() {
-    let tools = ax::tui::build_tools("", "");
+    let tools = ax::tools::defaults("", "");
     for name in ["read", "write", "edit", "bash"] {
         let t = tools.iter().find(|t| t.name == name).expect(name);
         assert!(!t.snippet.is_empty(), "{name} has no snippet");
