@@ -77,10 +77,6 @@ completions, `ctrl+c` twice exits. `/help` lists everything.
 Any OpenAI-compatible endpoint works: `-base https://...` for OpenRouter,
 DeepSeek, Ollama, vLLM.
 
-When [`wax`](https://github.com/3-lines-studio/wax) is installed in `PATH`, AX
-adds a `web_fetch` tool that fetches URLs as Markdown with automatic Chromium
-rendering.
-
 Set `AX_TOOLS` to a space-separated list of external tool commands:
 
 ```sh
