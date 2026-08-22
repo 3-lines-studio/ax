@@ -7,6 +7,24 @@ use std::os::unix::process::CommandExt;
 
 const MAX_OUTPUT: usize = 16 * 1024;
 
+pub fn defaults(dir: &str, skills_root: &str) -> Vec<Tool> {
+    let mut tools = vec![read(), write(), edit(), bash(dir)];
+    if let Ok(commands) = std::env::var("AX_TOOLS") {
+        for tool in external_tools(&commands) {
+            if !tools.iter().any(|existing| existing.name == tool.name) {
+                tools.push(tool);
+            }
+        }
+    }
+    if !tools.iter().any(|tool| tool.name == "web_fetch")
+        && let Some(tool) = web_fetch()
+    {
+        tools.push(tool);
+    }
+    tools.extend(crate::skills::skill_tools(skills_root));
+    tools
+}
+
 /// Strip control characters (except tab/newline/CR) and Unicode format
 /// interlinear annotation marks from tool output before it reaches the model.
 fn sanitize(s: &str) -> String {

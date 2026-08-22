@@ -370,7 +370,7 @@ fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
             }
         });
     }
-    let tools = ax::tui::build_tools(&cfg.dir, &skills_root());
+    let tools = ax::tools::defaults(&cfg.dir, &skills_root());
     let system = resolve_system(cfg, &tools);
     let provider = OpenAI::new(cfg.base.clone(), api_key(fc));
     let mut sink = EventSink {
@@ -539,7 +539,7 @@ fn expand_user_command(prompt: &str, ax_root: &str) -> String {
 }
 
 fn build_agent(cfg: &Config, fc: &FileConfig, on: impl FnMut(Event) + 'static) -> Agent<OpenAI> {
-    let tools = ax::tui::build_tools(&cfg.dir, &skills_root());
+    let tools = ax::tools::defaults(&cfg.dir, &skills_root());
     let system = resolve_system(cfg, &tools);
     Agent::new(OpenAI::new(cfg.base.clone(), api_key(fc)))
         .model(cfg.model.clone())
