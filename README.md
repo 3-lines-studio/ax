@@ -8,13 +8,22 @@ Release binary: **~389 KB**. HTTP goes through system libcurl.
 ## Install
 
 ```sh
-curl -fsSL https://ax.3lines.studio/install.sh | sh
+curl -fsSL https://ax.3lines.studio/install | sh
 ```
 
-Installs to `~/.local/bin` (override with `AX_PREFIX`). Linux (x86_64, aarch64)
-and macOS (arm64). No Rust toolchain, no root. The installer verifies a
-sha256 checksum on every download. Pin a version with `AX_VERSION=v0.1.0`.
-Uninstall: `rm ~/.local/bin/ax`.
+Installs `ax` and `axi` to `~/.local/bin` (override with `AX_PREFIX`). Linux
+(x86_64, aarch64) and macOS (arm64). No Rust toolchain or root required. Every
+download is verified with SHA-256. Install any ecosystem CLI by repository
+name without changing the installer:
+
+```sh
+curl -fsSL https://ax.3lines.studio/install | sh -s -- wax
+curl -fsSL https://ax.3lines.studio/install | sh -s -- wax bqx pgx
+```
+
+Pin core versions with `AX_VERSION` and `AXI_VERSION`. Use `VERSION` when
+installing one optional CLI. Uninstall by removing its file from
+`~/.local/bin`.
 
 ## Build
 
