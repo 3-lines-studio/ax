@@ -325,6 +325,7 @@ impl Sink for EventSink {
 }
 
 fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
+    println!("{}", serde_json::json!({"type": "protocol", "version": 1}));
     let (history, old_len) = if let Some(path) = cfg.messages.as_deref() {
         let data = std::fs::read(path).unwrap_or_else(|e| event_failure(&e.to_string()));
         let messages = serde_json::from_slice::<Vec<Message>>(&data)

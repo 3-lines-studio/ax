@@ -462,6 +462,7 @@ def oneshot_events(h, ax):
         p = h.oneshot(ax, ["--events", "hello"], stdin=b"", base=srv.base_url)
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
         events = [json.loads(line) for line in p.stdout.splitlines()]
+        check(events[0] == {"type": "protocol", "version": 1}, "bad protocol event")
         check(any(e.get("type") == "assistant_delta" for e in events), "no assistant delta")
         check(any(e.get("type") == "usage" for e in events), "no usage event")
         check(events[-1] == {"type": "done", "outcome": "done"}, "bad final event")
