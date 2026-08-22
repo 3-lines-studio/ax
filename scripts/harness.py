@@ -457,6 +457,29 @@ def oneshot_stdin(h, ax):
 
 
 @case
+def oneshot_events(h, ax):
+    with h.mock(ANSWER_SCENARIO) as srv:
+        p = h.oneshot(ax, ["--events", "hello"], stdin=b"", base=srv.base_url)
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        events = [json.loads(line) for line in p.stdout.splitlines()]
+        check(any(e.get("type") == "assistant_delta" for e in events), "no assistant delta")
+        check(any(e.get("type") == "usage" for e in events), "no usage event")
+        check(events[-1] == {"type": "done", "outcome": "done"}, "bad final event")
+
+
+@case
+def oneshot_explicit_session(h, ax):
+    session = h.root / "thread.jsonl"
+    with h.mock(ANSWER_SCENARIO) as srv:
+        first = h.oneshot(ax, ["--session", str(session), "first"], base=srv.base_url)
+        second = h.oneshot(ax, ["--session", str(session), "second"], base=srv.base_url)
+        check(first.returncode == 0 and second.returncode == 0, "session call failed")
+        check(session.is_file(), "session was not written")
+        users = body_msg(srv, 1, "user")
+        check([m["content"] for m in users] == ["first", "second"], "session context lost")
+
+
+@case
 def oneshot_tool_loop(h, ax):
     with h.mock(TOOL_SCENARIO) as srv:
         p = h.oneshot(ax, ["use tools"], base=srv.base_url)

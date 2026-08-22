@@ -3878,7 +3878,16 @@ pub fn build_tools(dir: &str, skills_root: &str) -> Vec<Tool> {
         crate::tools::edit(),
         crate::tools::bash(dir),
     ];
-    if let Some(tool) = crate::tools::web_fetch() {
+    if let Ok(commands) = std::env::var("AX_TOOLS") {
+        for tool in crate::tools::external_tools(&commands) {
+            if !tools.iter().any(|existing| existing.name == tool.name) {
+                tools.push(tool);
+            }
+        }
+    }
+    if !tools.iter().any(|tool| tool.name == "web_fetch")
+        && let Some(tool) = crate::tools::web_fetch()
+    {
         tools.push(tool);
     }
     tools.extend(crate::skills::skill_tools(skills_root));

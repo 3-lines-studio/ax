@@ -270,8 +270,8 @@ fn status_str(st: std::process::ExitStatus) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_OUTPUT, WEB_FETCH_HEAD, WEB_FETCH_OUTPUT, apply_edits, count_lines, find_wax, sanitize,
-        tail, truncate_web_fetch,
+        MAX_OUTPUT, WEB_FETCH_HEAD, WEB_FETCH_OUTPUT, apply_edits, count_lines, external_tools,
+        find_wax, sanitize, tail, truncate_web_fetch,
     };
 
     #[test]
@@ -357,6 +357,33 @@ mod tests {
     }
 
     #[test]
+    fn runs_external_cli_tool() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("ax-tool-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        let command = dir.join("datax");
+        std::fs::write(
+            &command,
+            "#!/bin/sh\nif [ \"$1\" = ax-tools ]; then\n  echo '{\"name\":\"data_query\",\"description\":\"Query data\",\"parameters\":{\"type\":\"object\"}}'\nelse\n  cat\nfi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let tools = external_tools(command.to_str().unwrap());
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "data_query");
+        let mut progress = |_: &str| {};
+        assert_eq!(
+            (tools[0].run)(r#"{"sql":"select 1"}"#, &mut progress),
+            r#"{"sql":"select 1"}"#
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn finds_executable_wax() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -418,6 +445,99 @@ mod tests {
             "full output file missing: {path}"
         );
     }
+}
+
+#[derive(Deserialize)]
+struct ExternalToolSpec {
+    name: String,
+    description: String,
+    parameters: Value,
+    #[serde(default)]
+    snippet: String,
+}
+
+pub fn external_tools(commands: &str) -> Vec<Tool> {
+    let mut tools = Vec::new();
+    for command in commands.split_whitespace() {
+        let output = match std::process::Command::new(command).arg("ax-tools").output() {
+            Ok(output) => output,
+            Err(e) => {
+                eprintln!("ax: discover tools from {command}: {e}");
+                continue;
+            }
+        };
+        if !output.status.success() {
+            let error = sanitize(&String::from_utf8_lossy(&output.stderr));
+            eprintln!("ax: discover tools from {command}: {}", tail(&error).trim());
+            continue;
+        }
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let spec = match serde_json::from_str::<ExternalToolSpec>(line) {
+                Ok(spec) => spec,
+                Err(e) => {
+                    eprintln!("ax: invalid tool from {command}: {e}");
+                    continue;
+                }
+            };
+            if spec.name.is_empty() || spec.description.is_empty() || !spec.parameters.is_object() {
+                eprintln!("ax: invalid tool from {command}");
+                continue;
+            }
+            let name: &'static str = Box::leak(spec.name.into_boxed_str());
+            let description: &'static str = Box::leak(spec.description.into_boxed_str());
+            let snippet: &'static str = Box::leak(spec.snippet.into_boxed_str());
+            let executable = command.to_string();
+            let mut tool = Tool {
+                name,
+                description,
+                parameters: spec.parameters,
+                snippet,
+                sequential: false,
+                run: Box::new(move |arguments, _progress| {
+                    run_external_tool(&executable, name, arguments)
+                }),
+            };
+            if tool.snippet.is_empty() {
+                tool.snippet = description;
+            }
+            tools.push(tool);
+        }
+    }
+    tools
+}
+
+fn run_external_tool(command: &str, name: &str, arguments: &str) -> String {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = match std::process::Command::new(command)
+        .args(["ax-run", name])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => return format!("error: {e}"),
+    };
+    if let Some(mut stdin) = child.stdin.take()
+        && let Err(e) = stdin.write_all(arguments.as_bytes())
+    {
+        return format!("error: {e}");
+    }
+    let output = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(e) => return format!("error: {e}"),
+    };
+    if !output.status.success() {
+        let error = sanitize(&String::from_utf8_lossy(&output.stderr));
+        if error.trim().is_empty() {
+            return format!("error: {command} exited with {}", status_str(output.status));
+        }
+        return tail(&error).trim().to_string();
+    }
+    let result = sanitize(&String::from_utf8_lossy(&output.stdout));
+    tail(&result).to_string()
 }
 
 #[derive(Deserialize)]

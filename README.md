@@ -56,6 +56,20 @@ One-shot:
 OPENAI_API_KEY=... ax "explain main.go"
 ```
 
+Persist one-shot calls in an explicit session file:
+
+```sh
+ax --session ./thread.jsonl "continue fixing the test"
+```
+
+AX loads the file, appends the turn, prints the final answer to stdout, and
+writes status to stderr. Reusing the path continues the same session.
+
+Use `--events` for a JSONL stream on stdout. While AX runs, send
+`{"type":"steer","text":"..."}` or `{"type":"cancel"}` as JSONL on stdin.
+The stream contains assistant deltas, tool events, usage, errors, and one final
+`done` event.
+
 The TUI is a transcript: prompts render on a `┃` rail, answers stream as
 markdown, tool calls collapse to status lines. `enter` sends,
 `shift+enter` inserts a newline, `/` and `@` open command and file
@@ -67,6 +81,17 @@ DeepSeek, Ollama, vLLM.
 When [`wax`](https://github.com/3-lines-studio/wax) is installed in `PATH`, AX
 adds a `web_fetch` tool that fetches URLs as Markdown with automatic Chromium
 rendering.
+
+Set `AX_TOOLS` to a space-separated list of external tool commands:
+
+```sh
+AX_TOOLS="bqx pgx" ax
+```
+
+AX runs `<command> ax-tools` at startup. The command prints one JSON tool
+specification per line with `name`, `description`, and JSON Schema `parameters`.
+For a tool call, AX runs `<command> ax-run <name>`, writes the JSON arguments to
+stdin, reads the result from stdout, and treats a non-zero exit as a tool error.
 
 ## Config
 

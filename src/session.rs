@@ -136,6 +136,39 @@ fn write_entries(path: &Path, entries: &[Entry]) {
     let _ = crate::atomic_write(path, out.as_bytes());
 }
 
+pub fn load_path(path: &Path) -> Result<Vec<Entry>, String> {
+    let data = match std::fs::read_to_string(path) {
+        Ok(data) => data,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("read session {}: {e}", path.display())),
+    };
+    data.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            parse_entry_line(line).ok_or_else(|| format!("invalid session {}", path.display()))
+        })
+        .collect()
+}
+
+pub fn append_messages(path: &Path, messages: &[Message]) -> Result<(), String> {
+    let mut entries = load_path(path)?;
+    entries.extend(
+        messages
+            .iter()
+            .cloned()
+            .map(|message| Entry::Message { message }),
+    );
+    let mut out = String::new();
+    for entry in entries {
+        let line = serde_json::to_string(&entry)
+            .map_err(|e| format!("encode session {}: {e}", path.display()))?;
+        out.push_str(&line);
+        out.push('\n');
+    }
+    crate::atomic_write(path, out.as_bytes())
+        .map_err(|e| format!("write session {}: {e}", path.display()))
+}
+
 pub fn save_live(dir: &str, entries: &[Entry]) {
     if entries.is_empty() {
         return;

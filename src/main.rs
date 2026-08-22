@@ -2,10 +2,13 @@
 
 #![forbid(unsafe_code)]
 
+use ax::run::{self, Outcome, RunOptions, Sink};
 use ax::{Agent, Error, Event, Message, OpenAI, Tool, ToolCall};
 use std::cell::RefCell;
 use std::io::{IsTerminal, Read};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 struct Config {
@@ -14,6 +17,8 @@ struct Config {
     system: String,
     dir: String,
     resume: Option<String>,
+    session: Option<String>,
+    events: bool,
 }
 
 struct FileConfig {
@@ -106,6 +111,8 @@ fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>),
         system: String::new(),
         dir: String::new(),
         resume: None,
+        session: None,
+        events: false,
     };
     let mut rest = Vec::new();
     let mut i = 0;
@@ -114,6 +121,11 @@ fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>),
         if a == "-h" || a == "--help" {
             usage();
             std::process::exit(0);
+        }
+        if a == "--events" {
+            cfg.events = true;
+            i += 1;
+            continue;
         }
         if a == "-r" {
             cfg.resume = Some(String::new());
@@ -148,7 +160,7 @@ fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>),
             None => (stripped.to_string(), None),
         };
         match name.as_str() {
-            "base" | "model" | "system" | "C" => {
+            "base" | "model" | "system" | "C" | "session" => {
                 let v = match inline {
                     Some(v) => v,
                     None => {
@@ -163,6 +175,7 @@ fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>),
                     "model" => cfg.model = v,
                     "system" => cfg.system = v,
                     "C" => cfg.dir = v,
+                    "session" => cfg.session = Some(v),
                     _ => unreachable!(),
                 }
             }
@@ -182,6 +195,8 @@ fn usage() {
          \x20 -model NAME  model name (default \"gpt-4.1-mini\")\n\
          \x20 -system TEXT  system prompt (default: built-in)\n\
          \x20 -C DIR       working directory for tools\n\
+         \x20 --session FILE  use an explicit session file\n\
+         \x20 --events      emit JSONL events on stdout\n\
          \x20 -r, --resume  open the session picker\n\
          \x20 --resume last  resume the most recent session\n\
          \x20 --resume ID   resume a saved session by id\n\
@@ -194,7 +209,164 @@ fn usage() {
     );
 }
 
+struct EventSink {
+    input: std::sync::mpsc::Receiver<String>,
+}
+
+impl EventSink {
+    fn emit(&self, value: serde_json::Value) {
+        use std::io::Write;
+        println!("{value}");
+        let _ = std::io::stdout().flush();
+    }
+}
+
+impl Sink for EventSink {
+    fn assistant_delta(&mut self, text: &str) {
+        self.emit(serde_json::json!({"type": "assistant_delta", "text": text}));
+    }
+
+    fn assistant_done(&mut self) {
+        self.emit(serde_json::json!({"type": "assistant_done"}));
+    }
+
+    fn tool_start(&mut self, call: &ToolCall) {
+        self.emit(serde_json::json!({
+            "type": "tool_start",
+            "id": call.id,
+            "name": call.name,
+            "arguments": call.arguments
+        }));
+    }
+
+    fn tool_delta(&mut self, call: &ToolCall, text: &str) {
+        self.emit(serde_json::json!({"type": "tool_delta", "id": call.id, "text": text}));
+    }
+
+    fn tool_result(&mut self, call: &ToolCall) {
+        self.emit(serde_json::json!({"type": "tool_done", "id": call.id}));
+    }
+
+    fn tokens(&mut self, input: usize, output: usize, cached_input: usize) {
+        self.emit(serde_json::json!({
+            "type": "usage",
+            "input": input,
+            "output": output,
+            "cached_input": cached_input
+        }));
+    }
+
+    fn tool(&mut self, _turn: usize, message: &Message) {
+        self.emit(serde_json::json!({
+            "type": "tool_result",
+            "id": message.tool_call_id,
+            "output": message.content
+        }));
+    }
+
+    fn pending_user_input(&mut self) -> Option<String> {
+        self.input.try_recv().ok()
+    }
+}
+
+fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
+    let mut history = match cfg.session.as_deref() {
+        Some(path) => match ax::session::load_path(std::path::Path::new(path)) {
+            Ok(entries) => ax::session::context_messages(&entries),
+            Err(e) => event_failure(&e),
+        },
+        None => Vec::new(),
+    };
+    history.push(Message {
+        role: "user".into(),
+        content: expand_user_command(&prompt.join(" "), &ax_root()),
+        tool_calls: Vec::new(),
+        tool_call_id: String::new(),
+    });
+    let old_len = history.len().saturating_sub(1);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = std::sync::mpsc::channel();
+    if !std::io::stdin().is_terminal() {
+        let cancel = cancel.clone();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::stdin().lock().lines().map_while(Result::ok) {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                    continue;
+                };
+                match value.get("type").and_then(|value| value.as_str()) {
+                    Some("cancel") => cancel.store(true, Ordering::Relaxed),
+                    Some("steer") => {
+                        if let Some(text) = value.get("text").and_then(|value| value.as_str()) {
+                            let _ = tx.send(text.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+    let tools = ax::tui::build_tools(&cfg.dir, &skills_root());
+    let system = resolve_system(cfg, &tools);
+    let provider = OpenAI::new(cfg.base.clone(), api_key(fc));
+    let mut sink = EventSink { input: rx };
+    let end = run::run_stream(
+        &provider,
+        &RunOptions {
+            model: &cfg.model,
+            system: &system,
+            tools: &tools,
+            max_turns: usize::MAX,
+        },
+        &history,
+        &cancel,
+        &mut sink,
+    );
+    if let Some(path) = cfg.session.as_deref()
+        && let Err(e) =
+            ax::session::append_messages(std::path::Path::new(path), &end.messages[old_len..])
+    {
+        event_failure(&e);
+    }
+    let (outcome, failed) = match end.outcome {
+        Outcome::Done => ("done", false),
+        Outcome::Cancelled => ("cancelled", false),
+        Outcome::Compact => ("compact", false),
+        Outcome::MaxTurns => ("max_turns", true),
+        Outcome::Failed(message) => {
+            println!(
+                "{}",
+                serde_json::json!({"type": "error", "message": message})
+            );
+            ("failed", true)
+        }
+    };
+    println!(
+        "{}",
+        serde_json::json!({"type": "done", "outcome": outcome})
+    );
+    if failed {
+        std::process::exit(1);
+    }
+}
+
+fn event_failure(message: &str) -> ! {
+    println!(
+        "{}",
+        serde_json::json!({"type": "error", "message": message})
+    );
+    println!(
+        "{}",
+        serde_json::json!({"type": "done", "outcome": "failed"})
+    );
+    std::process::exit(1);
+}
+
 fn one_shot(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
+    if cfg.events {
+        one_shot_events(cfg, fc, prompt);
+        return;
+    }
     let stats = Rc::new(RefCell::new((0usize, 0usize)));
     let s2 = stats.clone();
     let on = move |e: Event| {
@@ -216,13 +388,24 @@ fn one_shot(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
     };
     let start = Instant::now();
     let mut agent = build_agent(cfg, fc, on);
-    let user = Message {
+    let mut history = match cfg.session.as_deref() {
+        Some(path) => match ax::session::load_path(std::path::Path::new(path)) {
+            Ok(entries) => ax::session::context_messages(&entries),
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        },
+        None => Vec::new(),
+    };
+    history.push(Message {
         role: "user".into(),
         content: expand_user_command(&prompt.join(" "), &ax_root()),
         tool_calls: Vec::new(),
         tool_call_id: String::new(),
-    };
-    let msgs = match agent.run(&[user]) {
+    });
+    let old_len = history.len().saturating_sub(1);
+    let msgs = match agent.run(&history) {
         Ok(msgs) => msgs,
         Err(Error::MaxTurns(h)) => {
             eprintln!("stopped: ax: max turns reached");
@@ -233,6 +416,12 @@ fn one_shot(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
             std::process::exit(1);
         }
     };
+    if let Some(path) = cfg.session.as_deref()
+        && let Err(e) = ax::session::append_messages(std::path::Path::new(path), &msgs[old_len..])
+    {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
     let (i, o) = *stats.borrow();
     if i + o > 0 {
         eprintln!(
@@ -243,7 +432,7 @@ fn one_shot(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
         );
     }
     let pretty = std::io::stdout().is_terminal();
-    for m in &msgs {
+    for m in &msgs[old_len..] {
         if m.role == "assistant" && !m.content.is_empty() && m.tool_calls.is_empty() {
             if pretty {
                 let rendered = ax::markdown::Markdown::render(&m.content);
