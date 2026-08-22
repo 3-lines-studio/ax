@@ -371,7 +371,7 @@ fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
             }
         });
     }
-    let tools = ax::tools::defaults(&cfg.dir, &skills_root());
+    let tools = tools_or_exit(&cfg.dir, &skills_root());
     let system = resolve_system(cfg, &tools);
     let provider = OpenAI::new(cfg.base.clone(), api_key(fc));
     let mut sink = EventSink {
@@ -533,8 +533,18 @@ fn expand_user_command(prompt: &str, ax_root: &str) -> String {
     ax::commands::expand_user_command(&uc, rest)
 }
 
+fn tools_or_exit(dir: &str, skills_root: &str) -> Vec<Tool> {
+    match ax::tools::try_defaults(dir, skills_root) {
+        Ok(tools) => tools,
+        Err(error) => {
+            eprintln!("error: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn build_agent(cfg: &Config, fc: &FileConfig, on: impl FnMut(Event) + 'static) -> Agent<OpenAI> {
-    let tools = ax::tools::defaults(&cfg.dir, &skills_root());
+    let tools = tools_or_exit(&cfg.dir, &skills_root());
     let system = resolve_system(cfg, &tools);
     Agent::new(OpenAI::new(cfg.base.clone(), api_key(fc)))
         .model(cfg.model.clone())

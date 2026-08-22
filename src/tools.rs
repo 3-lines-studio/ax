@@ -8,16 +8,29 @@ use std::os::unix::process::CommandExt;
 const MAX_OUTPUT: usize = 16 * 1024;
 
 pub fn defaults(dir: &str, skills_root: &str) -> Vec<Tool> {
+    try_defaults(dir, skills_root).unwrap_or_else(|error| {
+        eprintln!("ax: {error}");
+        Vec::new()
+    })
+}
+
+pub fn try_defaults(dir: &str, skills_root: &str) -> Result<Vec<Tool>, String> {
     let mut tools = vec![read(), write(), edit(), bash(dir)];
     if let Ok(commands) = std::env::var("AX_TOOLS") {
-        for tool in external_tools(&commands) {
-            if !tools.iter().any(|existing| existing.name == tool.name) {
-                tools.push(tool);
+        for tool in try_external_tools(&commands)? {
+            if tools.iter().any(|existing| existing.name == tool.name) {
+                return Err(format!("duplicate tool name: {}", tool.name));
             }
+            tools.push(tool);
         }
     }
-    tools.extend(crate::skills::skill_tools(skills_root));
-    tools
+    for tool in crate::skills::skill_tools(skills_root) {
+        if tools.iter().any(|existing| existing.name == tool.name) {
+            return Err(format!("duplicate tool name: {}", tool.name));
+        }
+        tools.push(tool);
+    }
+    Ok(tools)
 }
 
 /// Strip control characters (except tab/newline/CR) and Unicode format
@@ -282,7 +295,9 @@ fn status_str(st: std::process::ExitStatus) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_OUTPUT, apply_edits, count_lines, external_tools, sanitize, tail};
+    use super::{
+        MAX_OUTPUT, apply_edits, count_lines, external_tools, sanitize, tail, try_external_tools,
+    };
 
     #[test]
     fn sanitize_strips_control_characters() {
@@ -367,6 +382,33 @@ mod tests {
     }
 
     #[test]
+    fn rejects_missing_external_cli() {
+        let error = try_external_tools("/no/such/ax-tool").err().unwrap();
+        assert!(error.contains("discover tools"));
+    }
+
+    #[test]
+    fn rejects_invalid_external_tool_name() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("ax-bad-tool-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        let command = dir.join("datax");
+        std::fs::write(
+            &command,
+            "#!/bin/sh\necho '{\"name\":\"bad name\",\"description\":\"Bad\",\"parameters\":{}}'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let error = try_external_tools(command.to_str().unwrap()).err().unwrap();
+        assert!(error.contains("invalid tool name"));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn runs_external_cli_tool() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -435,31 +477,55 @@ struct ExternalToolSpec {
 }
 
 pub fn external_tools(commands: &str) -> Vec<Tool> {
+    try_external_tools(commands).unwrap_or_else(|error| {
+        eprintln!("ax: {error}");
+        Vec::new()
+    })
+}
+
+pub fn try_external_tools(commands: &str) -> Result<Vec<Tool>, String> {
     let mut tools = Vec::new();
     for command in commands.split_whitespace() {
-        let output = match std::process::Command::new(command).arg("ax-tools").output() {
-            Ok(output) => output,
-            Err(e) => {
-                eprintln!("ax: discover tools from {command}: {e}");
-                continue;
-            }
-        };
+        let output = std::process::Command::new(command)
+            .arg("ax-tools")
+            .output()
+            .map_err(|error| format!("discover tools from {command}: {error}"))?;
         if !output.status.success() {
             let error = sanitize(&String::from_utf8_lossy(&output.stderr));
-            eprintln!("ax: discover tools from {command}: {}", tail(&error).trim());
-            continue;
+            let error = tail(&error).trim();
+            if error.is_empty() {
+                return Err(format!(
+                    "discover tools from {command}: exited with {}",
+                    status_str(output.status)
+                ));
+            }
+            return Err(format!("discover tools from {command}: {error}"));
         }
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            let spec = match serde_json::from_str::<ExternalToolSpec>(line) {
-                Ok(spec) => spec,
-                Err(e) => {
-                    eprintln!("ax: invalid tool from {command}: {e}");
-                    continue;
-                }
-            };
-            if spec.name.is_empty() || spec.description.is_empty() || !spec.parameters.is_object() {
-                eprintln!("ax: invalid tool from {command}");
-                continue;
+        let mut found = false;
+        for line in String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+        {
+            found = true;
+            let spec = serde_json::from_str::<ExternalToolSpec>(line)
+                .map_err(|error| format!("invalid tool from {command}: {error}"))?;
+            if !valid_tool_name(&spec.name) {
+                return Err(format!("invalid tool name from {command}: {}", spec.name));
+            }
+            if spec.description.trim().is_empty() {
+                return Err(format!(
+                    "empty tool description from {command}: {}",
+                    spec.name
+                ));
+            }
+            if !spec.parameters.is_object() {
+                return Err(format!(
+                    "invalid tool parameters from {command}: {}",
+                    spec.name
+                ));
+            }
+            if tools.iter().any(|tool: &Tool| tool.name == spec.name) {
+                return Err(format!("duplicate tool name: {}", spec.name));
             }
             let name: &'static str = Box::leak(spec.name.into_boxed_str());
             let description: &'static str = Box::leak(spec.description.into_boxed_str());
@@ -480,8 +546,19 @@ pub fn external_tools(commands: &str) -> Vec<Tool> {
             }
             tools.push(tool);
         }
+        if !found {
+            return Err(format!("no tools discovered from {command}"));
+        }
     }
-    tools
+    Ok(tools)
+}
+
+fn valid_tool_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
 fn run_external_tool(command: &str, name: &str, arguments: &str) -> String {
@@ -515,6 +592,9 @@ fn run_external_tool(command: &str, name: &str, arguments: &str) -> String {
         return tail(&error).trim().to_string();
     }
     let result = sanitize(&String::from_utf8_lossy(&output.stdout));
+    if result.trim().is_empty() {
+        return format!("error: {command} returned no output");
+    }
     tail(&result).to_string()
 }
 
