@@ -1,2 +1,5 @@
+[build]
+rustflags = ["-C", "force-unwind-tables=no"]
+
 [unstable]
 build-std = ["std"]

@@ -3,7 +3,7 @@
 A minimal headless LLM coding agent harness for scripts and Unix-style clients.
 Use `axi` for the interactive terminal interface.
 
-Release binary: **~457 KB**. HTTP goes through system libcurl.
+Release binary: **~389 KB**. HTTP goes through system libcurl.
 
 ## Install
 
