@@ -3,7 +3,7 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-cargo +nightly build --release --config 'build.rustflags="-C force-unwind-tables=no"'
+cargo +nightly build --release
 
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
 case $os in
