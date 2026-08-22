@@ -8,7 +8,7 @@ Release binary: **~389 KB**. HTTP goes through system libcurl.
 ## Install
 
 ```sh
-curl -fsSL https://ax.3lines.studio/install | sh
+curl -fsSL https://ax.3lines.studio/install.sh | sh
 ```
 
 Installs `ax` and `axi` to `~/.local/bin` (override with `AX_PREFIX`). Linux
@@ -17,8 +17,8 @@ download is verified with SHA-256. Install any ecosystem CLI by repository
 name without changing the installer:
 
 ```sh
-curl -fsSL https://ax.3lines.studio/install | sh -s -- wax
-curl -fsSL https://ax.3lines.studio/install | sh -s -- wax bqx pgx
+curl -fsSL https://ax.3lines.studio/install.sh | sh -s -- wax
+curl -fsSL https://ax.3lines.studio/install.sh | sh -s -- wax bqx pgx
 ```
 
 Pin core versions with `AX_VERSION` and `AXI_VERSION`. Use `VERSION` when
