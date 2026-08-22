@@ -19,6 +19,7 @@ struct Config {
     resume: Option<String>,
     session: Option<String>,
     events: bool,
+    messages: Option<String>,
 }
 
 struct FileConfig {
@@ -62,8 +63,15 @@ fn main() {
             std::process::exit(2);
         }
     };
+    if cfg.messages.is_some() && !cfg.events {
+        eprintln!("error: --messages requires --events");
+        std::process::exit(2);
+    }
     let mut prompt = prompt;
-    if prompt.is_empty() && std::io::stdin().is_terminal() {
+    if prompt.is_empty()
+        && std::io::stdin().is_terminal()
+        && !(cfg.events && cfg.messages.is_some())
+    {
         let tools = ax::tui::build_tools(&cfg.dir, &skills_root());
         let session_dir = ax::session::scope_dir(&ax_root(), std::path::Path::new(&work_dir(&cfg)));
         let tui_cfg = ax::tui::TuiConfig {
@@ -83,6 +91,10 @@ fn main() {
             eprintln!("error: {e}");
             std::process::exit(1);
         }
+        return;
+    }
+    if cfg.events && cfg.messages.is_some() {
+        one_shot(&cfg, &fc, &prompt);
         return;
     }
     if prompt.is_empty() {
@@ -113,6 +125,7 @@ fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>),
         resume: None,
         session: None,
         events: false,
+        messages: None,
     };
     let mut rest = Vec::new();
     let mut i = 0;
@@ -160,7 +173,7 @@ fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>),
             None => (stripped.to_string(), None),
         };
         match name.as_str() {
-            "base" | "model" | "system" | "C" | "session" => {
+            "base" | "model" | "system" | "C" | "session" | "messages" => {
                 let v = match inline {
                     Some(v) => v,
                     None => {
@@ -176,6 +189,7 @@ fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>),
                     "system" => cfg.system = v,
                     "C" => cfg.dir = v,
                     "session" => cfg.session = Some(v),
+                    "messages" => cfg.messages = Some(v),
                     _ => unreachable!(),
                 }
             }
@@ -197,6 +211,7 @@ fn usage() {
          \x20 -C DIR       working directory for tools\n\
          \x20 --session FILE  use an explicit session file\n\
          \x20 --events      emit JSONL events on stdout\n\
+         \x20 --messages FILE  use a JSON message array with --events\n\
          \x20 -r, --resume  open the session picker\n\
          \x20 --resume last  resume the most recent session\n\
          \x20 --resume ID   resume a saved session by id\n\
@@ -228,6 +243,10 @@ impl Sink for EventSink {
 
     fn assistant_done(&mut self) {
         self.emit(serde_json::json!({"type": "assistant_done"}));
+    }
+
+    fn assistant(&mut self, _turn: usize, message: &Message, _usage: ax::Usage) {
+        self.emit(serde_json::json!({"type": "message", "message": message}));
     }
 
     fn tool_start(&mut self, call: &ToolCall) {
@@ -262,6 +281,7 @@ impl Sink for EventSink {
             "id": message.tool_call_id,
             "output": message.content
         }));
+        self.emit(serde_json::json!({"type": "message", "message": message}));
     }
 
     fn pending_user_input(&mut self) -> Option<String> {
@@ -270,20 +290,29 @@ impl Sink for EventSink {
 }
 
 fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
-    let mut history = match cfg.session.as_deref() {
-        Some(path) => match ax::session::load_path(std::path::Path::new(path)) {
-            Ok(entries) => ax::session::context_messages(&entries),
-            Err(e) => event_failure(&e),
-        },
-        None => Vec::new(),
+    let (history, old_len) = if let Some(path) = cfg.messages.as_deref() {
+        let data = std::fs::read(path).unwrap_or_else(|e| event_failure(&e.to_string()));
+        let messages = serde_json::from_slice::<Vec<Message>>(&data)
+            .unwrap_or_else(|e| event_failure(&e.to_string()));
+        let len = messages.len();
+        (messages, len)
+    } else {
+        let mut messages = match cfg.session.as_deref() {
+            Some(path) => match ax::session::load_path(std::path::Path::new(path)) {
+                Ok(entries) => ax::session::context_messages(&entries),
+                Err(e) => event_failure(&e),
+            },
+            None => Vec::new(),
+        };
+        messages.push(Message {
+            role: "user".into(),
+            content: expand_user_command(&prompt.join(" "), &ax_root()),
+            tool_calls: Vec::new(),
+            tool_call_id: String::new(),
+        });
+        let old_len = messages.len().saturating_sub(1);
+        (messages, old_len)
     };
-    history.push(Message {
-        role: "user".into(),
-        content: expand_user_command(&prompt.join(" "), &ax_root()),
-        tool_calls: Vec::new(),
-        tool_call_id: String::new(),
-    });
-    let old_len = history.len().saturating_sub(1);
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = std::sync::mpsc::channel();
     if !std::io::stdin().is_terminal() {

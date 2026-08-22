@@ -468,6 +468,18 @@ def oneshot_events(h, ax):
 
 
 @case
+def oneshot_message_input(h, ax):
+    messages = h.root / "messages.json"
+    messages.write_text(json.dumps([{"Role": "user", "Content": "from file"}]))
+    with h.mock(ANSWER_SCENARIO) as srv:
+        p = h.oneshot(ax, ["--events", "--messages", str(messages)], stdin=b"", base=srv.base_url)
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        check(body_msg(srv, 0, "user")[-1]["content"] == "from file", "messages not sent")
+        events = [json.loads(line) for line in p.stdout.splitlines()]
+        check(any(e.get("type") == "message" for e in events), "message event missing")
+
+
+@case
 def oneshot_explicit_session(h, ax):
     session = h.root / "thread.jsonl"
     with h.mock(ANSWER_SCENARIO) as srv:
