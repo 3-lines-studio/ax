@@ -226,6 +226,7 @@ fn usage() {
 
 struct EventSink {
     input: std::sync::mpsc::Receiver<String>,
+    compaction_threshold: Option<usize>,
 }
 
 impl EventSink {
@@ -284,6 +285,11 @@ impl Sink for EventSink {
         self.emit(serde_json::json!({"type": "message", "message": message}));
     }
 
+    fn should_compact(&mut self, input: usize, output: usize) -> bool {
+        self.compaction_threshold
+            .is_some_and(|threshold| input.saturating_add(output) > threshold)
+    }
+
     fn pending_user_input(&mut self) -> Option<String> {
         self.input.try_recv().ok()
     }
@@ -338,7 +344,12 @@ fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
     let tools = ax::tui::build_tools(&cfg.dir, &skills_root());
     let system = resolve_system(cfg, &tools);
     let provider = OpenAI::new(cfg.base.clone(), api_key(fc));
-    let mut sink = EventSink { input: rx };
+    let mut sink = EventSink {
+        input: rx,
+        compaction_threshold: fc
+            .compaction_threshold
+            .or_else(|| fc.context_window.map(|window| window.saturating_sub(16384))),
+    };
     let end = run::run_stream(
         &provider,
         &RunOptions {
@@ -357,6 +368,14 @@ fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
     {
         event_failure(&e);
     }
+    println!(
+        "{}",
+        serde_json::json!({"type": "result", "messages": end.messages, "usage": {
+            "input": end.usage.input,
+            "output": end.usage.output,
+            "cached_input": end.usage.cached_input
+        }})
+    );
     let (outcome, failed) = match end.outcome {
         Outcome::Done => ("done", false),
         Outcome::Cancelled => ("cancelled", false),
