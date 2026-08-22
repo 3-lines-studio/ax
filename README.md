@@ -3,8 +3,7 @@
 A minimal headless LLM coding agent harness for scripts and Unix-style clients.
 Use `axi` for the interactive terminal interface.
 
-Release binary: **~514 KB**. No TUI framework, no markdown library — both
-hand-rolled. HTTP goes through system libcurl.
+Release binary: **~457 KB**. HTTP goes through system libcurl.
 
 ## Install
 
@@ -36,8 +35,8 @@ make harness   # release build + black-box end-to-end harness
 ```
 
 `scripts/harness.py` drives the real binary the way a user would: a hermetic
-HOME and XDG_CONFIG_HOME, a scripted mock OpenAI-compatible endpoint,
-one-shot CLI runs, and a PTY session for the TUI. Run one case with
+HOME and XDG_CONFIG_HOME, a scripted mock OpenAI-compatible endpoint, and
+one-shot CLI runs. Run one case with
 `python3 scripts/harness.py --filter <name>`; list cases with `--list`.
 Unit/integration tests stay in `cargo test`.
 
@@ -69,10 +68,8 @@ Use `--events` for a JSONL stream on stdout. While AX runs, send
 The stream contains assistant deltas, tool events, usage, errors, and one final
 `done` event.
 
-The TUI is a transcript: prompts render on a `┃` rail, answers stream as
-markdown, tool calls collapse to status lines. `enter` sends,
-`shift+enter` inserts a newline, `/` and `@` open command and file
-completions, `ctrl+c` twice exits. `/help` lists everything.
+Axi provides the transcript TUI, streamed Markdown, tool status, commands,
+file completion, steering, and session screens while running AX as a sidecar.
 
 Any OpenAI-compatible endpoint works: `-base https://...` for OpenRouter,
 DeepSeek, Ollama, vLLM.
@@ -101,7 +98,7 @@ compaction_threshold = 250000  # optional: compact before the model limit
 ```
 
 Plain `key = value` lines, `#` comments. Precedence: flags > env > config.
-Run `/login` in the TUI to write these interactively. Set `context_window`
+Run `/login` in Axi to write these interactively. Set `context_window`
 to enable automatic compaction 16,384 tokens before the model limit. Set
 `compaction_threshold` to compact at a lower token count. AX uses the provider's
 reported context usage. During tool-driven work, AX finishes the current model
@@ -124,14 +121,14 @@ Everything is files; there is no state machine.
   through the `skills` tool and reads one with the `skill` tool.
 - `~/.config/ax/SYSTEM.md` — optional system prompt, appended to the
   built-in one.
-- Search sessions with `/search <text>` in the TUI or `ax --search <text>`.
+- Search sessions with `/search <text>` in Axi or `ax --search <text>`.
   Sessions are JSONL: one line per message or compaction entry, so line
   matches map directly to entries.
 
 ## Design
 
 - The loop is the only logic: messages → LLM → tool calls → results →
-  repeat. It lives in `run` and is shared by the SDK and the TUI.
+  repeat. It lives in `run` and is shared by the SDK and headless CLI.
 - `run` never mutates its input. The session file is append-only: compaction
   appends a summary entry (with the recent messages it retains) instead of
   rewriting history; the LLM context is a projection of the entries.
