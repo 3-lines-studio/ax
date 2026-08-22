@@ -1,8 +1,7 @@
 # ax
 
-A minimal LLM coding agent harness with the terminal UX of
-[fx.sh](https://fx.sh): a transcript TUI with streamed markdown, tool
-status lines, and a shell-style input bar.
+A minimal headless LLM coding agent harness for scripts and Unix-style clients.
+Use `axi` for the interactive terminal interface.
 
 Release binary: **~514 KB**. No TUI framework, no markdown library — both
 hand-rolled. HTTP goes through system libcurl.
@@ -44,13 +43,13 @@ Unit/integration tests stay in `cargo test`.
 
 ## Quick start
 
-Interactive TUI:
+Interactive terminal:
 
 ```sh
-OPENAI_API_KEY=... ax
+OPENAI_API_KEY=... axi
 ```
 
-One-shot:
+Headless one-shot:
 
 ```sh
 OPENAI_API_KEY=... ax "explain main.go"

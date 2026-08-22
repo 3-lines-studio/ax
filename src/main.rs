@@ -78,31 +78,6 @@ fn main() {
         return;
     }
     let mut prompt = prompt;
-    if prompt.is_empty()
-        && std::io::stdin().is_terminal()
-        && !(cfg.events && cfg.messages.is_some())
-    {
-        let tools = ax::tui::build_tools(&cfg.dir, &skills_root());
-        let session_dir = ax::session::scope_dir(&ax_root(), std::path::Path::new(&work_dir(&cfg)));
-        let tui_cfg = ax::tui::TuiConfig {
-            base: cfg.base.clone(),
-            model: cfg.model.clone(),
-            system: resolve_system(&cfg, &tools),
-            dir: cfg.dir.clone(),
-            ax_root: ax_root(),
-            session_dir,
-            skills_root: skills_root(),
-            api_key: api_key(&fc),
-            resume: cfg.resume.clone(),
-            context_window: fc.context_window,
-            compaction_threshold: fc.compaction_threshold,
-        };
-        if let Err(e) = ax::tui::run(tui_cfg) {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
-        return;
-    }
     if cfg.events && cfg.messages.is_some() {
         one_shot(&cfg, &fc, &prompt);
         return;
@@ -236,9 +211,7 @@ fn usage() {
          \x20 --resume last  resume the most recent session\n\
          \x20 --resume ID   resume a saved session by id\n\
          \n\
-         With no prompt and a TTY, starts the interactive transcript TUI\n\
-         (fresh session; \"/resume\" reopens saved ones).\n\
-         With no prompt and no TTY, reads the prompt from stdin.
+         With no prompt, reads the prompt from stdin.
          A prompt of the form /name [args] expands a user command from
          ~/.config/ax/commands/<name>.md (same expansion as the TUI)."
     );
