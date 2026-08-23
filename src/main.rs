@@ -155,6 +155,10 @@ fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>),
             i += 1;
             continue;
         }
+        if a == "--" {
+            rest = args[i + 1..].to_vec();
+            break;
+        }
         let Some(stripped) = a.strip_prefix('-') else {
             rest = args[i..].to_vec();
             break;
@@ -842,6 +846,19 @@ mod tests {
         fn below(&mut self, n: usize) -> usize {
             (self.next() % n.max(1) as u64) as usize
         }
+    }
+
+    #[test]
+    fn double_dash_ends_options() {
+        let fc = FileConfig {
+            api_key: String::new(),
+            model: String::new(),
+            base: String::new(),
+            context_window: None,
+            compaction_threshold: None,
+        };
+        let (_, prompt) = parse_args(&["--".into(), "-prompt".into()], &fc).unwrap();
+        assert_eq!(prompt, ["-prompt"]);
     }
 
     #[test]
