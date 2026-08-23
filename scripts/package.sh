@@ -22,9 +22,15 @@ out="ax-$os-$arch"
 cp target/release/ax "$out"
 
 if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$out" > "$out.sha256"
+    hash=$(sha256sum "$out" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+    hash=$(shasum -a 256 "$out" | awk '{print $1}')
+elif command -v openssl >/dev/null 2>&1; then
+    hash=$(openssl dgst -sha256 "$out" | awk '{print $NF}')
 else
-    shasum -a 256 "$out" > "$out.sha256"
+    echo "package: sha256sum, shasum, or openssl is required" >&2
+    exit 1
 fi
+printf '%s  %s\n' "$hash" "$out" > "$out.sha256"
 
 echo "$out"

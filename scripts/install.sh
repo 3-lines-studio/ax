@@ -18,13 +18,27 @@ case $arch in
     aarch64 | arm64) arch=aarch64 ;;
     *) echo "install: unsupported arch: $arch" >&2; exit 1 ;;
 esac
-command -v curl >/dev/null 2>&1 || { echo "install: curl is required" >&2; exit 1; }
+download() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$1" -o "$2"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$1" -O "$2"
+    else
+        echo "install: curl or wget is required" >&2
+        return 1
+    fi
+}
 
 sha256() {
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$1" | awk '{print $1}'
-    else
+    elif command -v shasum >/dev/null 2>&1; then
         shasum -a 256 "$1" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$1" | awk '{print $NF}'
+    else
+        echo "install: sha256sum, shasum, or openssl is required" >&2
+        return 1
     fi
 }
 
@@ -36,8 +50,13 @@ version_for() {
     esac
 }
 
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/ax-install.XXXXXX")
-trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+umask 077
+tmp="${TMPDIR:-/tmp}/ax-install-$$"
+if ! mkdir "$tmp"; then
+    echo "install: cannot create temporary directory: $tmp" >&2
+    exit 1
+fi
+trap 'rm -rf "$tmp"' 0 HUP INT TERM
 
 for package in "$@"; do
     case $package in
@@ -56,11 +75,11 @@ for package in "$@"; do
     fi
     artifact="$package-$os-$arch"
     echo "downloading $artifact"
-    curl -fsSL "$base/$artifact" -o "$tmp/$package" || {
+    download "$base/$artifact" "$tmp/$package" || {
         echo "install: download failed: $base/$artifact" >&2
         exit 1
     }
-    curl -fsSL "$base/$artifact.sha256" -o "$tmp/$package.sha256" || {
+    download "$base/$artifact.sha256" "$tmp/$package.sha256" || {
         echo "install: checksum fetch failed: $base/$artifact.sha256" >&2
         exit 1
     }
@@ -74,7 +93,8 @@ done
 
 mkdir -p "$bindir"
 for package in "$@"; do
-    install -m 0755 "$tmp/$package" "$bindir/$package"
+    cp "$tmp/$package" "$bindir/$package"
+    chmod 0755 "$bindir/$package"
     echo "installed $package to $bindir/$package"
 done
 
