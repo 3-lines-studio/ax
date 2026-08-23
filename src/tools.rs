@@ -104,7 +104,7 @@ static CHILD_PGIDS: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new(
 
 /// Ctrl+C in one-shot mode kills ax but not children in their own process
 /// groups. This handler reaps them, then dies with the default disposition.
-unsafe extern "C" fn sigint_reap_children(_: libc::c_int) {
+unsafe extern "C" fn signal_reap_children(signal: libc::c_int) {
     if let Ok(mut v) = CHILD_PGIDS.lock() {
         for &pgid in v.iter() {
             unsafe { libc::kill(-pgid, libc::SIGKILL) };
@@ -112,18 +112,17 @@ unsafe extern "C" fn sigint_reap_children(_: libc::c_int) {
         v.clear();
     }
     unsafe {
-        libc::signal(libc::SIGINT, libc::SIG_DFL);
-        libc::raise(libc::SIGINT);
+        libc::signal(signal, libc::SIG_DFL);
+        libc::raise(signal);
     }
 }
 
-fn ensure_sigint_handler() {
+fn ensure_signal_handler() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| unsafe {
-        libc::signal(
-            libc::SIGINT,
-            sigint_reap_children as unsafe extern "C" fn(libc::c_int) as usize,
-        );
+        let handler = signal_reap_children as unsafe extern "C" fn(libc::c_int) as usize;
+        libc::signal(libc::SIGINT, handler);
+        libc::signal(libc::SIGTERM, handler);
     });
 }
 
@@ -148,7 +147,7 @@ pub fn bash(dir: &str) -> Tool {
                 return "error: invalid timeout: must be a positive number of seconds".to_string();
             }
             let tag = BASH_TAG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            ensure_sigint_handler();
+            ensure_signal_handler();
             let base = std::env::temp_dir().join(format!("ax-bash-{}-{tag}", std::process::id()));
             let out_path = base.with_extension("out");
             let err_path = base.with_extension("err");
