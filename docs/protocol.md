@@ -41,10 +41,10 @@ AX emits exactly one final `done` event. Outcomes are `done`, `cancelled`, `comp
 
 ## External CLI tools
 
-Discovery runs `<command> ax-tools`. The command writes one tool descriptor per line:
+Discovery runs `<command> describe`. The command writes one tool descriptor per line:
 
 ```json
 {"name":"data_query","description":"Run a read-only query","parameters":{"type":"object","properties":{"sql":{"type":"string"}},"required":["sql"]}}
 ```
 
-Execution runs `<command> ax-run <name>`. AX writes JSON arguments to stdin. Tool output belongs on stdout, diagnostics on stderr, and failure uses a non-zero exit status.
+Execution runs `<command> run <name>`. AX writes JSON arguments to stdin. Tool output belongs on stdout, diagnostics on stderr, and failure uses a non-zero exit status.

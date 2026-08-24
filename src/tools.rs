@@ -408,6 +408,22 @@ mod tests {
     }
 
     #[test]
+    fn accepts_provider_without_tools() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("ax-empty-tool-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        let command = dir.join("emptyx");
+        std::fs::write(&command, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(try_external_tools(command.to_str().unwrap()).unwrap().is_empty());
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn runs_external_cli_tool() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -417,7 +433,7 @@ mod tests {
         let command = dir.join("datax");
         std::fs::write(
             &command,
-            "#!/bin/sh\nif [ \"$1\" = ax-tools ]; then\n  echo '{\"name\":\"data_query\",\"description\":\"Query data\",\"parameters\":{\"type\":\"object\"}}'\nelse\n  cat\nfi\n",
+            "#!/bin/sh\nif [ \"$1\" = describe ]; then\n  echo '{\"name\":\"data_query\",\"description\":\"Query data\",\"parameters\":{\"type\":\"object\"}}'\nelse\n  cat\nfi\n",
         )
         .unwrap();
         std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -486,7 +502,7 @@ pub fn try_external_tools(commands: &str) -> Result<Vec<Tool>, String> {
     let mut tools = Vec::new();
     for command in commands.split_whitespace() {
         let output = std::process::Command::new(command)
-            .arg("ax-tools")
+            .arg("describe")
             .output()
             .map_err(|error| format!("discover tools from {command}: {error}"))?;
         if !output.status.success() {
@@ -500,12 +516,10 @@ pub fn try_external_tools(commands: &str) -> Result<Vec<Tool>, String> {
             }
             return Err(format!("discover tools from {command}: {error}"));
         }
-        let mut found = false;
         for line in String::from_utf8_lossy(&output.stdout)
             .lines()
             .filter(|line| !line.trim().is_empty())
         {
-            found = true;
             let spec = serde_json::from_str::<ExternalToolSpec>(line)
                 .map_err(|error| format!("invalid tool from {command}: {error}"))?;
             if !valid_tool_name(&spec.name) {
@@ -545,9 +559,6 @@ pub fn try_external_tools(commands: &str) -> Result<Vec<Tool>, String> {
             }
             tools.push(tool);
         }
-        if !found {
-            return Err(format!("no tools discovered from {command}"));
-        }
     }
     Ok(tools)
 }
@@ -562,18 +573,25 @@ fn valid_tool_name(name: &str) -> bool {
 
 fn run_external_tool(command: &str, name: &str, arguments: &str) -> String {
     use std::io::Write;
+    use std::os::unix::process::CommandExt;
     use std::process::Stdio;
 
     let mut child = match std::process::Command::new(command)
-        .args(["ax-run", name])
+        .args(["run", name])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
     {
         Ok(child) => child,
         Err(e) => return format!("error: {e}"),
     };
+    let pgid = child.id() as i32;
+    if let Ok(mut groups) = CHILD_PGIDS.lock() {
+        groups.push(pgid);
+    }
+    let _guard = PgidGuard(pgid);
     if let Some(mut stdin) = child.stdin.take()
         && let Err(e) = stdin.write_all(arguments.as_bytes())
     {

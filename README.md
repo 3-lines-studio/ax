@@ -89,10 +89,10 @@ Set `AX_TOOLS` to a space-separated list of external tool commands:
 AX_TOOLS="bqx pgx" ax
 ```
 
-AX runs `<command> ax-tools` at startup. The command prints one JSON tool
+AX runs `<command> describe` at startup. The command prints one JSON tool
 specification per line with `name`, `description`, and JSON Schema `parameters`.
-For a tool call, AX runs `<command> ax-run <name>`, writes the JSON arguments to
-stdin, reads the result from stdout, and treats a non-zero exit as a tool error.
+For a tool call, AX runs `<command> run <name>`, writes the JSON arguments to
+stdin, reads the result from stdout, and treats a non-zero exit as a tool error. See the [Unix tool convention](docs/tools.md) for the complete contract.
 
 ## Config
 
