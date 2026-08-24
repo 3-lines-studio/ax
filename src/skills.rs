@@ -1,8 +1,6 @@
 //! Skills: markdown files in `~/.agents/skills/<name>/SKILL.md`.
 //! Frontmatter may carry a `description:`; the body is the skill content.
 
-use crate::Tool;
-
 pub struct Skill {
     pub name: String,
     pub description: String,
@@ -113,46 +111,4 @@ fn first_line(s: &str) -> String {
         .find(|l| !l.is_empty())
         .unwrap_or("")
         .to_string()
-}
-
-pub fn skill_tools(root: &str) -> Vec<Tool> {
-    let root_list = root.to_string();
-    #[derive(serde::Deserialize)]
-    struct NoArgs {}
-    let list = crate::new_tool(
-        "skills",
-        "List available skills with their names and descriptions.",
-        "{\"type\":\"object\",\"properties\":{}}",
-        move |_args: NoArgs| {
-            let skills = list_skills(&root_list);
-            if skills.is_empty() {
-                return "No skills installed (see ~/.agents/skills).".to_string();
-            }
-            let mut out = String::new();
-            for s in skills {
-                out.push_str(&format!("- {}: {}\n", s.name, s.description));
-            }
-            out
-        },
-    );
-    let mut list = list;
-    list.snippet = "List installed skills";
-    #[derive(serde::Deserialize)]
-    struct SkillArgs {
-        name: String,
-    }
-    let root_read = root.to_string();
-    let read = crate::new_tool(
-        "skill",
-        "Read one skill's content by name. Use the skills tool to list names first. When a skill file references a relative path, resolve it against the skill's directory (parent of SKILL.md) and use that absolute path in tool commands.",
-        "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"skill name\"}},\"required\":[\"name\"]}",
-        move |args: SkillArgs| {
-            let skills = list_skills(&root_read);
-            match skills.into_iter().find(|s| s.name == args.name) {
-                Some(s) => s.content,
-                None => format!("skill not found: {}", args.name),
-            }
-        },
-    );
-    vec![list, read]
 }

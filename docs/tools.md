@@ -12,6 +12,8 @@ AX_TOOLS="wax browserx bqx"
 
 Names and paths in `AX_TOOLS` cannot contain whitespace. AX does not scan `PATH` for providers.
 
+AX has no built-in tools. When `AX_TOOLS` is unset, AX starts without tools.
+
 ## Discovery
 
 AX runs:
@@ -35,7 +37,7 @@ Each descriptor contains:
 
 Tool names must be unique across all providers. Unknown descriptor fields are ignored. A provider with no available tools prints nothing and exits successfully.
 
-Discovery diagnostics belong on stderr. A nonzero status fails discovery.
+Discovery diagnostics belong on stderr. A nonzero status fails discovery. AX rejects combined descriptor output larger than 64 KiB.
 
 ## Execution
 
@@ -82,3 +84,13 @@ signals cancellation
 ```
 
 There is no handshake, registry, daemon, socket, result envelope, or version negotiation.
+
+## Conformance check
+
+Run the black-box contract check against built provider binaries:
+
+```sh
+./scripts/provider-contract.py /path/to/fsx /path/to/bashx /path/to/skillx
+```
+
+The check validates discovery framing, descriptors, obsolete command rejection, unknown tools, malformed JSON, and command statuses.

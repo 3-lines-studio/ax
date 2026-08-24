@@ -30,6 +30,7 @@ struct FileConfig {
     base: String,
     context_window: Option<usize>,
     compaction_threshold: Option<usize>,
+    tools: String,
 }
 
 fn main() {
@@ -57,7 +58,7 @@ fn main() {
         std::process::exit(0);
     }
     let fc = load_config();
-    let (cfg, prompt) = match parse_args(&args, &fc) {
+    let (mut cfg, prompt) = match parse_args(&args, &fc) {
         Ok(x) => x,
         Err(e) => {
             eprintln!("error: {e}");
@@ -76,6 +77,17 @@ fn main() {
     if let Some(path) = cfg.compact.as_deref() {
         compact_messages(&cfg, &fc, path);
         return;
+    }
+    if !cfg.dir.is_empty() {
+        let directory = std::fs::canonicalize(&cfg.dir).unwrap_or_else(|error| {
+            eprintln!("error: cannot use {}: {error}", cfg.dir);
+            std::process::exit(1);
+        });
+        std::env::set_current_dir(&directory).unwrap_or_else(|error| {
+            eprintln!("error: cannot use {}: {error}", directory.display());
+            std::process::exit(1);
+        });
+        cfg.dir = directory.display().to_string();
     }
     let mut prompt = prompt;
     if cfg.events && cfg.messages.is_some() {
@@ -205,7 +217,7 @@ fn usage() {
          \x20 -base URL    OpenAI-compatible API base URL (default \"https://api.openai.com/v1\")\n\
          \x20 -model NAME  model name (default \"gpt-4.1-mini\")\n\
          \x20 -system TEXT  system prompt (default: built-in)\n\
-         \x20 -C DIR       working directory for tools\n\
+         \x20 -C DIR       working directory context\n\
          \x20 --session FILE  use an explicit session file\n\
          \x20 --events      emit JSONL events on stdout\n\
          \x20 --messages FILE  use a JSON message array with --events\n\
@@ -375,7 +387,7 @@ fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
             }
         });
     }
-    let tools = tools_or_exit(&cfg.dir, &skills_root());
+    let tools = tools_or_exit(fc);
     let system = resolve_system(cfg, &tools);
     let provider = OpenAI::new(cfg.base.clone(), api_key(fc));
     let mut sink = EventSink {
@@ -537,8 +549,9 @@ fn expand_user_command(prompt: &str, ax_root: &str) -> String {
     ax::commands::expand_user_command(&uc, rest)
 }
 
-fn tools_or_exit(dir: &str, skills_root: &str) -> Vec<Tool> {
-    match ax::tools::try_defaults(dir, skills_root) {
+fn tools_or_exit(config: &FileConfig) -> Vec<Tool> {
+    let commands = std::env::var("AX_TOOLS").unwrap_or_else(|_| config.tools.clone());
+    match ax::tools::try_external_tools(&commands) {
         Ok(tools) => tools,
         Err(error) => {
             eprintln!("error: {error}");
@@ -548,17 +561,13 @@ fn tools_or_exit(dir: &str, skills_root: &str) -> Vec<Tool> {
 }
 
 fn build_agent(cfg: &Config, fc: &FileConfig, on: impl FnMut(Event) + 'static) -> Agent<OpenAI> {
-    let tools = tools_or_exit(&cfg.dir, &skills_root());
+    let tools = tools_or_exit(fc);
     let system = resolve_system(cfg, &tools);
     Agent::new(OpenAI::new(cfg.base.clone(), api_key(fc)))
         .model(cfg.model.clone())
         .system(system)
         .tools(tools)
         .on(on)
-}
-
-fn skills_root() -> String {
-    ax::skills::skills_root().unwrap_or_default()
 }
 
 fn api_key(fc: &FileConfig) -> String {
@@ -588,23 +597,29 @@ fn resolve_system(cfg: &Config, tools: &[Tool]) -> String {
 }
 
 fn system_prompt(tools: &[Tool], dir: &str) -> String {
-    let mut out = String::from(
-        "You are an expert coding assistant operating inside ax. You help users by reading files, executing commands, editing code, and writing new files.\n\nAvailable tools:\n",
-    );
-    for t in tools {
-        if !t.snippet.is_empty() {
-            out.push_str(&format!("- {}: {}\n", t.name, t.snippet));
+    let mut out =
+        String::from("You are an expert assistant operating inside ax.\n\nAvailable tools:\n");
+    for tool in tools {
+        if !tool.snippet.is_empty() {
+            out.push_str(&format!("- {}: {}\n", tool.name, tool.snippet));
         }
+    }
+    if tools.is_empty() {
+        out.push_str("- none\n");
     }
     out.push_str(
         "\nGuidelines:\n\
          - Be concise in your responses\n\
-         - Show file paths clearly when working with files\n\
-         - Use edit for precise changes; edits[].oldText must match exactly\n\
-         - When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n\
-         - Keep edits[].oldText small while still unique; do not pad with unchanged regions\n\
          - Tool errors return to you as text; fix them and re-issue\n",
     );
+    if tools.iter().any(|tool| tool.name == "edit") {
+        out.push_str(
+            "- Show file paths clearly when working with files\n\
+             - Use edit for precise changes; edits[].oldText must match exactly\n\
+             - When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n\
+             - Keep edits[].oldText small while still unique; do not pad with unchanged regions\n",
+        );
+    }
     out.push_str(&format!("\nCurrent working directory: {dir}"));
     if let Some(user) = user_system_prompt() {
         out.push_str("\n\n");
@@ -655,6 +670,7 @@ fn load_config() -> FileConfig {
         base: String::new(),
         context_window: None,
         compaction_threshold: None,
+        tools: String::new(),
     };
     let Some(dir) = config_dir() else {
         return c;
@@ -680,6 +696,7 @@ fn load_config() -> FileConfig {
             "base" => c.base = val,
             "context_window" => c.context_window = val.parse().ok(),
             "compaction_threshold" => c.compaction_threshold = val.parse().ok(),
+            "tools" => c.tools = val,
             _ => {}
         }
     }
@@ -856,6 +873,7 @@ mod tests {
             base: String::new(),
             context_window: None,
             compaction_threshold: None,
+            tools: String::new(),
         };
         let (_, prompt) = parse_args(&["--".into(), "-prompt".into()], &fc).unwrap();
         assert_eq!(prompt, ["-prompt"]);
@@ -869,6 +887,7 @@ mod tests {
             base: String::new(),
             context_window: None,
             compaction_threshold: None,
+            tools: String::new(),
         };
         let tokens = [
             "-base",
@@ -931,5 +950,6 @@ mod tests {
         assert_eq!(c.base, expect("base"), "base round-trip");
         assert_eq!(c.model, expect("model"), "model round-trip");
         assert_eq!(c.api_key, expect("api_key"), "api_key round-trip");
+        assert_eq!(c.tools, expect("tools"), "tools round-trip");
     }
 }

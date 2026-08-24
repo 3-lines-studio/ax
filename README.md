@@ -94,6 +94,20 @@ specification per line with `name`, `description`, and JSON Schema `parameters`.
 For a tool call, AX runs `<command> run <name>`, writes the JSON arguments to
 stdin, reads the result from stdout, and treats a non-zero exit as a tool error. See the [Unix tool convention](docs/tools.md) for the complete contract.
 
+AX has no built-in tools. Register every capability explicitly:
+
+```sh
+AX_TOOLS="fsx bashx skillx" ax
+```
+
+Fsx and Bashx use AX's working directory. Skillx merges project and home skills. Use `-C` to select another project:
+
+```sh
+AX_TOOLS="fsx bashx skillx" ax -C /path/to/project
+```
+
+AX runs without tools when `AX_TOOLS` is unset.
+
 ## Config
 
 `~/.config/ax/config` (or `$XDG_CONFIG_HOME/ax/config`):
@@ -102,11 +116,12 @@ stdin, reads the result from stdout, and treats a non-zero exit as a tool error.
 api_key = "sk-..."        # used when OPENAI_API_KEY is unset
 model = "glm-4.5"
 base = "http://localhost:11434/v1"
+tools = "fsx bashx skillx"    # optional: external providers
 context_window = 1000000       # optional: model context size
 compaction_threshold = 250000  # optional: compact before the model limit
 ```
 
-Plain `key = value` lines, `#` comments. Precedence: flags > env > config.
+Plain `key = value` lines, `#` comments. `AX_TOOLS` overrides `tools`. Other precedence is flags > env > config.
 Run `/login` in Axi to write these interactively. Set `context_window`
 to enable automatic compaction 16,384 tokens before the model limit. Set
 `compaction_threshold` to compact at a lower token count. AX uses the provider's
@@ -162,7 +177,7 @@ trait, tools, OpenAI client (blocking + SSE streaming with cancellation):
 let mut agent = ax::Agent::new(ax::OpenAI::new(base, key))
     .model("gpt-4.1-mini")
     .system("You are a coding agent.")
-    .tools(vec![ax::tools::read(), ax::tools::write(), ax::tools::edit(), ax::tools::bash("")]);
+    .tools(ax::tools::external_tools("fsx bashx skillx"));
 
 let msgs = agent.run(&[ax::Message {
     role: "user".into(),
