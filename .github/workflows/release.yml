@@ -22,7 +22,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - run: rustup default nightly && rustup component add rust-src
+      - run: rustup default nightly-2026-08-17 && rustup component add rust-src
       - run: scripts/package.sh
       - uses: actions/upload-artifact@v4
         with:
