@@ -5,6 +5,15 @@ if [ "$#" -eq 0 ]; then
     set -- ax taxi
 fi
 
+requested="$*"
+set --
+for package in $requested; do
+    case $package in
+        axi) set -- "$@" ax axis fsx bashx skillx attachx axi ;;
+        *) set -- "$@" "$package" ;;
+    esac
+done
+
 prefix="${AX_PREFIX:-${PREFIX:-$HOME/.local}}"
 bindir="$prefix/bin"
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -45,6 +54,7 @@ sha256() {
 version_for() {
     case $1 in
         ax) printf '%s' "${AX_VERSION:-${VERSION:-}}" ;;
+        axi) printf '%s' "${AXI_VERSION:-${VERSION:-}}" ;;
         taxi) printf '%s' "${TAXI_VERSION:-${VERSION:-}}" ;;
         *) printf '%s' "${VERSION:-}" ;;
     esac
