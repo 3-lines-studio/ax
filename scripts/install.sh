@@ -103,8 +103,10 @@ done
 
 mkdir -p "$bindir"
 for package in "$@"; do
-    cp "$tmp/$package" "$bindir/$package"
-    chmod 0755 "$bindir/$package"
+    staged="$bindir/.$package.new.$$"
+    cp "$tmp/$package" "$staged"
+    chmod 0755 "$staged"
+    mv "$staged" "$bindir/$package"
     echo "installed $package to $bindir/$package"
 done
 
