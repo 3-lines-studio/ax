@@ -1,5 +1,7 @@
 # ax
 
+<p align="center"><img src=".github/ax.svg" width="96" height="96" alt="AX ecosystem"></p>
+
 A minimal headless LLM coding agent harness for scripts and Unix-style clients.
 Use `taxi` for the interactive terminal interface.
 
