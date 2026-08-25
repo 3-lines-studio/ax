@@ -35,23 +35,27 @@ const CURLINFO_RESPONSE_CODE: c_int = 0x200002;
 pub type WriteCb = unsafe extern "C" fn(*mut c_char, usize, usize, *mut c_void) -> usize;
 pub type ProgressCb = unsafe extern "C" fn(*mut c_void, f64, f64, f64, f64) -> c_int;
 
-type SetoptString = unsafe extern "C" fn(*mut c_void, c_int, *const c_char) -> c_int;
-type SetoptLong = unsafe extern "C" fn(*mut c_void, c_int, c_long) -> c_int;
-type SetoptPtr = unsafe extern "C" fn(*mut c_void, c_int, *mut c_void) -> c_int;
-type SetoptWriteCb = unsafe extern "C" fn(*mut c_void, c_int, WriteCb) -> c_int;
-type SetoptProgressCb = unsafe extern "C" fn(*mut c_void, c_int, ProgressCb) -> c_int;
-type GetinfoLong = unsafe extern "C" fn(*mut c_void, c_int, *mut c_long) -> c_int;
+// `curl_easy_setopt` is variadic in C (`CURLcode curl_easy_setopt(CURL *,
+// CURLoption, ...)`). It must stay typed as variadic here too: transmuting
+// the dlsym'd pointer to several fixed-arity `fn(..., T) -> c_int` types and
+// calling those instead is undefined behavior, and not just in theory. On
+// Apple's arm64 ABI, variadic arguments are passed on the stack while a
+// fixed-arity call of the same shape passes them in a register, so libcurl
+// reads stack garbage for the option argument and segfaults inside
+// `Curl_setstropt`'s `strlen`. A single variadic fn pointer type, called
+// with the real argument type at each call site, gets the correct
+// per-platform variadic calling convention from the compiler.
+type SetoptFn = unsafe extern "C" fn(*mut c_void, c_int, ...) -> c_int;
+// `curl_easy_getinfo` is variadic too (`CURLcode curl_easy_getinfo(CURL *,
+// CURLINFO, ...)`); same reasoning as `SetoptFn` above applies.
+type GetinfoFn = unsafe extern "C" fn(*mut c_void, c_int, ...) -> c_int;
 
 struct Curl {
     global_init: unsafe extern "C" fn(c_long) -> c_int,
     easy_init: unsafe extern "C" fn() -> *mut c_void,
-    setopt_string: SetoptString,
-    setopt_long: SetoptLong,
-    setopt_ptr: SetoptPtr,
-    setopt_write_cb: SetoptWriteCb,
-    setopt_progress_cb: SetoptProgressCb,
+    setopt: SetoptFn,
     perform: unsafe extern "C" fn(*mut c_void) -> c_int,
-    getinfo_long: GetinfoLong,
+    getinfo: GetinfoFn,
     cleanup: unsafe extern "C" fn(*mut c_void),
     strerror: unsafe extern "C" fn(c_int) -> *const c_char,
     slist_append: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
@@ -104,17 +108,11 @@ unsafe fn load_syms(handle: *mut libc::c_void) -> Result<Curl, String> {
             easy_init: std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> *mut c_void>(
                 sym(b"curl_easy_init")?,
             ),
-            setopt_string: std::mem::transmute::<*mut c_void, SetoptString>(setopt),
-            setopt_long: std::mem::transmute::<*mut c_void, SetoptLong>(setopt),
-            setopt_ptr: std::mem::transmute::<*mut c_void, SetoptPtr>(setopt),
-            setopt_write_cb: std::mem::transmute::<*mut c_void, SetoptWriteCb>(setopt),
-            setopt_progress_cb: std::mem::transmute::<*mut c_void, SetoptProgressCb>(setopt),
+            setopt: std::mem::transmute::<*mut c_void, SetoptFn>(setopt),
             perform: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> c_int>(
                 sym(b"curl_easy_perform")?,
             ),
-            getinfo_long: std::mem::transmute::<*mut c_void, GetinfoLong>(sym(
-                b"curl_easy_getinfo",
-            )?),
+            getinfo: std::mem::transmute::<*mut c_void, GetinfoFn>(sym(b"curl_easy_getinfo")?),
             cleanup: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void)>(sym(
                 b"curl_easy_cleanup",
             )?),
@@ -233,7 +231,7 @@ impl Easy {
     pub fn response_code(&self) -> Result<u32, String> {
         let c = curl()?;
         let mut code: c_long = 0;
-        let r = unsafe { (c.getinfo_long)(self.handle, CURLINFO_RESPONSE_CODE, &mut code) };
+        let r = unsafe { (c.getinfo)(self.handle, CURLINFO_RESPONSE_CODE, &mut code) };
         if r != 0 {
             return Err(curl_err(c, r));
         }
@@ -251,7 +249,7 @@ impl Drop for Easy {
 
 fn setopt(e: &Easy, opt: c_int, arg: *const c_char) -> Result<(), String> {
     let c = curl()?;
-    let r = unsafe { (c.setopt_string)(e.handle, opt, arg) };
+    let r = unsafe { (c.setopt)(e.handle, opt, arg) };
     if r != 0 {
         return Err(curl_err(c, r));
     }
@@ -264,7 +262,7 @@ fn setopt_long(e: &Easy, opt: c_int, v: c_long) -> Result<(), String> {
 
 fn setopt_long_raw(handle: *mut c_void, opt: c_int, v: c_long) -> Result<(), String> {
     let c = curl()?;
-    let r = unsafe { (c.setopt_long)(handle, opt, v) };
+    let r = unsafe { (c.setopt)(handle, opt, v) };
     if r != 0 {
         return Err(curl_err(c, r));
     }
@@ -273,7 +271,7 @@ fn setopt_long_raw(handle: *mut c_void, opt: c_int, v: c_long) -> Result<(), Str
 
 fn setopt_ptr(e: &Easy, opt: c_int, p: *mut c_void) -> Result<(), String> {
     let c = curl()?;
-    let r = unsafe { (c.setopt_ptr)(e.handle, opt, p) };
+    let r = unsafe { (c.setopt)(e.handle, opt, p) };
     if r != 0 {
         return Err(curl_err(c, r));
     }
@@ -282,7 +280,7 @@ fn setopt_ptr(e: &Easy, opt: c_int, p: *mut c_void) -> Result<(), String> {
 
 fn setopt_write_cb(e: &Easy, opt: c_int, f: WriteCb) -> Result<(), String> {
     let c = curl()?;
-    let r = unsafe { (c.setopt_write_cb)(e.handle, opt, f) };
+    let r = unsafe { (c.setopt)(e.handle, opt, f) };
     if r != 0 {
         return Err(curl_err(c, r));
     }
@@ -291,7 +289,7 @@ fn setopt_write_cb(e: &Easy, opt: c_int, f: WriteCb) -> Result<(), String> {
 
 fn setopt_progress_cb(e: &Easy, opt: c_int, f: ProgressCb) -> Result<(), String> {
     let c = curl()?;
-    let r = unsafe { (c.setopt_progress_cb)(e.handle, opt, f) };
+    let r = unsafe { (c.setopt)(e.handle, opt, f) };
     if r != 0 {
         return Err(curl_err(c, r));
     }
