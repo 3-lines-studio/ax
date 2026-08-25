@@ -2,7 +2,7 @@
 set -eu
 
 if [ "$#" -eq 0 ]; then
-    set -- ax axi
+    set -- ax taxi
 fi
 
 prefix="${AX_PREFIX:-${PREFIX:-$HOME/.local}}"
@@ -45,7 +45,7 @@ sha256() {
 version_for() {
     case $1 in
         ax) printf '%s' "${AX_VERSION:-${VERSION:-}}" ;;
-        axi) printf '%s' "${AXI_VERSION:-${VERSION:-}}" ;;
+        taxi) printf '%s' "${TAXI_VERSION:-${VERSION:-}}" ;;
         *) printf '%s' "${VERSION:-}" ;;
     esac
 }

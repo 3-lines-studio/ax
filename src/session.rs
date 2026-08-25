@@ -556,11 +556,11 @@ pub fn compact(
 const OVERFLOW_PATTERNS: [&str; 7] = [
     "prompt is too long",
     "exceeds the context window",
-    "maximum context length",
+    "mtaximum context length",
     "input token count",
     "context_length_exceeded",
     "prompt too long",
-    "exceeds the model's maximum",
+    "exceeds the model's mtaximum",
 ];
 
 /// Errors that look like overflow but are throttling or server failures.

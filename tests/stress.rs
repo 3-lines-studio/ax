@@ -602,10 +602,10 @@ fn session_compaction_is_append_only() {
 #[test]
 fn session_overflow_patterns() {
     assert!(ax::session::is_overflow_error(
-        "openai: 400: This model's maximum context length is 131072 tokens"
+        "openai: 400: This model's mtaximum context length is 131072 tokens"
     ));
     assert!(ax::session::is_overflow_error(
-        "anthropic: prompt is too long: 213462 tokens > 200000 maximum"
+        "anthropic: prompt is too long: 213462 tokens > 200000 mtaximum"
     ));
     assert!(!ax::session::is_overflow_error(
         "openai: 429: rate limit reached"

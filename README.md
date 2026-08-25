@@ -1,7 +1,7 @@
 # ax
 
 A minimal headless LLM coding agent harness for scripts and Unix-style clients.
-Use `axi` for the interactive terminal interface.
+Use `taxi` for the interactive terminal interface.
 
 Release binary: **~389 KB**. HTTP goes through system libcurl.
 
@@ -11,7 +11,7 @@ Release binary: **~389 KB**. HTTP goes through system libcurl.
 curl -fsSL https://ax.3lines.studio/install.sh | sh
 ```
 
-Installs `ax` and `axi` to `~/.local/bin` (override with `AX_PREFIX`). Linux
+Installs `ax` and `taxi` to `~/.local/bin` (override with `AX_PREFIX`). Linux
 (x86_64, aarch64) and macOS (arm64). No Rust toolchain or root required. Every
 download is verified with SHA-256. Install any ecosystem CLI by repository
 name without changing the installer:
@@ -21,7 +21,7 @@ curl -fsSL https://ax.3lines.studio/install.sh | sh -s -- wax
 curl -fsSL https://ax.3lines.studio/install.sh | sh -s -- wax bqx pgx
 ```
 
-Pin core versions with `AX_VERSION` and `AXI_VERSION`. Use `VERSION` when
+Pin core versions with `AX_VERSION` and `TAXI_VERSION`. Use `VERSION` when
 installing one optional CLI. Uninstall by removing its file from
 `~/.local/bin`.
 
@@ -54,7 +54,7 @@ Unit/integration tests stay in `cargo test`.
 Interactive terminal:
 
 ```sh
-OPENAI_API_KEY=... axi
+OPENAI_API_KEY=... taxi
 ```
 
 Headless one-shot:
@@ -77,7 +77,7 @@ Use `--events` for a JSONL stream on stdout. While AX runs, send
 The stream contains assistant deltas, tool events, usage, errors, and one final
 `done` event.
 
-Axi provides the transcript TUI, streamed Markdown, tool status, commands,
+Taxi provides the transcript TUI, streamed Markdown, tool status, commands,
 file completion, steering, and session screens while running AX as a sidecar.
 
 Any OpenAI-compatible endpoint works: `-base https://...` for OpenRouter,
@@ -122,7 +122,7 @@ compaction_threshold = 250000  # optional: compact before the model limit
 ```
 
 Plain `key = value` lines, `#` comments. `AX_TOOLS` overrides `tools`. Other precedence is flags > env > config.
-Run `/login` in Axi to write these interactively. Set `context_window`
+Run `/login` in Taxi to write these interactively. Set `context_window`
 to enable automatic compaction 16,384 tokens before the model limit. Set
 `compaction_threshold` to compact at a lower token count. AX uses the provider's
 reported context usage. During tool-driven work, AX finishes the current model
@@ -145,7 +145,7 @@ Everything is files; there is no state machine.
   through the `skills` tool and reads one with the `skill` tool.
 - `~/.config/ax/SYSTEM.md` — optional system prompt, appended to the
   built-in one.
-- Search sessions with `/search <text>` in Axi or `ax --search <text>`.
+- Search sessions with `/search <text>` in Taxi or `ax --search <text>`.
   Sessions are JSONL: one line per message or compaction entry, so line
   matches map directly to entries.
 
