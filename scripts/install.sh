@@ -1,7 +1,16 @@
 #!/bin/sh
 set -eu
 
+action=install
+if [ "${1:-}" = uninstall ]; then
+    action=uninstall
+    shift
+fi
 if [ "$#" -eq 0 ]; then
+    if [ "$action" = uninstall ]; then
+        echo "install: package name is required" >&2
+        exit 1
+    fi
     set -- ax taxi
 fi
 
@@ -16,6 +25,19 @@ done
 
 prefix="${AX_PREFIX:-${PREFIX:-$HOME/.local}}"
 bindir="$prefix/bin"
+if [ "$action" = uninstall ]; then
+    for package in "$@"; do
+        case $package in
+            '' | [!a-z]* | *[!a-z0-9-]*)
+                echo "install: invalid package name: $package" >&2
+                exit 1
+                ;;
+        esac
+        rm -f "$bindir/$package"
+        echo "removed $bindir/$package"
+    done
+    exit 0
+fi
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
 case $os in
     linux | darwin) ;;
