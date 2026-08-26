@@ -26,8 +26,9 @@ curl -fsSL https://ax.3lines.studio/install.sh | sh -s -- wax bqx pgx
 Installing `axi` installs the complete local graphical stack: `axi`, `axis`, `ax`, `fsx`, `bashx`, `skillx`, and `attachx`.
 
 Pin core versions with `AX_VERSION` and `TAXI_VERSION`. Use `VERSION` when
-installing one optional CLI. Uninstall by removing its file from
-`~/.local/bin`.
+installing one optional CLI. Update installed core tools and the `axi` stack
+with `sh install.sh update`; up-to-date packages are skipped. Uninstall by
+removing its file from `~/.local/bin`.
 
 ## Build
 

@@ -22,6 +22,7 @@ struct Config {
     messages: Option<String>,
     list_models: bool,
     compact: Option<String>,
+    continue_session: bool,
 }
 
 struct FileConfig {
@@ -90,7 +91,7 @@ fn main() {
         cfg.dir = directory.display().to_string();
     }
     let mut prompt = prompt;
-    if cfg.events && cfg.messages.is_some() {
+    if cfg.events && (cfg.messages.is_some() || cfg.continue_session) {
         one_shot(&cfg, &fc, &prompt);
         return;
     }
@@ -125,6 +126,7 @@ fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>),
         messages: None,
         list_models: false,
         compact: None,
+        continue_session: false,
     };
     let mut rest = Vec::new();
     let mut i = 0;
@@ -141,6 +143,11 @@ fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>),
         }
         if a == "--events" {
             cfg.events = true;
+            i += 1;
+            continue;
+        }
+        if a == "--continue" {
+            cfg.continue_session = true;
             i += 1;
             continue;
         }
@@ -220,6 +227,7 @@ fn usage() {
          \x20 -C DIR       working directory context\n\
          \x20 --session FILE  use an explicit session file\n\
          \x20 --events      emit JSONL events on stdout\n\
+         \x20 --continue    resume the --session run without a new user message\n\
          \x20 --messages FILE  use a JSON message array with --events\n\
          \x20 --list-models  print model names as JSON\n\
          \x20 --compact FILE  compact a JSONL session and print JSON\n\
@@ -432,14 +440,19 @@ fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
             },
             None => Vec::new(),
         };
-        messages.push(Message {
-            role: "user".into(),
-            content: expand_user_command(&prompt.join(" "), &ax_root()),
-            tool_calls: Vec::new(),
-            tool_call_id: String::new(),
-        });
-        let old_len = messages.len().saturating_sub(1);
-        (messages, old_len)
+        if cfg.continue_session {
+            let old_len = messages.len();
+            (messages, old_len)
+        } else {
+            messages.push(Message {
+                role: "user".into(),
+                content: expand_user_command(&prompt.join(" "), &ax_root()),
+                tool_calls: Vec::new(),
+                tool_call_id: String::new(),
+            });
+            let old_len = messages.len().saturating_sub(1);
+            (messages, old_len)
+        }
     };
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = std::sync::mpsc::channel();
@@ -480,7 +493,7 @@ fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
         context_window: fc.context_window,
         model: cfg.model.clone(),
     };
-    if cfg.messages.is_none() {
+    if cfg.messages.is_none() && !cfg.continue_session {
         sink.record(history[old_len].clone());
     }
     let end = run::run_stream(
