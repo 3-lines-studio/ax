@@ -2,16 +2,21 @@
 set -eu
 
 action=install
-if [ "${1:-}" = uninstall ]; then
-    action=uninstall
-    shift
-fi
+case "${1:-}" in
+    uninstall | update) action=$1; shift ;;
+esac
+default_set=false
 if [ "$#" -eq 0 ]; then
     if [ "$action" = uninstall ]; then
         echo "install: package name is required" >&2
         exit 1
     fi
-    set -- ax taxi
+    if [ "$action" = update ]; then
+        set -- ax taxi axi
+    else
+        set -- ax taxi
+    fi
+    default_set=true
 fi
 
 requested="$*"
@@ -104,6 +109,7 @@ if ! mkdir "$tmp"; then
 fi
 trap 'rm -rf "$tmp"' 0 HUP INT TERM
 
+todo=
 for package in "$@"; do
     case $package in
         '' | [!a-z]* | *[!a-z0-9-]*)
@@ -120,25 +126,41 @@ for package in "$@"; do
         base="https://github.com/3-lines-studio/$package/releases/latest/download"
     fi
     artifact="$package-$os-$arch"
-    echo "downloading $artifact"
-    download "$base/$artifact" "$tmp/$package" || {
-        echo "install: download failed: $base/$artifact" >&2
-        exit 1
-    }
     download "$base/$artifact.sha256" "$tmp/$package.sha256" || {
         echo "install: checksum fetch failed: $base/$artifact.sha256" >&2
         exit 1
     }
     want=$(awk '{print $1}' "$tmp/$package.sha256")
+    if [ "$action" = update ]; then
+        if [ "$default_set" = true ] && [ ! -f "$bindir/$package" ]; then
+            continue
+        fi
+        if [ -f "$bindir/$package" ] && [ "$want" = "$(sha256 "$bindir/$package")" ]; then
+            echo "$package is up to date"
+            continue
+        fi
+        echo "updating $package"
+    else
+        echo "downloading $artifact"
+    fi
+    download "$base/$artifact" "$tmp/$package" || {
+        echo "install: download failed: $base/$artifact" >&2
+        exit 1
+    }
     got=$(sha256 "$tmp/$package")
     if [ "$want" != "$got" ]; then
         echo "install: checksum mismatch for $package" >&2
         exit 1
     fi
+    todo="$todo $package"
 done
 
+if [ -z "$todo" ]; then
+    exit 0
+fi
+
 mkdir -p "$bindir"
-for package in "$@"; do
+for package in $todo; do
     staged="$bindir/.$package.new.$$"
     cp "$tmp/$package" "$staged"
     chmod 0755 "$staged"
