@@ -277,6 +277,9 @@ struct EventSink {
     flushed: usize,
     pending_calls: Option<usize>,
     results: usize,
+    last_usage: Option<ax::Usage>,
+    context_window: Option<usize>,
+    model: String,
 }
 
 impl EventSink {
@@ -371,11 +374,18 @@ impl Sink for EventSink {
     }
 
     fn tokens(&mut self, input: usize, output: usize, cached_input: usize) {
+        self.last_usage = Some(ax::Usage {
+            input,
+            output,
+            cached_input,
+        });
         self.emit(serde_json::json!({
             "type": "usage",
             "input": input,
             "output": output,
-            "cached_input": cached_input
+            "cached_input": cached_input,
+            "window": self.context_window,
+            "model": self.model
         }));
     }
 
@@ -466,6 +476,9 @@ fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
         flushed: 0,
         pending_calls: None,
         results: 0,
+        last_usage: None,
+        context_window: fc.context_window,
+        model: cfg.model.clone(),
     };
     if cfg.messages.is_none() {
         sink.record(history[old_len].clone());
@@ -483,6 +496,19 @@ fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
         &mut sink,
     );
     sink.finalize(&end.messages, old_len);
+    let final_usage = sink.last_usage.unwrap_or(end.usage);
+    if let Some(path) = cfg.session.as_deref().map(std::path::Path::new)
+        && let Err(e) = ax::session::append_usage(
+            path,
+            final_usage.input,
+            final_usage.output,
+            final_usage.cached_input,
+            sink.context_window,
+            &sink.model,
+        )
+    {
+        event_failure(&e);
+    }
     println!(
         "{}",
         serde_json::json!({"type": "result", "messages": end.messages, "usage": {
@@ -854,6 +880,12 @@ mod tests {
         path: std::path::PathBuf,
     }
 
+    impl Drop for Recorder {
+        fn drop(&mut self) {
+            std::fs::remove_file(&self.path).ok();
+        }
+    }
+
     fn recorder() -> Recorder {
         let (tx, rx) = std::sync::mpsc::channel();
         let path = std::env::temp_dir().join(format!(
@@ -874,6 +906,9 @@ mod tests {
                 flushed: 0,
                 pending_calls: None,
                 results: 0,
+                last_usage: None,
+                context_window: None,
+                model: String::new(),
             },
             path,
             tx,

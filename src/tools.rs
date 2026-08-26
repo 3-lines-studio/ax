@@ -340,7 +340,18 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;
 
-    fn provider(body: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    struct TestProvider {
+        directory: std::path::PathBuf,
+        command: std::path::PathBuf,
+    }
+
+    impl Drop for TestProvider {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.directory).ok();
+        }
+    }
+
+    fn provider(body: &str) -> TestProvider {
         static ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let directory = std::env::temp_dir().join(format!(
             "ax-provider-{}-{}",
@@ -351,7 +362,7 @@ mod tests {
         let command = directory.join("provider");
         std::fs::write(&command, body).unwrap();
         std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o755)).unwrap();
-        (directory, command)
+        TestProvider { directory, command }
     }
 
     #[test]
@@ -363,47 +374,43 @@ mod tests {
 
     #[test]
     fn accepts_provider_without_tools() {
-        let (directory, command) = provider("#!/bin/sh\nexit 0\n");
+        let provider = provider("#!/bin/sh\nexit 0\n");
         assert!(
-            try_external_tools(command.to_str().unwrap())
+            try_external_tools(provider.command.to_str().unwrap())
                 .unwrap()
                 .is_empty()
         );
-        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
     fn runs_external_tool() {
-        let (directory, command) = provider(
+        let provider = provider(
             "#!/bin/sh\nif [ \"$1\" = describe ]; then\n  echo '{\"name\":\"echo\",\"description\":\"Echo input\",\"parameters\":{\"type\":\"object\"}}'\nelse\n  cat\nfi\n",
         );
-        let tools = try_external_tools(command.to_str().unwrap()).unwrap();
+        let tools = try_external_tools(provider.command.to_str().unwrap()).unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(
             (tools[0].run)("{\"value\":1}", &mut |_| {}),
             "{\"value\":1}"
         );
-        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
     fn rejects_invalid_provider() {
-        let (directory, command) = provider(
+        let provider = provider(
             "#!/bin/sh\necho '{\"name\":\"bad name\",\"description\":\"Bad\",\"parameters\":{}}'\n",
         );
-        assert!(try_external_tools(command.to_str().unwrap()).is_err());
-        std::fs::remove_dir_all(directory).unwrap();
+        assert!(try_external_tools(provider.command.to_str().unwrap()).is_err());
     }
 
     #[test]
     fn rejects_large_description_output() {
-        let (directory, command) = provider("#!/bin/sh\nyes x | head -c 70000\n");
-        let error = match try_external_tools(command.to_str().unwrap()) {
+        let provider = provider("#!/bin/sh\nyes x | head -c 70000\n");
+        let error = match try_external_tools(provider.command.to_str().unwrap()) {
             Ok(_) => panic!("large output accepted"),
             Err(error) => error,
         };
         assert!(error.contains("output exceeds 65536 bytes"));
-        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

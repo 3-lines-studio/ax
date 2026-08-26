@@ -28,6 +28,10 @@ pub enum Entry {
         context_input: usize,
         #[serde(default)]
         context_output: usize,
+        #[serde(default)]
+        window: Option<usize>,
+        #[serde(default)]
+        model: String,
     },
 }
 
@@ -148,6 +152,39 @@ pub fn load_path(path: &Path) -> Result<Vec<Entry>, String> {
             parse_entry_line(line).ok_or_else(|| format!("invalid session {}", path.display()))
         })
         .collect()
+}
+
+pub fn append_usage(
+    path: &Path,
+    input: usize,
+    output: usize,
+    cached_input: usize,
+    window: Option<usize>,
+    model: &str,
+) -> Result<(), String> {
+    use std::io::Write;
+    let entry = Entry::Usage {
+        input,
+        output,
+        cached_input,
+        context_input: input,
+        context_output: output,
+        window,
+        model: model.to_string(),
+    };
+    let line = serde_json::to_string(&entry)
+        .map_err(|e| format!("encode session {}: {e}", path.display()))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("create session dir {}: {e}", path.display()))?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("open session {}: {e}", path.display()))?;
+    file.write_all(format!("{line}\n").as_bytes())
+        .map_err(|e| format!("write session {}: {e}", path.display()))
 }
 
 pub fn append_messages(path: &Path, messages: &[Message]) -> Result<(), String> {
@@ -679,6 +716,8 @@ mod tests {
             cached_input: 0,
             context_input,
             context_output,
+            window: None,
+            model: String::new(),
         }
     }
 

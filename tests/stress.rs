@@ -528,6 +528,8 @@ fn session_old_format_and_compaction_roundtrip() {
         cached_input: 80,
         context_input: 100,
         context_output: 8,
+        window: None,
+        model: String::new(),
     };
     ax::session::save_live(d, &[entry, usage]);
     let entries = ax::session::load_live(d);
@@ -538,7 +540,8 @@ fn session_old_format_and_compaction_roundtrip() {
             output: 8,
             cached_input: 80,
             context_input: 100,
-            context_output: 8
+            context_output: 8,
+            ..
         }
     ));
     let msgs = ax::session::context_messages(&entries);
