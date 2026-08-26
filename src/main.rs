@@ -272,6 +272,11 @@ fn compact_messages(cfg: &Config, fc: &FileConfig, path: &str) {
 struct EventSink {
     input: std::sync::mpsc::Receiver<String>,
     compaction_threshold: Option<usize>,
+    session: Option<std::path::PathBuf>,
+    seen: Vec<Message>,
+    flushed: usize,
+    pending_calls: Option<usize>,
+    results: usize,
 }
 
 impl EventSink {
@@ -279,6 +284,58 @@ impl EventSink {
         use std::io::Write;
         println!("{value}");
         let _ = std::io::stdout().flush();
+    }
+
+    fn record(&mut self, message: Message) {
+        let holding = self.pending_calls.is_some();
+        self.seen.push(message);
+        let last = self.seen.last().unwrap();
+        if last.role == "assistant" && !last.tool_calls.is_empty() {
+            self.pending_calls = Some(last.tool_calls.len());
+            self.results = 0;
+            return;
+        }
+        if holding {
+            if last.role == "tool" {
+                self.results += 1;
+                if self.results >= self.pending_calls.unwrap_or(0) {
+                    self.pending_calls = None;
+                    self.flush();
+                }
+            }
+            return;
+        }
+        self.flush();
+    }
+
+    fn flush(&mut self) {
+        let Some(path) = self.session.clone() else {
+            return;
+        };
+        if self.flushed >= self.seen.len() {
+            return;
+        }
+        if let Err(e) = ax::session::append_messages(&path, &self.seen[self.flushed..]) {
+            event_failure(&e);
+        }
+        self.flushed = self.seen.len();
+    }
+
+    fn finalize(&mut self, messages: &[Message], base: usize) {
+        let Some(path) = self.session.clone() else {
+            return;
+        };
+        let held = &self.seen[self.flushed..];
+        let rest = &messages[base + self.seen.len()..];
+        if held.is_empty() && rest.is_empty() {
+            return;
+        }
+        let mut tail = held.to_vec();
+        tail.extend_from_slice(rest);
+        if let Err(e) = ax::session::append_messages(&path, &tail) {
+            event_failure(&e);
+        }
+        self.flushed = self.seen.len();
     }
 }
 
@@ -293,6 +350,7 @@ impl Sink for EventSink {
 
     fn assistant(&mut self, _turn: usize, message: &Message, _usage: ax::Usage) {
         self.emit(serde_json::json!({"type": "message", "message": message}));
+        self.record(message.clone());
     }
 
     fn tool_start(&mut self, call: &ToolCall) {
@@ -328,6 +386,7 @@ impl Sink for EventSink {
             "output": message.content
         }));
         self.emit(serde_json::json!({"type": "message", "message": message}));
+        self.record(message.clone());
     }
 
     fn should_compact(&mut self, input: usize, output: usize) -> bool {
@@ -336,7 +395,14 @@ impl Sink for EventSink {
     }
 
     fn pending_user_input(&mut self) -> Option<String> {
-        self.input.try_recv().ok()
+        let text = self.input.try_recv().ok()?;
+        self.record(Message {
+            role: "user".into(),
+            content: text.clone(),
+            tool_calls: Vec::new(),
+            tool_call_id: String::new(),
+        });
+        Some(text)
     }
 }
 
@@ -395,7 +461,15 @@ fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
         compaction_threshold: fc
             .compaction_threshold
             .or_else(|| fc.context_window.map(|window| window.saturating_sub(16384))),
+        session: cfg.session.as_deref().map(std::path::PathBuf::from),
+        seen: Vec::new(),
+        flushed: 0,
+        pending_calls: None,
+        results: 0,
     };
+    if cfg.messages.is_none() {
+        sink.record(history[old_len].clone());
+    }
     let end = run::run_stream(
         &provider,
         &RunOptions {
@@ -408,12 +482,7 @@ fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
         &cancel,
         &mut sink,
     );
-    if let Some(path) = cfg.session.as_deref()
-        && let Err(e) =
-            ax::session::append_messages(std::path::Path::new(path), &end.messages[old_len..])
-    {
-        event_failure(&e);
-    }
+    sink.finalize(&end.messages, old_len);
     println!(
         "{}",
         serde_json::json!({"type": "result", "messages": end.messages, "usage": {
@@ -778,6 +847,144 @@ fn fmt_dur(d: std::time::Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Recorder {
+        sink: EventSink,
+        tx: std::sync::mpsc::Sender<String>,
+        path: std::path::PathBuf,
+    }
+
+    fn recorder() -> Recorder {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = std::env::temp_dir().join(format!(
+            "ax-flush-{}-{p}",
+            std::process::id(),
+            p = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::remove_file(&path).ok();
+        Recorder {
+            sink: EventSink {
+                input: rx,
+                compaction_threshold: None,
+                session: Some(path.clone()),
+                seen: Vec::new(),
+                flushed: 0,
+                pending_calls: None,
+                results: 0,
+            },
+            path,
+            tx,
+        }
+    }
+
+    fn stored(path: &std::path::Path) -> Vec<Message> {
+        ax::session::context_messages(&ax::session::load_path(path).unwrap())
+    }
+
+    fn message(role: &str, content: &str) -> Message {
+        Message {
+            role: role.into(),
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: String::new(),
+        }
+    }
+
+    #[test]
+    fn event_sink_flushes_each_turn() {
+        let mut r = recorder();
+        r.sink.record(message("user", "go"));
+        assert_eq!(stored(&r.path).len(), 1);
+        r.sink.record(message("assistant", "hello"));
+        assert_eq!(stored(&r.path).len(), 2);
+    }
+
+    #[test]
+    fn event_sink_holds_tool_exchange() {
+        let mut r = recorder();
+        r.sink.record(message("user", "go"));
+        let mut call = message("assistant", "");
+        call.tool_calls.push(ToolCall {
+            id: "c1".into(),
+            name: "read".into(),
+            arguments: "{}".into(),
+        });
+        r.sink.record(call);
+        assert_eq!(
+            stored(&r.path).len(),
+            1,
+            "assistant with calls must not land alone"
+        );
+        let mut result = message("tool", "data");
+        result.tool_call_id = "c1".into();
+        r.sink.record(result);
+        assert_eq!(stored(&r.path).len(), 3);
+    }
+
+    #[test]
+    fn event_sink_cancel_mid_batch_persists_completed_work() {
+        let mut r = recorder();
+        r.sink.record(message("user", "go"));
+        let mut call = message("assistant", "");
+        call.tool_calls.push(ToolCall {
+            id: "c1".into(),
+            name: "read".into(),
+            arguments: "{}".into(),
+        });
+        call.tool_calls.push(ToolCall {
+            id: "c2".into(),
+            name: "read".into(),
+            arguments: "{}".into(),
+        });
+        r.sink.record(call);
+        let mut first = message("tool", "first result");
+        first.tool_call_id = "c1".into();
+        r.sink.record(first);
+        assert_eq!(
+            stored(&r.path).len(),
+            1,
+            "incomplete exchange stays in memory"
+        );
+        let mut second = message(
+            "tool",
+            "error: tool call not executed: the run was interrupted.",
+        );
+        second.tool_call_id = "c2".into();
+        r.sink.record(second);
+        assert_eq!(stored(&r.path).len(), 4);
+    }
+
+    #[test]
+    fn event_sink_finalize_appends_unflushed() {
+        let mut r = recorder();
+        r.sink.record(message("user", "go"));
+        let mut call = message("assistant", "");
+        call.tool_calls.push(ToolCall {
+            id: "c1".into(),
+            name: "read".into(),
+            arguments: "{}".into(),
+        });
+        r.sink.record(call.clone());
+        let final_messages = vec![
+            message("user", "earlier"),
+            message("user", "go"),
+            call,
+            message("assistant", "done"),
+        ];
+        r.sink.finalize(&final_messages, 1);
+        assert_eq!(stored(&r.path), final_messages[1..]);
+    }
+
+    #[test]
+    fn event_sink_records_steer_messages() {
+        let mut r = recorder();
+        let _ = r.tx.send("focus".into());
+        assert_eq!(r.sink.pending_user_input().unwrap(), "focus");
+        assert_eq!(stored(&r.path).len(), 1);
+    }
 
     #[test]
     fn expand_user_command_cases() {
