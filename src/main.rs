@@ -288,6 +288,7 @@ struct EventSink {
     last_usage: Option<ax::Usage>,
     context_window: Option<usize>,
     model: String,
+    host_tools: std::collections::HashSet<String>,
 }
 
 impl EventSink {
@@ -371,6 +372,14 @@ impl Sink for EventSink {
             "name": call.name,
             "arguments": call.arguments
         }));
+        if self.host_tools.contains(&call.name) {
+            self.emit(serde_json::json!({
+                "type": "host_call",
+                "id": call.id,
+                "name": call.name,
+                "arguments": call.arguments
+            }));
+        }
     }
 
     fn tool_delta(&mut self, call: &ToolCall, text: &str) {
@@ -492,6 +501,7 @@ fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
         last_usage: None,
         context_window: fc.context_window,
         model: cfg.model.clone(),
+        host_tools: host_tool_names(),
     };
     if cfg.messages.is_none() && !cfg.continue_session {
         sink.record(history[old_len].clone());
@@ -659,13 +669,61 @@ fn expand_user_command(prompt: &str, ax_root: &str) -> String {
 
 fn tools_or_exit(config: &FileConfig) -> Vec<Tool> {
     let commands = std::env::var("AX_TOOLS").unwrap_or_else(|_| config.tools.clone());
-    match ax::tools::try_external_tools(&commands) {
+    let mut tools = match ax::tools::try_external_tools(&commands) {
         Ok(tools) => tools,
         Err(error) => {
             eprintln!("error: {error}");
             std::process::exit(1);
         }
+    };
+    tools.extend(host_tools_or_exit());
+    tools
+}
+
+fn host_tools_or_exit() -> Vec<Tool> {
+    #[derive(serde::Deserialize)]
+    struct HostTool {
+        name: String,
+        description: String,
+        parameters: serde_json::Value,
     }
+    let value = match std::env::var("AX_HOST_TOOLS") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => return Vec::new(),
+    };
+    let definitions: Vec<HostTool> = serde_json::from_str(&value).unwrap_or_else(|error| {
+        eprintln!("error: invalid AX_HOST_TOOLS: {error}");
+        std::process::exit(1);
+    });
+    definitions
+        .into_iter()
+        .map(|definition| {
+            let name = Box::leak(definition.name.into_boxed_str());
+            let description = Box::leak(definition.description.into_boxed_str());
+            Tool {
+                name,
+                description,
+                parameters: definition.parameters,
+                snippet: "",
+                sequential: true,
+                run: Box::new(|_, _| "Host accepted the operation.".into()),
+            }
+        })
+        .collect()
+}
+
+fn host_tool_names() -> std::collections::HashSet<String> {
+    std::env::var("AX_HOST_TOOLS")
+        .ok()
+        .and_then(|value| serde_json::from_str::<Vec<serde_json::Value>>(&value).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|tool| {
+            tool.get("name")
+                .and_then(|name| name.as_str())
+                .map(str::to_string)
+        })
+        .collect()
 }
 
 fn build_agent(cfg: &Config, fc: &FileConfig, on: impl FnMut(Event) + 'static) -> Agent<OpenAI> {
@@ -922,6 +980,7 @@ mod tests {
                 last_usage: None,
                 context_window: None,
                 model: String::new(),
+                host_tools: std::collections::HashSet::new(),
             },
             path,
             tx,
