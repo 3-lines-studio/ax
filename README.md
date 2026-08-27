@@ -80,7 +80,9 @@ writes status to stderr. Reusing the path continues the same session.
 Use `--events` for a JSONL stream on stdout. While AX runs, send
 `{"type":"steer","text":"..."}` or `{"type":"cancel"}` as JSONL on stdin.
 The stream contains assistant deltas, tool events, usage, errors, and one final
-`done` event.
+`done` event. Process hosts may provide JSON tool definitions through
+`AX_HOST_TOOLS`. AX executes those tools in-process and emits a structured
+`host_call` event so the host can act after AX exits without a callback.
 
 Taxi provides the transcript TUI, streamed Markdown, tool status, commands,
 file completion, steering, and session screens while running AX as a sidecar.

@@ -340,6 +340,8 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;
 
+    static PROVIDER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     struct TestProvider {
         directory: std::path::PathBuf,
         command: std::path::PathBuf,
@@ -374,6 +376,7 @@ mod tests {
 
     #[test]
     fn accepts_provider_without_tools() {
+        let _provider_lock = PROVIDER_LOCK.lock().unwrap();
         let provider = provider("#!/bin/sh\nexit 0\n");
         assert!(
             try_external_tools(provider.command.to_str().unwrap())
@@ -384,6 +387,7 @@ mod tests {
 
     #[test]
     fn runs_external_tool() {
+        let _provider_lock = PROVIDER_LOCK.lock().unwrap();
         let provider = provider(
             "#!/bin/sh\nif [ \"$1\" = describe ]; then\n  echo '{\"name\":\"echo\",\"description\":\"Echo input\",\"parameters\":{\"type\":\"object\"}}'\nelse\n  cat\nfi\n",
         );
@@ -397,6 +401,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_provider() {
+        let _provider_lock = PROVIDER_LOCK.lock().unwrap();
         let provider = provider(
             "#!/bin/sh\necho '{\"name\":\"bad name\",\"description\":\"Bad\",\"parameters\":{}}'\n",
         );
@@ -405,6 +410,7 @@ mod tests {
 
     #[test]
     fn rejects_large_description_output() {
+        let _provider_lock = PROVIDER_LOCK.lock().unwrap();
         let provider = provider("#!/bin/sh\nyes x | head -c 70000\n");
         let error = match try_external_tools(provider.command.to_str().unwrap()) {
             Ok(_) => panic!("large output accepted"),
