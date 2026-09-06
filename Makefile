@@ -1,4 +1,4 @@
-RELEASE = cargo +nightly build --release --config 'build.rustflags="-C force-unwind-tables=no"'
+RELEASE = cargo +nightly build --release
 PREFIX ?= $(HOME)/.local
 
 .PHONY: check run dev harness install

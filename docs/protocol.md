@@ -12,7 +12,7 @@ A client must reject an unsupported version and may ignore unknown event types w
 
 ## Input
 
-Pass a prompt as the final command argument, or pass a JSON array of messages with `--messages FILE`.
+Pass a prompt as the final command argument.
 
 While AX runs, stdin accepts JSONL controls:
 
