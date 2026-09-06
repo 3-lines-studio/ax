@@ -3,8 +3,6 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-cargo +nightly-2026-08-17 build --release
-
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
 case $os in
     linux | darwin) ;;
@@ -13,13 +11,18 @@ esac
 
 arch=$(uname -m)
 case $arch in
-    x86_64 | amd64) arch=x86_64 ;;
-    aarch64 | arm64) arch=aarch64 ;;
+    x86_64 | amd64) goarch=amd64; arch=x86_64 ;;
+    aarch64 | arm64) goarch=arm64; arch=aarch64 ;;
     *) echo "package: unsupported arch: $arch" >&2; exit 1 ;;
 esac
 
+case $os in
+    linux) goos=linux ;;
+    darwin) goos=darwin ;;
+esac
+
 out="ax-$os-$arch"
-cp target/release/ax "$out"
+CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags='-s -w' -o "$out" .
 
 if command -v sha256sum >/dev/null 2>&1; then
     hash=$(sha256sum "$out" | awk '{print $1}')

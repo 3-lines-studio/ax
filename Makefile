@@ -1,28 +1,33 @@
-RELEASE = cargo +nightly build --release
 PREFIX ?= $(HOME)/.local
+BIN := ax
 
-.PHONY: check run dev harness install
+.PHONY: check build run dev harness install clean
 
 check:
-	cargo fmt
-	cargo clippy --all-targets -- -D warnings
-	cargo test
-	$(RELEASE)
-	python3 scripts/harness.py --bin target/release/ax
+	test -z "$$(gofmt -l .)"
+	go vet ./...
+	go test ./...
+	go test -race ./...
+	$(MAKE) build
+	python3 scripts/harness.py --bin $(BIN)
 
-run:
-	$(RELEASE)
-	./target/release/ax
+build:
+	go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o $(BIN) .
+
+run: build
+	./$(BIN)
 
 dev:
-	cargo build
-	./target/debug/ax
+	go build -o $(BIN) .
+	./$(BIN)
 
 harness:
-	$(RELEASE)
-	python3 scripts/harness.py --bin target/release/ax
+	$(MAKE) build
+	python3 scripts/harness.py --bin $(BIN)
 
-install:
-	$(RELEASE)
+install: build
 	install -d "$(PREFIX)/bin"
-	install -m 0755 target/release/ax "$(PREFIX)/bin/ax"
+	install -m 0755 $(BIN) "$(PREFIX)/bin/ax"
+
+clean:
+	rm -f $(BIN)
