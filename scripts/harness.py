@@ -429,13 +429,44 @@ def body_msg(server, i, role):
     return [m for m in server.requests[i]["json"]["messages"] if m["role"] == role]
 
 
+def read_events(p):
+    return [json.loads(line) for line in p.stdout.splitlines()]
+
+
+def last_result(events):
+    return [e for e in events if e.get("type") == "result"][-1]
+
+
+def bash_provider(h):
+    sh = h.root / "bashprovider"
+    sh.write_text(
+        """#!/usr/bin/python3
+import json, subprocess, sys
+if len(sys.argv) > 1 and sys.argv[1] == "describe":
+    print(json.dumps({"name": "bash", "description": "Run a shell command", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}))
+    sys.exit(0)
+if len(sys.argv) > 2 and sys.argv[1] == "run" and sys.argv[2] == "bash":
+    args = json.load(sys.stdin)
+    r = subprocess.run(args["command"], shell=True, capture_output=True, text=True)
+    sys.stdout.write(r.stdout)
+    sys.exit(0)
+sys.exit(1)
+"""
+    )
+    sh.chmod(0o755)
+    return sh
+
+
 @case
 def oneshot_prints_answer(h, ax):
     with h.mock(ANSWER_SCENARIO) as srv:
-        p = h.oneshot(ax, ["hello"], base=srv.base_url)
+        p = h.oneshot(ax, ["--events", "hello"], base=srv.base_url)
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
-        check("Done" in p.stdout, "stdout: %s" % p.stdout[-500:])
-        check("tokens:" in p.stderr, "stderr: %s" % p.stderr[-500:])
+        events = read_events(p)
+        check(events[0] == {"type": "protocol", "version": 1}, "bad protocol event")
+        check(events[-1] == {"type": "done", "outcome": "done"}, "bad final event")
+        content = [m["Content"] for m in last_result(events)["messages"] if m["Role"] == "assistant"]
+        check(any("Done" in c for c in content), "assistant result missing: %s" % content)
         check(len(srv.requests) == 1, "expected 1 request, got %d" % len(srv.requests))
         check(body_msg(srv, 0, "user")[-1]["content"] == "hello", "prompt not sent")
         check(
@@ -468,17 +499,6 @@ def oneshot_events(h, ax):
         check(events[-1] == {"type": "done", "outcome": "done"}, "bad final event")
 
 
-@case
-def oneshot_message_input(h, ax):
-    messages = h.root / "messages.json"
-    messages.write_text(json.dumps([{"Role": "user", "Content": "from file"}]))
-    with h.mock(ANSWER_SCENARIO) as srv:
-        p = h.oneshot(ax, ["--events", "--messages", str(messages)], stdin=b"", base=srv.base_url)
-        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
-        check(body_msg(srv, 0, "user")[-1]["content"] == "from file", "messages not sent")
-        events = [json.loads(line) for line in p.stdout.splitlines()]
-        check(any(e.get("type") == "message" for e in events), "message event missing")
-
 
 @case
 def oneshot_explicit_session(h, ax):
@@ -495,22 +515,37 @@ def oneshot_explicit_session(h, ax):
 @case
 def oneshot_tool_loop(h, ax):
     with h.mock(TOOL_SCENARIO) as srv:
-        p = h.oneshot(ax, ["use tools"], base=srv.base_url)
+        p = h.oneshot(
+            ax,
+            ["--events", "use tools"],
+            base=srv.base_url,
+            extra_env={"AX_TOOLS": str(bash_provider(h))},
+        )
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
-        check("Done" in p.stdout, "stdout: %s" % p.stdout[-500:])
+        events = read_events(p)
+        check(
+            any(e.get("type") == "tool_start" and e.get("name") == "bash" for e in events),
+            "no tool_start event",
+        )
+        content = [m["Content"] for m in last_result(events)["messages"] if m["Role"] == "assistant"]
+        check(any("Done" in c for c in content), "assistant result missing: %s" % content)
         check(len(srv.requests) == 2, "expected 2 requests, got %d" % len(srv.requests))
         tool_msgs = body_msg(srv, 1, "tool")
         check(
             any("hello" in m.get("content", "") for m in tool_msgs),
             "tool result not fed back: %s" % tool_msgs,
         )
-        check("echo hello" in p.stderr, "tool trace missing: %s" % p.stderr[-500:])
 
 
 @case
 def oneshot_tool_workdir(h, ax):
     with h.mock(WRITE_FILE_SCENARIO) as srv:
-        p = h.oneshot(ax, ["-C", str(h.work), "write a file"], base=srv.base_url)
+        p = h.oneshot(
+            ax,
+            ["-C", str(h.work), "write a file"],
+            base=srv.base_url,
+            extra_env={"AX_TOOLS": str(bash_provider(h))},
+        )
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
         check((h.work / "out.txt").read_text() == "hi", "tool ran in wrong dir")
 
@@ -574,17 +609,21 @@ def oneshot_retry(h, ax):
 def oneshot_retry_exhausted(h, ax):
     scenario = [{"status": 429, "body": '{"error":{"message":"rate limited"}}'}] * 3
     with h.mock(scenario) as srv:
-        p = h.oneshot(ax, ["hi"], base=srv.base_url)
+        p = h.oneshot(ax, ["--events", "hi"], base=srv.base_url)
         check(p.returncode == 1, "expected exit 1, got %s" % p.returncode)
-        check("429" in p.stderr and "rate limited" in p.stderr, "stderr: %s" % p.stderr[-500:])
+        events = read_events(p)
+        err = [e for e in events if e.get("type") == "error"][-1]
+        check("429" in err["message"] and "rate limited" in err["message"], "error event: %s" % err)
         check(len(srv.requests) == 3, "expected 3 attempts, got %d" % len(srv.requests))
 
 
 @case
 def oneshot_provider_down(h, ax):
-    p = h.oneshot(ax, ["hi"], base="http://127.0.0.1:1")
+    p = h.oneshot(ax, ["--events", "hi"], base="http://127.0.0.1:1")
     check(p.returncode == 1, "expected exit 1, got %s" % p.returncode)
-    check("error:" in p.stderr, "stderr: %s" % p.stderr[-500:])
+    events = read_events(p)
+    check(any(e.get("type") == "error" for e in events), "no error event: %s" % p.stdout[-500:])
+    check(events[-1] == {"type": "done", "outcome": "failed"}, "bad final event: %s" % events[-1])
 
 
 @case
@@ -613,47 +652,6 @@ def oneshot_user_command(h, ax):
         )
 
 
-@case
-def search_cli(h, ax):
-    h.seed_session("1700000000000", "my needle title", "the needle is here and a needle in the haystack")
-    p = h.oneshot(ax, ["--search", "needle"])
-    check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
-    check("my needle title" in p.stdout and "needle" in p.stdout, "stdout: %s" % p.stdout[-500:])
-
-
-@case
-def search_cli_derived_title(h, ax):
-    # No .title file: search must derive the title from the first user message,
-    # the same way the resume picker does (session.rs title_from_entries).
-    h.seed_session_msgs(
-        "1700000000000",
-        None,
-        [
-            {"Role": "user", "Content": "refactor the auth module"},
-            {"Role": "assistant", "Content": "the needle is here"},
-        ],
-    )
-    p = h.oneshot(ax, ["--search", "needle"])
-    check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
-    check(
-        "refactor the auth module (1700000000000)" in p.stdout,
-        "derived title missing: %s" % p.stdout[-500:],
-    )
-
-
-@case
-def search_cli_empty(h, ax):
-    h.seed_session("1700000000000", "t", "no matches here")
-    p = h.oneshot(ax, ["--search", "zzz"])
-    check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
-    check(p.stdout == "", "expected empty stdout: %s" % p.stdout[:500])
-
-
-@case
-def search_no_text(h, ax):
-    p = h.oneshot(ax, ["--search"])
-    check(p.returncode == 1, "expected exit 1, got %s" % p.returncode)
-    check("usage: ax --search <text>" in p.stderr, "stderr: %s" % p.stderr[-500:])
 
 
 def main(argv):

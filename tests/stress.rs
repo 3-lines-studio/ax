@@ -197,22 +197,26 @@ fn fuzz_frontmatter(_rng: &mut Rng, seed: u64, input: &[u8]) {
 fn fuzz_session(_rng: &mut Rng, seed: u64, input: &[u8]) {
     let dir = std::env::temp_dir().join(format!("ax-stress-session-{seed}-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
-    let _ = std::fs::write(dir.join("session.jsonl"), input);
-    guard("session load_live", seed, || {
-        let msgs = ax::session::load_live(dir.to_str().unwrap());
-        assert!(msgs.len() <= input.iter().filter(|&&b| b == b'\n').count() + 1);
+    let path = dir.join("session.jsonl");
+    let _ = std::fs::write(&path, input);
+    guard("session load+context", seed, || {
+        if let Ok(entries) = ax::session::load_path(&path) {
+            let msgs = ax::session::context_messages(&entries);
+            assert!(msgs.len() <= entries.len());
+        }
     });
-    guard("session list", seed, || {
-        let _ = ax::session::list_sessions(dir.to_str().unwrap());
-    });
-    guard("session archive", seed, || {
-        let _ = ax::session::archive_live(dir.to_str().unwrap());
-    });
-    guard("session save roundtrip", seed, || {
-        let msgs = ax::session::load_live(dir.to_str().unwrap());
-        ax::session::save_live(dir.to_str().unwrap(), &msgs);
-        let again = ax::session::load_live(dir.to_str().unwrap());
-        assert_eq!(msgs, again);
+    guard("session append roundtrip", seed, || {
+        let ok = std::path::Path::new(&dir).join("ok.jsonl");
+        let msg = ax::Message {
+            role: "user".into(),
+            content: "x".into(),
+            tool_calls: Vec::new(),
+            tool_call_id: String::new(),
+        };
+        let _ = ax::session::append_messages(&ok, std::slice::from_ref(&msg));
+        let _ = ax::session::append_usage(&ok, 1, 2, 0, None, "m");
+        let entries = ax::session::load_path(&ok).unwrap();
+        assert_eq!(ax::session::context_messages(&entries).len(), 1);
     });
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -445,33 +449,6 @@ fn sse_huge_index_capped() {
 }
 
 #[test]
-fn session_load_by_id_sanitizes_paths() {
-    let dir = std::env::temp_dir().join(format!("ax-loadid-{}", std::process::id()));
-    let store = dir.join("sessions");
-    std::fs::create_dir_all(&store).unwrap();
-    std::fs::write(
-        store.join("123.jsonl"),
-        "{\"Role\":\"user\",\"Content\":\"hi\"}\n",
-    )
-    .unwrap();
-    std::fs::write(dir.join("secret.jsonl"), "not a session").unwrap();
-    let d = dir.to_str().unwrap();
-
-    let ok = ax::session::load_by_id(d, "123").expect("valid id loads");
-    let msgs = ax::session::context_messages(&ok);
-    assert_eq!(msgs.len(), 1);
-    assert_eq!(msgs[0].content, "hi");
-
-    for bad in ["", ".", "..", "../secret", "..\\secret", "/etc/passwd"] {
-        assert!(
-            ax::session::load_by_id(d, bad).is_none(),
-            "id {bad:?} must be rejected"
-        );
-    }
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
 fn stress_sse_streaming() {
     let seeds = corpus();
     let mut payloads = Vec::new();
@@ -493,152 +470,6 @@ fn stress_sse_streaming() {
     }
     fuzz_sse(&mut Rng(42), 42, &payloads);
     eprintln!("stress_sse_streaming: {} payloads", payloads.len());
-}
-
-#[test]
-fn session_old_format_and_compaction_roundtrip() {
-    let dir = std::env::temp_dir().join(format!("ax-session-entries-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let d = dir.to_str().unwrap();
-
-    std::fs::write(
-        dir.join("session.jsonl"),
-        "{\"Role\":\"user\",\"Content\":\"hi\"}\n",
-    )
-    .unwrap();
-    let entries = ax::session::load_live(d);
-    assert_eq!(entries.len(), 1);
-    let msgs = ax::session::context_messages(&entries);
-    assert_eq!(msgs[0].content, "hi");
-
-    let entry = ax::session::Entry::Compaction {
-        summary: "done stuff".into(),
-        tokens_before: 100,
-        timestamp: 1,
-        retained: vec![Message {
-            role: "assistant".into(),
-            content: "recent".into(),
-            tool_calls: Vec::new(),
-            tool_call_id: String::new(),
-        }],
-    };
-    let usage = ax::session::Entry::Usage {
-        input: 120,
-        output: 8,
-        cached_input: 80,
-        context_input: 100,
-        context_output: 8,
-        window: None,
-        model: String::new(),
-    };
-    ax::session::save_live(d, &[entry, usage]);
-    let entries = ax::session::load_live(d);
-    assert!(matches!(
-        entries[1],
-        ax::session::Entry::Usage {
-            input: 120,
-            output: 8,
-            cached_input: 80,
-            context_input: 100,
-            context_output: 8,
-            ..
-        }
-    ));
-    let msgs = ax::session::context_messages(&entries);
-    assert_eq!(msgs.len(), 2);
-    assert!(msgs[0].content.contains("done stuff"));
-    assert!(msgs[0].content.contains("<summary>"));
-    assert_eq!(msgs[1].content, "recent");
-
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
-fn session_compaction_is_append_only() {
-    let dir = std::env::temp_dir().join(format!("ax-compact-append-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let d = dir.to_str().unwrap();
-
-    let msg = |role: &str, content: &str| Message {
-        role: role.into(),
-        content: content.into(),
-        tool_calls: Vec::new(),
-        tool_call_id: String::new(),
-    };
-    let mut entries = vec![
-        ax::session::Entry::Message {
-            message: msg("user", "findable old detail ZEBRA"),
-        },
-        ax::session::Entry::Message {
-            message: msg("assistant", "noted"),
-        },
-    ];
-    ax::session::save_live(d, &entries);
-
-    // Compaction appends; nothing is rewritten or dropped from disk.
-    entries.push(ax::session::Entry::Compaction {
-        summary: "earlier work summarized".into(),
-        tokens_before: 100,
-        timestamp: 1,
-        retained: vec![msg("assistant", "recent")],
-    });
-    entries.push(ax::session::Entry::Message {
-        message: msg("user", "new question"),
-    });
-    ax::session::save_live(d, &entries);
-    assert_eq!(ax::session::load_live(d).len(), 4, "history stays on disk");
-
-    // The projection supersedes everything before the summary.
-    let msgs = ax::session::context_messages(&ax::session::load_live(d));
-    assert_eq!(msgs.len(), 3);
-    assert!(msgs[0].content.contains("earlier work summarized"));
-    assert_eq!(msgs[1].content, "recent");
-    assert_eq!(msgs[2].content, "new question");
-
-    // Pre-compaction history remains searchable.
-    let hits = ax::session::search(d, "ZEBRA");
-    assert_eq!(hits.len(), 1, "old history must stay searchable");
-
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
-fn session_overflow_patterns() {
-    assert!(ax::session::is_overflow_error(
-        "openai: 400: This model's mtaximum context length is 131072 tokens"
-    ));
-    assert!(ax::session::is_overflow_error(
-        "anthropic: prompt is too long: 213462 tokens > 200000 mtaximum"
-    ));
-    assert!(!ax::session::is_overflow_error(
-        "openai: 429: rate limit reached"
-    ));
-    assert!(!ax::session::is_overflow_error(
-        "openai: 529: Throttling error"
-    ));
-}
-
-#[test]
-fn session_search_finds_text() {
-    let dir = std::env::temp_dir().join(format!("ax-search-{}", std::process::id()));
-    let store = dir.join("sessions");
-    std::fs::create_dir_all(&store).unwrap();
-    std::fs::write(
-        store.join("123.jsonl"),
-        "{\"Role\":\"user\",\"Content\":\"fix the overflow bug\"}\n",
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("session.jsonl"),
-        "{\"Role\":\"user\",\"Content\":\"unrelated thing\"}\n",
-    )
-    .unwrap();
-    let d = dir.to_str().unwrap();
-    let hits = ax::session::search(d, "overflow");
-    assert_eq!(hits.len(), 1, "hits: {hits:?}");
-    assert!(hits[0].text.contains("overflow"));
-    assert!(ax::session::search(d, "zzz").is_empty());
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]

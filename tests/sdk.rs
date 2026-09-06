@@ -481,37 +481,6 @@ fn run_injects_steering_between_turns() {
     assert_eq!(end.messages[4].content, "second");
 }
 
-#[test]
-fn compact_generates_structured_summary() {
-    let p = Fake {
-        responses: RefCell::new(VecDeque::from([Response {
-            message: assistant(
-                "## Goal\nbuild the thing\n## User Requirements\n- none\n## Progress\n### Done\n- none\n### In Progress\n- build\n### Blocked\n- none\n## Key Decisions\n- none\n## Files\n- none\n## Commands and Results\n- none\n## Open Questions\n- none\n## Next Steps\n1. build\n## Critical Context\n- none",
-            ),
-            usage: Usage::default(),
-            stop_reason: String::new(),
-        }])),
-        ..Default::default()
-    };
-    let entries: Vec<ax::session::Entry> = (0..30)
-        .map(|i| ax::session::Entry::Message {
-            message: user(&format!("message {i} {}", "x".repeat(3800))),
-        })
-        .collect();
-    let (summary, tokens_before, retained) =
-        ax::session::compact(&p, "m1", &entries).expect("compact");
-    assert!(summary.starts_with("## Goal\nbuild the thing"));
-    assert_eq!(tokens_before, 0);
-    assert!(!retained.is_empty() && retained.len() < entries.len());
-    let reqs = p.requests.borrow();
-    let last = reqs.last().unwrap();
-    assert!(
-        last[0].content.contains("## Goal"),
-        "missing structured prompt"
-    );
-    assert!(last[0].content.contains("## Critical Context"));
-}
-
 struct MidStreamFlaky {
     attempts: RefCell<usize>,
 }
@@ -556,59 +525,6 @@ fn run_does_not_retry_after_events_were_emitted() {
     let err = a.run(&[user("go")]).unwrap_err();
     assert!(err.to_string().contains("flaky mid-stream"), "got: {err}");
     assert_eq!(*a.provider().attempts.borrow(), 1);
-}
-
-#[test]
-fn trim_trailing_tool_messages() {
-    // A complete exchange is kept.
-    let mut complete = vec![
-        user("go"),
-        call_tool("c1", "read", "{}"),
-        Message {
-            role: "tool".into(),
-            content: "file contents".into(),
-            tool_calls: Vec::new(),
-            tool_call_id: "c1".into(),
-        },
-    ];
-    ax::session::trim_trailing_tool_messages(&mut complete);
-    assert_eq!(complete.len(), 3);
-
-    // A partial exchange (2 calls, 1 result) is dropped whole, including
-    // its dangling assistant message.
-    let mut partial = vec![
-        user("go"),
-        Message {
-            role: "assistant".into(),
-            content: String::new(),
-            tool_calls: vec![
-                ToolCall {
-                    id: "c1".into(),
-                    name: "read".into(),
-                    arguments: "{}".into(),
-                },
-                ToolCall {
-                    id: "c2".into(),
-                    name: "read".into(),
-                    arguments: "{}".into(),
-                },
-            ],
-            tool_call_id: String::new(),
-        },
-        Message {
-            role: "tool".into(),
-            content: "file contents".into(),
-            tool_calls: Vec::new(),
-            tool_call_id: "c1".into(),
-        },
-    ];
-    ax::session::trim_trailing_tool_messages(&mut partial);
-    assert_eq!(partial.len(), 1);
-    assert_eq!(partial[0].role, "user");
-
-    let mut msgs2 = vec![user("go")];
-    ax::session::trim_trailing_tool_messages(&mut msgs2);
-    assert_eq!(msgs2.len(), 1);
 }
 
 struct NopSink;
@@ -692,11 +608,6 @@ fn run_cancel_mid_batch_synthesizes_results() {
         "got: {}",
         results[1].content
     );
-
-    // The transcript survives the pre-turn validity trim untouched.
-    let mut trimmed = msgs.clone();
-    ax::session::trim_trailing_tool_messages(&mut trimmed);
-    assert_eq!(trimmed.len(), msgs.len());
 }
 
 #[test]

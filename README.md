@@ -30,7 +30,7 @@ removing its file from `~/.local/bin`.
 ## Build
 
 ```sh
-cargo +nightly build --release --config 'build.rustflags="-C force-unwind-tables=no"'
+cargo +nightly build --release
 ./target/release/ax
 ```
 
@@ -59,21 +59,21 @@ Headless one-shot:
 OPENAI_API_KEY=... ax "explain main.go"
 ```
 
+AX always emits a JSONL event stream on stdout. While AX runs, send
+`{"type":"steer","text":"..."}` or `{"type":"cancel"}` as JSONL on stdin.
+The stream contains assistant deltas, tool events, usage, errors, and one final
+`done` event. Process hosts may provide JSON tool definitions through
+`AX_HOST_TOOLS`. AX executes those tools in-process and emits a structured
+`host_call` event so the host can act after AX exits without a callback.
+
 Persist one-shot calls in an explicit session file:
 
 ```sh
 ax --session ./thread.jsonl "continue fixing the test"
 ```
 
-AX loads the file, appends the turn, prints the final answer to stdout, and
-writes status to stderr. Reusing the path continues the same session.
-
-Use `--events` for a JSONL stream on stdout. While AX runs, send
-`{"type":"steer","text":"..."}` or `{"type":"cancel"}` as JSONL on stdin.
-The stream contains assistant deltas, tool events, usage, errors, and one final
-`done` event. Process hosts may provide JSON tool definitions through
-`AX_HOST_TOOLS`. AX executes those tools in-process and emits a structured
-`host_call` event so the host can act after AX exits without a callback.
+AX loads the file, appends the turn, then emits the event stream. Reusing the
+path continues the same session. The `--events` flag is accepted as a no-op.
 
 Any OpenAI-compatible endpoint works: `-base https://...` for OpenRouter,
 DeepSeek, Ollama, vLLM.
@@ -112,26 +112,14 @@ api_key = "sk-..."        # used when OPENAI_API_KEY is unset
 model = "glm-4.5"
 base = "http://localhost:11434/v1"
 tools = "fsx bashx skillx"    # optional: external providers
-context_window = 1000000       # optional: model context size
-compaction_threshold = 250000  # optional: compact before the model limit
 ```
 
 Plain `key = value` lines, `#` comments. `AX_TOOLS` overrides `tools`. Other precedence is flags > env > config.
-Run `/login` to write these interactively. Set `context_window`
-to enable automatic compaction 16,384 tokens before the model limit. Set
-`compaction_threshold` to compact at a lower token count. AX uses the provider's
-reported context usage. During tool-driven work, AX finishes the current model
-response and its full tool batch, compacts, then resumes the same run. Without
-usage data or either setting, compaction runs only after an explicit
-context-overflow error.
 
 ## Files
 
 Everything is files; there is no state machine.
 
-- `~/.config/ax/projects/<cwd-hash>/sessions/` — sessions scoped to the work
-  dir and archived on exit. `/resume` or `ax -r` reopens the picker;
-  `ax --resume last` resumes the latest session for that work dir.
 - `~/.config/ax/commands/<name>.md` — user commands: prompt templates for
   `/name [args]`. `$ARGUMENTS` and `$@` are all args, `$1..$9` positional,
   `${2:-default}` defaults, `${@:N}` and `${@:N:L}` slices; quoted args are
@@ -140,23 +128,20 @@ Everything is files; there is no state machine.
   through the `skills` tool and reads one with the `skill` tool.
 - `~/.config/ax/SYSTEM.md` — optional system prompt, appended to the
   built-in one.
-- Search sessions with `ax --search <text>`.
-  Sessions are JSONL: one line per message or compaction entry, so line
-  matches map directly to entries.
+- Sessions are JSONL: one line per message or usage entry. `--session FILE`
+  points at the file; there is no per-project store.
 
 ## Design
 
 - The loop is the only logic: messages → LLM → tool calls → results →
   repeat. It lives in `run` and is shared by the SDK and headless CLI.
-- `run` never mutates its input. The session file is append-only: compaction
-  appends a summary entry (with the recent messages it retains) instead of
-  rewriting history; the LLM context is a projection of the entries.
+- `run` never mutates its input. The session file is append-only: turns are
+  added to `--session FILE`, never rewritten.
 - Tool calls in one batch run in parallel, results returned in call order;
   `edit` and `write` run sequentially to avoid file races.
-- Retries (2×, 408/409/429/5xx + transport, with backoff) and context-overflow
-  recovery (compact + retry once) live in the transport/session layers, not
-  the turn loop. Tool calls from a response cut off by the output token
-  limit are never executed.
+- Retries (2×, 408/409/429/5xx + transport, with backoff) live in the
+  transport layer, not the turn loop. Tool calls from a response cut off by
+  the output token limit are never executed.
 - Extend by composition: wrap `Provider`, pass your own `Tool` values, own
   the transcript.
 - Tool errors return to the model as text so it can self-correct; only

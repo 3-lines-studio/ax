@@ -3,61 +3,28 @@
 #![forbid(unsafe_code)]
 
 use ax::run::{self, Outcome, RunOptions, Sink};
-use ax::{Agent, Error, Event, Message, OpenAI, Tool, ToolCall};
-use std::cell::RefCell;
+use ax::{Message, OpenAI, Tool, ToolCall};
 use std::io::{IsTerminal, Read};
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
 
 struct Config {
     base: String,
     model: String,
     system: String,
     dir: String,
-    resume: Option<String>,
     session: Option<String>,
-    events: bool,
-    messages: Option<String>,
-    list_models: bool,
-    compact: Option<String>,
-    continue_session: bool,
 }
 
 struct FileConfig {
     api_key: String,
     model: String,
     base: String,
-    context_window: Option<usize>,
-    compaction_threshold: Option<usize>,
     tools: String,
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if let Some(pos) = args.iter().position(|a| a == "--search") {
-        let text = args.get(pos + 1).map(String::as_str).unwrap_or("");
-        if text.is_empty() {
-            eprintln!("usage: ax --search <text>");
-            std::process::exit(1);
-        }
-        let session_dir =
-            ax::session::scope_dir(&ax_root(), &std::env::current_dir().unwrap_or_default());
-        for h in ax::session::search(&session_dir, text) {
-            let id = if h.id == "live" {
-                "live".to_string()
-            } else {
-                h.id.clone()
-            };
-            if h.title.is_empty() {
-                println!("({id}) — {}", h.text);
-            } else {
-                println!("{} ({id}) — {}", h.title, h.text);
-            }
-        }
-        std::process::exit(0);
-    }
     let fc = load_config();
     let (mut cfg, prompt) = match parse_args(&args, &fc) {
         Ok(x) => x,
@@ -67,18 +34,6 @@ fn main() {
             std::process::exit(2);
         }
     };
-    if cfg.messages.is_some() && !cfg.events {
-        eprintln!("error: --messages requires --events");
-        std::process::exit(2);
-    }
-    if cfg.list_models {
-        list_models(&cfg, &fc);
-        return;
-    }
-    if let Some(path) = cfg.compact.as_deref() {
-        compact_messages(&cfg, &fc, path);
-        return;
-    }
     if !cfg.dir.is_empty() {
         let directory = std::fs::canonicalize(&cfg.dir).unwrap_or_else(|error| {
             eprintln!("error: cannot use {}: {error}", cfg.dir);
@@ -91,10 +46,6 @@ fn main() {
         cfg.dir = directory.display().to_string();
     }
     let mut prompt = prompt;
-    if cfg.events && (cfg.messages.is_some() || cfg.continue_session) {
-        one_shot(&cfg, &fc, &prompt);
-        return;
-    }
     if prompt.is_empty() {
         let mut b = String::new();
         if std::io::stdin().read_to_string(&mut b).is_err() {
@@ -103,7 +54,7 @@ fn main() {
         }
         prompt = vec![b];
     }
-    one_shot(&cfg, &fc, &prompt);
+    one_shot_events(&cfg, &fc, &prompt);
 }
 
 fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>), String> {
@@ -120,13 +71,7 @@ fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>),
         },
         system: String::new(),
         dir: String::new(),
-        resume: None,
         session: None,
-        events: false,
-        messages: None,
-        list_models: false,
-        compact: None,
-        continue_session: false,
     };
     let mut rest = Vec::new();
     let mut i = 0;
@@ -136,41 +81,7 @@ fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>),
             usage();
             std::process::exit(0);
         }
-        if a == "--list-models" {
-            cfg.list_models = true;
-            i += 1;
-            continue;
-        }
         if a == "--events" {
-            cfg.events = true;
-            i += 1;
-            continue;
-        }
-        if a == "--continue" {
-            cfg.continue_session = true;
-            i += 1;
-            continue;
-        }
-        if a == "-r" {
-            cfg.resume = Some(String::new());
-            i += 1;
-            continue;
-        }
-        if a == "--resume" || a == "resume" {
-            // Bare resume opens the picker; a following non-flag names the target.
-            if let Some(next) = args.get(i + 1)
-                && !next.starts_with('-')
-            {
-                cfg.resume = Some(next.clone());
-                i += 2;
-                continue;
-            }
-            cfg.resume = Some(String::new());
-            i += 1;
-            continue;
-        }
-        if let Some(v) = a.strip_prefix("--resume=") {
-            cfg.resume = Some(v.to_string());
             i += 1;
             continue;
         }
@@ -188,7 +99,7 @@ fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>),
             None => (stripped.to_string(), None),
         };
         match name.as_str() {
-            "base" | "model" | "system" | "C" | "session" | "messages" | "compact" => {
+            "base" | "model" | "system" | "C" | "session" => {
                 let v = match inline {
                     Some(v) => v,
                     None => {
@@ -204,8 +115,6 @@ fn parse_args(args: &[String], fc: &FileConfig) -> Result<(Config, Vec<String>),
                     "system" => cfg.system = v,
                     "C" => cfg.dir = v,
                     "session" => cfg.session = Some(v),
-                    "messages" => cfg.messages = Some(v),
-                    "compact" => cfg.compact = Some(v),
                     _ => unreachable!(),
                 }
             }
@@ -227,66 +136,21 @@ fn usage() {
          \x20 -C DIR       working directory context\n\
          \x20 --session FILE  use an explicit session file\n\
          \x20 --events      emit JSONL events on stdout\n\
-         \x20 --continue    resume the --session run without a new user message\n\
-         \x20 --messages FILE  use a JSON message array with --events\n\
-         \x20 --list-models  print model names as JSON\n\
-         \x20 --compact FILE  compact a JSONL session and print JSON\n\
-         \x20 -r, --resume  open the session picker\n\
-         \x20 --resume last  resume the most recent session\n\
-         \x20 --resume ID   resume a saved session by id\n\
          \n\
          With no prompt, reads the prompt from stdin.
          A prompt of the form /name [args] expands a user command from
-         ~/.config/ax/commands/<name>.md (same expansion as the TUI)."
+         ~/.config/ax/commands/<name>.md."
     );
-}
-
-fn list_models(cfg: &Config, fc: &FileConfig) {
-    let provider = OpenAI::new(cfg.base.clone(), api_key(fc));
-    match provider.list_models() {
-        Ok(models) => println!("{}", serde_json::to_string(&models).unwrap()),
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-fn compact_messages(cfg: &Config, fc: &FileConfig, path: &str) {
-    let entries = match ax::session::load_path(std::path::Path::new(path)) {
-        Ok(entries) => entries,
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
-    };
-    let provider = OpenAI::new(cfg.base.clone(), api_key(fc));
-    match ax::session::compact(&provider, &cfg.model, &entries) {
-        Ok((summary, tokens_before, retained)) => println!(
-            "{}",
-            serde_json::json!({
-                "summary": summary,
-                "tokens_before": tokens_before,
-                "retained": retained
-            })
-        ),
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
-    }
 }
 
 struct EventSink {
     input: std::sync::mpsc::Receiver<String>,
-    compaction_threshold: Option<usize>,
     session: Option<std::path::PathBuf>,
     seen: Vec<Message>,
     flushed: usize,
     pending_calls: Option<usize>,
     results: usize,
     last_usage: Option<ax::Usage>,
-    context_window: Option<usize>,
     model: String,
     host_tools: std::collections::HashSet<String>,
 }
@@ -401,7 +265,6 @@ impl Sink for EventSink {
             "input": input,
             "output": output,
             "cached_input": cached_input,
-            "window": self.context_window,
             "model": self.model
         }));
     }
@@ -414,11 +277,6 @@ impl Sink for EventSink {
         }));
         self.emit(serde_json::json!({"type": "message", "message": message}));
         self.record(message.clone());
-    }
-
-    fn should_compact(&mut self, input: usize, output: usize) -> bool {
-        self.compaction_threshold
-            .is_some_and(|threshold| input.saturating_add(output) > threshold)
     }
 
     fn pending_user_input(&mut self) -> Option<String> {
@@ -435,34 +293,20 @@ impl Sink for EventSink {
 
 fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
     println!("{}", serde_json::json!({"type": "protocol", "version": 1}));
-    let (history, old_len) = if let Some(path) = cfg.messages.as_deref() {
-        let data = std::fs::read(path).unwrap_or_else(|e| event_failure(&e.to_string()));
-        let messages = serde_json::from_slice::<Vec<Message>>(&data)
-            .unwrap_or_else(|e| event_failure(&e.to_string()));
-        let len = messages.len();
-        (messages, len)
-    } else {
-        let mut messages = match cfg.session.as_deref() {
-            Some(path) => match ax::session::load_path(std::path::Path::new(path)) {
-                Ok(entries) => ax::session::context_messages(&entries),
-                Err(e) => event_failure(&e),
-            },
-            None => Vec::new(),
-        };
-        if cfg.continue_session {
-            let old_len = messages.len();
-            (messages, old_len)
-        } else {
-            messages.push(Message {
-                role: "user".into(),
-                content: expand_user_command(&prompt.join(" "), &ax_root()),
-                tool_calls: Vec::new(),
-                tool_call_id: String::new(),
-            });
-            let old_len = messages.len().saturating_sub(1);
-            (messages, old_len)
-        }
+    let mut history = match cfg.session.as_deref() {
+        Some(path) => match ax::session::load_path(std::path::Path::new(path)) {
+            Ok(entries) => ax::session::context_messages(&entries),
+            Err(e) => event_failure(&e),
+        },
+        None => Vec::new(),
     };
+    history.push(Message {
+        role: "user".into(),
+        content: expand_user_command(&prompt.join(" "), &ax_root()),
+        tool_calls: Vec::new(),
+        tool_call_id: String::new(),
+    });
+    let old_len = history.len().saturating_sub(1);
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = std::sync::mpsc::channel();
     if !std::io::stdin().is_terminal() {
@@ -490,22 +334,16 @@ fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
     let provider = OpenAI::new(cfg.base.clone(), api_key(fc));
     let mut sink = EventSink {
         input: rx,
-        compaction_threshold: fc
-            .compaction_threshold
-            .or_else(|| fc.context_window.map(|window| window.saturating_sub(16384))),
         session: cfg.session.as_deref().map(std::path::PathBuf::from),
         seen: Vec::new(),
         flushed: 0,
         pending_calls: None,
         results: 0,
         last_usage: None,
-        context_window: fc.context_window,
         model: cfg.model.clone(),
         host_tools: host_tool_names(),
     };
-    if cfg.messages.is_none() && !cfg.continue_session {
-        sink.record(history[old_len].clone());
-    }
+    sink.record(history[old_len].clone());
     let end = run::run_stream(
         &provider,
         &RunOptions {
@@ -526,7 +364,7 @@ fn one_shot_events(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
             final_usage.input,
             final_usage.output,
             final_usage.cached_input,
-            sink.context_window,
+            None,
             &sink.model,
         )
     {
@@ -572,82 +410,6 @@ fn event_failure(message: &str) -> ! {
         serde_json::json!({"type": "done", "outcome": "failed"})
     );
     std::process::exit(1);
-}
-
-fn one_shot(cfg: &Config, fc: &FileConfig, prompt: &[String]) {
-    if cfg.events {
-        one_shot_events(cfg, fc, prompt);
-        return;
-    }
-    let stats = Rc::new(RefCell::new((0usize, 0usize)));
-    let s2 = stats.clone();
-    let on = move |e: Event| {
-        let mut st = s2.borrow_mut();
-        st.0 += e.usage.input;
-        st.1 += e.usage.output;
-        drop(st);
-        let m = &e.message;
-        if m.role == "assistant" {
-            if !m.content.is_empty() && !m.tool_calls.is_empty() {
-                eprintln!("{}", m.content);
-            }
-            for c in &m.tool_calls {
-                eprintln!("[{}] {} {}", e.turn, c.name, render_args(c));
-            }
-        } else if m.role == "tool" {
-            eprintln!("[{}] -> {}", e.turn, render_result(&m.content));
-        }
-    };
-    let start = Instant::now();
-    let mut agent = build_agent(cfg, fc, on);
-    let mut history = match cfg.session.as_deref() {
-        Some(path) => match ax::session::load_path(std::path::Path::new(path)) {
-            Ok(entries) => ax::session::context_messages(&entries),
-            Err(e) => {
-                eprintln!("error: {e}");
-                std::process::exit(1);
-            }
-        },
-        None => Vec::new(),
-    };
-    history.push(Message {
-        role: "user".into(),
-        content: expand_user_command(&prompt.join(" "), &ax_root()),
-        tool_calls: Vec::new(),
-        tool_call_id: String::new(),
-    });
-    let old_len = history.len().saturating_sub(1);
-    let msgs = match agent.run(&history) {
-        Ok(msgs) => msgs,
-        Err(Error::MaxTurns(h)) => {
-            eprintln!("stopped: ax: max turns reached");
-            h
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
-    };
-    if let Some(path) = cfg.session.as_deref()
-        && let Err(e) = ax::session::append_messages(std::path::Path::new(path), &msgs[old_len..])
-    {
-        eprintln!("error: {e}");
-        std::process::exit(1);
-    }
-    let (i, o) = *stats.borrow();
-    if i + o > 0 {
-        eprintln!(
-            "tokens: {} in / {} out · {}",
-            tok(i),
-            tok(o),
-            fmt_dur(start.elapsed())
-        );
-    }
-    for m in &msgs[old_len..] {
-        if m.role == "assistant" && !m.content.is_empty() && m.tool_calls.is_empty() {
-            println!("{}", m.content);
-        }
-    }
 }
 
 fn expand_user_command(prompt: &str, ax_root: &str) -> String {
@@ -724,16 +486,6 @@ fn host_tool_names() -> std::collections::HashSet<String> {
                 .map(str::to_string)
         })
         .collect()
-}
-
-fn build_agent(cfg: &Config, fc: &FileConfig, on: impl FnMut(Event) + 'static) -> Agent<OpenAI> {
-    let tools = tools_or_exit(fc);
-    let system = resolve_system(cfg, &tools);
-    Agent::new(OpenAI::new(cfg.base.clone(), api_key(fc)))
-        .model(cfg.model.clone())
-        .system(system)
-        .tools(tools)
-        .on(on)
 }
 
 fn api_key(fc: &FileConfig) -> String {
@@ -834,8 +586,6 @@ fn load_config() -> FileConfig {
         api_key: String::new(),
         model: String::new(),
         base: String::new(),
-        context_window: None,
-        compaction_threshold: None,
         tools: String::new(),
     };
     let Some(dir) = config_dir() else {
@@ -860,85 +610,11 @@ fn load_config() -> FileConfig {
             "api_key" => c.api_key = val,
             "model" => c.model = val,
             "base" => c.base = val,
-            "context_window" => c.context_window = val.parse().ok(),
-            "compaction_threshold" => c.compaction_threshold = val.parse().ok(),
             "tools" => c.tools = val,
             _ => {}
         }
     }
     c
-}
-
-fn render_args(call: &ToolCall) -> String {
-    #[derive(serde::Deserialize)]
-    struct A {
-        path: Option<String>,
-        content: Option<String>,
-        command: Option<String>,
-    }
-    if let Ok(a) = serde_json::from_str::<A>(&call.arguments) {
-        match call.name.as_str() {
-            "bash" => {
-                if let Some(c) = a.command
-                    && !c.is_empty()
-                {
-                    return c;
-                }
-            }
-            "read" | "edit" => {
-                if let Some(p) = a.path
-                    && !p.is_empty()
-                {
-                    return p;
-                }
-            }
-            "write" => {
-                if let Some(p) = a.path
-                    && !p.is_empty()
-                {
-                    return format!(
-                        "{} ({} bytes)",
-                        p,
-                        a.content.as_deref().map(|c| c.len()).unwrap_or(0)
-                    );
-                }
-            }
-            _ => {}
-        }
-    }
-    call.arguments.trim().to_string()
-}
-
-fn render_result(s: &str) -> String {
-    if s.contains("error:") {
-        s.lines()
-            .rev()
-            .find(|l| !l.trim().is_empty())
-            .map(str::to_string)
-            .unwrap_or_default()
-    } else {
-        first_line(s)
-    }
-}
-
-fn first_line(s: &str) -> String {
-    s.lines().next().unwrap_or("").to_string()
-}
-
-fn tok(n: usize) -> String {
-    if n < 1000 {
-        return n.to_string();
-    }
-    format!("{:.1}k", n as f64 / 1000.0)
-}
-
-fn fmt_dur(d: std::time::Duration) -> String {
-    let secs = d.as_secs_f64();
-    if secs < 60.0 {
-        return format!("{secs:.1}s");
-    }
-    let total = secs.round() as u64;
-    format!("{}m{}s", total / 60, total % 60)
 }
 
 #[cfg(test)]
@@ -971,14 +647,12 @@ mod tests {
         Recorder {
             sink: EventSink {
                 input: rx,
-                compaction_threshold: None,
                 session: Some(path.clone()),
                 seen: Vec::new(),
                 flushed: 0,
                 pending_calls: None,
                 results: 0,
                 last_usage: None,
-                context_window: None,
                 model: String::new(),
                 host_tools: std::collections::HashSet::new(),
             },
@@ -1118,50 +792,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn render_args_cases() {
-        let cases: Vec<(&str, &str, &str)> = vec![
-            ("bash", r#"{"command":"go test ./..."}"#, "go test ./..."),
-            ("read", r#"{"path":"main.go"}"#, "main.go"),
-            ("edit", r#"{"path":"a.go","old":"x","new":"y"}"#, "a.go"),
-            (
-                "write",
-                r#"{"path":"b.txt","content":"hello"}"#,
-                "b.txt (5 bytes)",
-            ),
-            ("custom", r#"{"q":1}"#, r#"{"q":1}"#),
-            ("bash", "not json", "not json"),
-        ];
-        for (name, args, want) in cases {
-            let call = ToolCall {
-                id: String::new(),
-                name: name.into(),
-                arguments: args.into(),
-            };
-            assert_eq!(render_args(&call), want, "case {name}");
-        }
-    }
-
-    #[test]
-    fn tok_cases() {
-        assert_eq!(tok(999), "999");
-        assert_eq!(tok(1234), "1.2k");
-    }
-
-    #[test]
-    fn render_result_cases() {
-        let fail = "# pkg/a\n./a.go:12:3: undefined: Foo\nerror: exit status 1\n";
-        assert_eq!(render_result(fail), "error: exit status 1");
-        assert_eq!(render_result("ok ax 0.003s\nmore"), "ok ax 0.003s");
-        assert_eq!(render_result("build error: bad\nnext"), "next");
-    }
-
-    #[test]
-    fn fmt_dur_cases() {
-        assert_eq!(fmt_dur(std::time::Duration::from_millis(1500)), "1.5s");
-        assert_eq!(fmt_dur(std::time::Duration::from_secs(65)), "1m5s");
-    }
-
     struct Rng(u64);
 
     impl Rng {
@@ -1185,8 +815,6 @@ mod tests {
             api_key: String::new(),
             model: String::new(),
             base: String::new(),
-            context_window: None,
-            compaction_threshold: None,
             tools: String::new(),
         };
         let (_, prompt) = parse_args(&["--".into(), "-prompt".into()], &fc).unwrap();
@@ -1199,8 +827,6 @@ mod tests {
             api_key: String::new(),
             model: String::new(),
             base: String::new(),
-            context_window: None,
-            compaction_threshold: None,
             tools: String::new(),
         };
         let tokens = [
@@ -1208,9 +834,8 @@ mod tests {
             "-model",
             "-system",
             "-C",
-            "-r",
-            "--resume",
-            "--resume=",
+            "--session",
+            "--events",
             "-",
             "--",
             "foo",

@@ -22,8 +22,6 @@ const CURLOPT_FAILONERROR: c_int = 45;
 const CURLOPT_POST: c_int = 47;
 const CURLOPT_POSTFIELDSIZE: c_int = 60;
 const CURLOPT_CONNECTTIMEOUT: c_int = 78;
-const CURLOPT_HTTPGET: c_int = 80;
-const CURLOPT_TIMEOUT: c_int = 13;
 const CURLOPT_LOW_SPEED_LIMIT: c_int = 19;
 const CURLOPT_LOW_SPEED_TIME: c_int = 20;
 const CURLOPT_NOSIGNAL: c_int = 99;
@@ -173,10 +171,6 @@ impl Easy {
         setopt_long(self, CURLOPT_POST, 1)
     }
 
-    pub fn http_get(&mut self) -> Result<(), String> {
-        setopt_long(self, CURLOPT_HTTPGET, 1)
-    }
-
     pub fn post_fields(&mut self, body: &[u8]) -> Result<(), String> {
         setopt(self, CURLOPT_POSTFIELDS, body.as_ptr() as *const c_char)?;
         setopt_long(self, CURLOPT_POSTFIELDSIZE, body.len() as c_long)
@@ -190,11 +184,6 @@ impl Easy {
     /// server that accepts but never responds blocks the run forever.
     pub fn connect_timeout(&mut self, secs: c_long) -> Result<(), String> {
         setopt_long(self, CURLOPT_CONNECTTIMEOUT, secs)
-    }
-
-    /// Hard cap on the whole transfer. Only for non-streaming requests.
-    pub fn timeout(&mut self, secs: c_long) -> Result<(), String> {
-        setopt_long(self, CURLOPT_TIMEOUT, secs)
     }
 
     /// Abort when slower than `limit` bytes/s for `time` seconds: kills
@@ -342,21 +331,4 @@ impl<'a> Transfer<'a> {
         }
         Ok(())
     }
-}
-
-pub fn perform_with_sink(easy: &mut Easy, sink: &mut Vec<u8>) -> Result<(), String> {
-    unsafe extern "C" fn write_vec(
-        ptr: *mut c_char,
-        size: usize,
-        nmemb: usize,
-        userdata: *mut c_void,
-    ) -> usize {
-        let sink = unsafe { &mut *(userdata as *mut Vec<u8>) };
-        let data = unsafe { std::slice::from_raw_parts(ptr as *const u8, size * nmemb) };
-        sink.extend_from_slice(data);
-        size * nmemb
-    }
-    let mut t = easy.transfer();
-    t.write_function(write_vec, sink as *mut Vec<u8> as *mut c_void);
-    t.perform()
 }
