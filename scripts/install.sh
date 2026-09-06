@@ -11,39 +11,12 @@ if [ "$#" -eq 0 ]; then
         echo "install: package name is required" >&2
         exit 1
     fi
-    if [ "$action" = update ]; then
-        set -- ax taxi axi
-    else
-        set -- ax taxi
-    fi
+    set -- ax
     default_set=true
 fi
 
-requested="$*"
-install_axi=false
-set --
-for package in $requested; do
-    case $package in
-        axi) install_axi=true; set -- "$@" ax axis fsx bashx skillx attachx axi ;;
-        *) set -- "$@" "$package" ;;
-    esac
-done
-
 prefix="${AX_PREFIX:-${PREFIX:-$HOME/.local}}"
 bindir="$prefix/bin"
-if [ "$install_axi" = true ]; then
-    units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-    if [ -e "$units/axis.service" ] || [ -e "$units/axi-web.service" ]; then
-        if command -v systemctl >/dev/null 2>&1; then
-            systemctl --user disable --now axi-web.service axis.service >/dev/null 2>&1 || true
-        fi
-        rm -f "$units/axis.service" "$units/axi-web.service"
-        if command -v systemctl >/dev/null 2>&1; then
-            systemctl --user daemon-reload >/dev/null 2>&1 || true
-        fi
-        echo "removed legacy Axi services"
-    fi
-fi
 if [ "$action" = uninstall ]; then
     for package in "$@"; do
         case $package in
@@ -95,8 +68,6 @@ sha256() {
 version_for() {
     case $1 in
         ax) printf '%s' "${AX_VERSION:-${VERSION:-}}" ;;
-        axi) printf '%s' "${AXI_VERSION:-${VERSION:-}}" ;;
-        taxi) printf '%s' "${TAXI_VERSION:-${VERSION:-}}" ;;
         *) printf '%s' "${VERSION:-}" ;;
     esac
 }

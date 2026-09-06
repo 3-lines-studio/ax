@@ -3,7 +3,6 @@
 <p align="center"><img src=".github/ax.svg" width="96" height="96" alt="AX ecosystem"></p>
 
 A minimal headless LLM coding agent harness for scripts and Unix-style clients.
-Use `taxi` for the interactive terminal interface.
 
 Release binary: **~389 KB**. HTTP goes through system libcurl.
 
@@ -13,7 +12,7 @@ Release binary: **~389 KB**. HTTP goes through system libcurl.
 curl -fsSL https://ax.3lines.studio/install.sh | sh
 ```
 
-Installs `ax` and `taxi` to `~/.local/bin` (override with `AX_PREFIX`). Linux
+Installs `ax` to `~/.local/bin` (override with `AX_PREFIX`). Linux
 (x86_64, aarch64) and macOS (arm64). No Rust toolchain or root required. Every
 download is verified with SHA-256. Install any ecosystem CLI by repository
 name without changing the installer:
@@ -23,10 +22,8 @@ curl -fsSL https://ax.3lines.studio/install.sh | sh -s -- wax
 curl -fsSL https://ax.3lines.studio/install.sh | sh -s -- wax bqx pgx
 ```
 
-Installing `axi` installs the complete local graphical stack: `axi`, `axis`, `ax`, `fsx`, `bashx`, `skillx`, and `attachx`.
-
-Pin core versions with `AX_VERSION` and `TAXI_VERSION`. Use `VERSION` when
-installing one optional CLI. Update installed core tools and the `axi` stack
+Pin core versions with `AX_VERSION`. Use `VERSION` when
+installing one optional CLI. Update installed core tools
 with `sh install.sh update`; up-to-date packages are skipped. Uninstall by
 removing its file from `~/.local/bin`.
 
@@ -56,12 +53,6 @@ Unit/integration tests stay in `cargo test`.
 
 ## Quick start
 
-Interactive terminal:
-
-```sh
-OPENAI_API_KEY=... taxi
-```
-
 Headless one-shot:
 
 ```sh
@@ -83,9 +74,6 @@ The stream contains assistant deltas, tool events, usage, errors, and one final
 `done` event. Process hosts may provide JSON tool definitions through
 `AX_HOST_TOOLS`. AX executes those tools in-process and emits a structured
 `host_call` event so the host can act after AX exits without a callback.
-
-Taxi provides the transcript TUI, streamed Markdown, tool status, commands,
-file completion, steering, and session screens while running AX as a sidecar.
 
 Any OpenAI-compatible endpoint works: `-base https://...` for OpenRouter,
 DeepSeek, Ollama, vLLM.
@@ -129,7 +117,7 @@ compaction_threshold = 250000  # optional: compact before the model limit
 ```
 
 Plain `key = value` lines, `#` comments. `AX_TOOLS` overrides `tools`. Other precedence is flags > env > config.
-Run `/login` in Taxi to write these interactively. Set `context_window`
+Run `/login` to write these interactively. Set `context_window`
 to enable automatic compaction 16,384 tokens before the model limit. Set
 `compaction_threshold` to compact at a lower token count. AX uses the provider's
 reported context usage. During tool-driven work, AX finishes the current model
@@ -152,7 +140,7 @@ Everything is files; there is no state machine.
   through the `skills` tool and reads one with the `skill` tool.
 - `~/.config/ax/SYSTEM.md` — optional system prompt, appended to the
   built-in one.
-- Search sessions with `/search <text>` in Taxi or `ax --search <text>`.
+- Search sessions with `ax --search <text>`.
   Sessions are JSONL: one line per message or compaction entry, so line
   matches map directly to entries.
 
