@@ -4,7 +4,7 @@
 
 A minimal headless LLM coding agent harness for scripts and Unix-style clients.
 
-Release binary: **~389 KB**. HTTP goes through system libcurl.
+Release binary: **~7 MB**. HTTP uses Go's stdlib `net/http`; no libcurl.
 
 ## Install
 
@@ -13,7 +13,7 @@ curl -fsSL https://ax.3lines.studio/install.sh | sh
 ```
 
 Installs `ax` to `~/.local/bin` (override with `AX_PREFIX`). Linux
-(x86_64, aarch64) and macOS (arm64). No Rust toolchain or root required. Every
+(x86_64, aarch64) and macOS (arm64). No Go toolchain or root required. Every
 download is verified with SHA-256. Install any ecosystem CLI by repository
 name without changing the installer:
 
@@ -30,26 +30,20 @@ removing its file from `~/.local/bin`.
 ## Build
 
 ```sh
-cargo +nightly build --release
-./target/release/ax
+go build -trimpath -ldflags='-s -w' -o ax .
 ```
-
-Requires nightly Rust (for `-Zbuild-std`, used to rebuild `std` with
-`panic = "immediate-abort"`) with the `rust-src` component
-(`rustup component add rust-src`), plus libcurl dev headers
-(`libcurl4-openssl-dev` on Debian/Ubuntu).
 
 ## Testing
 
 ```sh
-make harness   # release build + black-box end-to-end harness
+make harness   # build + black-box end-to-end harness
 ```
 
 `scripts/harness.py` drives the real binary the way a user would: a hermetic
 HOME and XDG_CONFIG_HOME, a scripted mock OpenAI-compatible endpoint, and
 one-shot CLI runs. Run one case with
 `python3 scripts/harness.py --filter <name>`; list cases with `--list`.
-Unit/integration tests stay in `cargo test`.
+Unit/integration tests stay in `go test`.
 
 ## Quick start
 
@@ -134,47 +128,23 @@ Everything is files; there is no state machine.
 ## Design
 
 - The loop is the only logic: messages → LLM → tool calls → results →
-  repeat. It lives in `run` and is shared by the SDK and headless CLI.
-- `run` never mutates its input. The session file is append-only: turns are
+  repeat. It lives in `runStream` and is shared by the headless CLI and the
+  SDK-style agent sink.
+- The run never mutates its input. The session file is append-only: turns are
   added to `--session FILE`, never rewritten.
 - Tool calls in one batch run in parallel, results returned in call order;
   `edit` and `write` run sequentially to avoid file races.
 - Retries (2×, 408/409/429/5xx + transport, with backoff) live in the
   transport layer, not the turn loop. Tool calls from a response cut off by
   the output token limit are never executed.
-- Extend by composition: wrap `Provider`, pass your own `Tool` values, own
-  the transcript.
 - Tool errors return to the model as text so it can self-correct; only
   provider errors abort a run. You can type while the agent runs; the
   message is injected before the next assistant response.
-
-## Library
-
-The SDK (`src/lib.rs`) exposes the minimal core — agent loop, provider
-trait, tools, OpenAI client (blocking + SSE streaming with cancellation):
-
-```rust
-let mut agent = ax::Agent::new(ax::OpenAI::new(base, key))
-    .model("gpt-4.1-mini")
-    .system("You are a coding agent.")
-    .tools(ax::tools::external_tools("fsx bashx skillx"));
-
-let msgs = agent.run(&[ax::Message {
-    role: "user".into(),
-    content: "fix the failing test".into(),
-    ..Default::default()
-}])?;
-```
+- ax uses Go's stdlib `net/http` for streaming OpenAI-compatible responses
+  and `os/exec` (with per-child process groups and SIGTERM reaping) for
+  external tool providers.
 
 ## Notes
 
 - No permission system — tools always run. Sandboxing lives outside ax.
-- `std` is rebuilt nightly (`-Zbuild-std`) with `panic = "immediate-abort"`
-  and `-C force-unwind-tables=no`; panic messages and `RUST_BACKTRACE` are
-  gone, and any panic aborts the process. That's most of the size story:
-  prebuilt `std` alone drags in ~350 KB of panic/backtrace machinery and
-  unwind tables.
-- libcurl is `dlopen`'d lazily on the first request: exec and first paint
-  stay fast, and the binary has no link-time dependency on curl's
-  dependency tree.
-- Contributing: see [CONTRIBUTING.md](CONTRIBUTING.md).
+- Contributions and internals: see [CONTRIBUTING.md](CONTRIBUTING.md).
