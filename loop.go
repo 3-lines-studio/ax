@@ -18,9 +18,6 @@ func runStream(provider Provider, opts *runOptions, msgs []Message, cancel *atom
 		if cancel.Load() {
 			return runEnd{messages: history, usage: usage, outcome: outcomeCancelled}
 		}
-		if text, ok := sink.pendingUserInput(); ok {
-			history = append(history, userMessage(text))
-		}
 		resp, calls, err := requestStream(provider, opts, history, cancel, sink)
 		if err != nil {
 			if cancel.Load() {
@@ -37,10 +34,6 @@ func runStream(provider Provider, opts *runOptions, msgs []Message, cancel *atom
 		sink.assistant(turn, history[len(history)-1], resp.Usage)
 		sink.assistantDone()
 		if len(calls) == 0 {
-			if text, ok := sink.pendingUserInput(); ok {
-				history = append(history, userMessage(text))
-				continue
-			}
 			return runEnd{messages: history, usage: usage, outcome: outcomeDone}
 		}
 		truncated := resp.StopReason == "length"
@@ -90,10 +83,6 @@ func requestStream(provider Provider, opts *runOptions, history []Message, cance
 			return Response{}, calls, err
 		}
 	}
-}
-
-func userMessage(text string) Message {
-	return Message{Role: "user", Content: text}
 }
 
 func pushToolResult(h *[]Message, call ToolCall, content string) {

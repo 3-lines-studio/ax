@@ -141,21 +141,18 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, prompt []string) {
 	oldLen := len(history) - 1
 
 	var cancel atomic.Bool
-	steer := make(chan string, 8)
 	if !stdinIsTerminal() {
-		go readControls(&cancel, steer)
+		go readControls(&cancel)
 	}
 
 	tools := toolsOrExit(fc)
 	system := resolveSystem(cfg, tools)
 	provider := NewOpenAI(cfg.base, apiKey(fc))
 	sink := &eventSink{
-		steer:     steer,
-		session:   cfg.session,
-		seen:      []Message{},
-		flushed:   0,
-		model:     cfg.model,
-		hostTools: hostToolNames(),
+		session: cfg.session,
+		seen:    []Message{},
+		flushed: 0,
+		model:   cfg.model,
 	}
 	sink.record(history[oldLen])
 	end := runStream(provider, &runOptions{
@@ -243,60 +240,7 @@ func toolsOrExit(config fileConfig) []Tool {
 			os.Exit(1)
 		}
 	}
-	return append(tools, hostToolsOrExit()...)
-}
-
-func hostToolsOrExit() []Tool {
-	value := os.Getenv("AX_HOST_TOOLS")
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	var definitions []struct {
-		Name        string          `json:"name"`
-		Description string          `json:"description"`
-		Parameters  json.RawMessage `json:"parameters"`
-	}
-	if err := json.Unmarshal([]byte(value), &definitions); err != nil {
-		fmt.Fprintln(os.Stderr, "error: invalid AX_HOST_TOOLS:", err)
-		os.Exit(1)
-	}
-	var tools []Tool
-	for _, def := range definitions {
-		name := def.Name
-		description := def.Description
-		params := append(json.RawMessage(nil), def.Parameters...)
-		tools = append(tools, Tool{
-			Name:        name,
-			Description: description,
-			Parameters:  params,
-			Snippet:     "",
-			Sequential:  true,
-			Run: func(_ string, _ func(string)) string {
-				return "Host accepted the operation."
-			},
-		})
-	}
 	return tools
-}
-
-func hostToolNames() map[string]bool {
-	out := map[string]bool{}
-	value := os.Getenv("AX_HOST_TOOLS")
-	if strings.TrimSpace(value) == "" {
-		return out
-	}
-	var definitions []struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal([]byte(value), &definitions); err != nil {
-		return out
-	}
-	for _, def := range definitions {
-		if def.Name != "" {
-			out[def.Name] = true
-		}
-	}
-	return out
 }
 
 func apiKey(fc fileConfig) string {
@@ -432,26 +376,17 @@ func stdinIsTerminal() bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-func readControls(cancel *atomic.Bool, steer chan string) {
+func readControls(cancel *atomic.Bool) {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		var control struct {
 			Type string `json:"type"`
-			Text string `json:"text"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &control); err != nil {
 			continue
 		}
-		switch control.Type {
-		case "cancel":
+		if control.Type == "cancel" {
 			cancel.Store(true)
-		case "steer":
-			if control.Text != "" {
-				select {
-				case steer <- control.Text:
-				default:
-				}
-			}
 		}
 	}
 }
@@ -466,7 +401,6 @@ func firstNonEmpty(primary, fallback string) string {
 // --- eventSink -----------------------------------------------------------
 
 type eventSink struct {
-	steer        chan string
 	session      string
 	seen         []Message
 	flushed      int
@@ -474,7 +408,6 @@ type eventSink struct {
 	results      int
 	lastUsage    *Usage
 	model        string
-	hostTools    map[string]bool
 }
 
 func (s *eventSink) emit(value any) { printJSON(value) }
@@ -545,9 +478,6 @@ func (s *eventSink) assistantDone() {
 
 func (s *eventSink) toolStart(call ToolCall) {
 	s.emit(map[string]any{"type": "tool_start", "id": call.ID, "name": call.Name, "arguments": call.Arguments})
-	if s.hostTools[call.Name] {
-		s.emit(map[string]any{"type": "host_call", "id": call.ID, "name": call.Name, "arguments": call.Arguments})
-	}
 }
 
 func (s *eventSink) toolDelta(call ToolCall, text string) {
@@ -575,14 +505,4 @@ func (s *eventSink) tool(turn int, msg Message) {
 	s.emit(map[string]any{"type": "tool_result", "id": msg.ToolCallID, "output": msg.Content})
 	s.emit(map[string]any{"type": "message", "message": msg})
 	s.record(msg)
-}
-
-func (s *eventSink) pendingUserInput() (string, bool) {
-	select {
-	case text := <-s.steer:
-		s.record(Message{Role: "user", Content: text})
-		return text, true
-	default:
-		return "", false
-	}
 }

@@ -17,7 +17,6 @@ Pass a prompt as the final command argument.
 While AX runs, stdin accepts JSONL controls:
 
 ```json
-{"type":"steer","text":"focus on the parser"}
 {"type":"cancel"}
 ```
 
