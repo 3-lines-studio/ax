@@ -46,7 +46,6 @@ type runSink interface {
 	shouldCompact(input, output int) bool
 	assistant(turn int, msg Message, usage Usage)
 	tool(turn int, msg Message)
-	pendingUserInput() (string, bool)
 	flush()
 }
 

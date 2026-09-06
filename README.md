@@ -54,11 +54,8 @@ OPENAI_API_KEY=... ax "explain main.go"
 ```
 
 AX always emits a JSONL event stream on stdout. While AX runs, send
-`{"type":"steer","text":"..."}` or `{"type":"cancel"}` as JSONL on stdin.
-The stream contains assistant deltas, tool events, usage, errors, and one final
-`done` event. Process hosts may provide JSON tool definitions through
-`AX_HOST_TOOLS`. AX executes those tools in-process and emits a structured
-`host_call` event so the host can act after AX exits without a callback.
+`{"type":"cancel"}` as JSONL on stdin to stop it. The stream contains
+assistant deltas, tool events, usage, errors, and one final `done` event.
 
 Persist one-shot calls in an explicit session file:
 
