@@ -9,7 +9,7 @@ import (
 
 func TestLoadBotConfigReadsKeys(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, "bot.toml"), []byte("model = \"gpt-4\"\nbase_url = \"http://bot\"\ntools = [\"read\", \"edit\"]\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "bot.toml"), []byte("model = \"gpt-4\"\nbase_url = \"http://bot\"\ntools = [\"read\", \"edit\"]\n"), 0o644)
 	bc, err := loadBotConfig(root)
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +35,7 @@ func TestLoadBotConfigMissingFile(t *testing.T) {
 
 func TestLoadBotConfigMalformed(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, "bot.toml"), []byte("model ==\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "bot.toml"), []byte("model ==\n"), 0o644)
 	_, err := loadBotConfig(root)
 	if err == nil {
 		t.Fatal("expected parse error")
@@ -72,8 +72,8 @@ func TestResolveBotCtxNoBot(t *testing.T) {
 
 func TestResolveBotCtxWithWorkspaceDir(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, "bot.toml"), []byte(""), 0o644)
-	os.MkdirAll(filepath.Join(root, "workspace"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "bot.toml"), []byte(""), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, "workspace"), 0o755)
 	ctx := resolveBotCtx(root)
 	if !ctx.IsBot {
 		t.Error("IsBot should be true")
@@ -85,7 +85,7 @@ func TestResolveBotCtxWithWorkspaceDir(t *testing.T) {
 
 func TestResolveBotCtxCreatesWorkspace(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, "bot.toml"), []byte(""), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "bot.toml"), []byte(""), 0o644)
 	ctx := resolveBotCtx(root)
 	want := filepath.Join(root, "workspace")
 	if ctx.Workspace != want {
@@ -98,8 +98,8 @@ func TestResolveBotCtxCreatesWorkspace(t *testing.T) {
 
 func TestResolveBotCtxSkillsAndPrompt(t *testing.T) {
 	root := t.TempDir()
-	os.MkdirAll(filepath.Join(root, "skills"), 0o755)
-	os.WriteFile(filepath.Join(root, "bot.md"), []byte("  extra context  \n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, "skills"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "bot.md"), []byte("  extra context  \n"), 0o644)
 	ctx := resolveBotCtx(root)
 	if ctx.Skills != filepath.Join(root, "skills") {
 		t.Errorf("Skills = %q", ctx.Skills)
@@ -111,8 +111,8 @@ func TestResolveBotCtxSkillsAndPrompt(t *testing.T) {
 
 func TestResolveBotCtxAPIKey(t *testing.T) {
 	root := t.TempDir()
-	os.MkdirAll(filepath.Join(root, "secrets"), 0o755)
-	os.WriteFile(filepath.Join(root, "secrets", "api-key"), []byte("sk-secret\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, "secrets"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "secrets", "api-key"), []byte("sk-secret\n"), 0o644)
 	ctx := resolveBotCtx(root)
 	if !ctx.HasAPIKey || ctx.APIKey != "sk-secret" {
 		t.Errorf("HasAPIKey=%v APIKey=%q", ctx.HasAPIKey, ctx.APIKey)
@@ -121,8 +121,8 @@ func TestResolveBotCtxAPIKey(t *testing.T) {
 
 func TestResolveBotCtxFileWorkspaceAssigned(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, "bot.toml"), []byte(""), 0o644)
-	os.WriteFile(filepath.Join(root, "workspace"), []byte("not a dir"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "bot.toml"), []byte(""), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "workspace"), []byte("not a dir"), 0o644)
 	ctx := resolveBotCtx(root)
 	if ctx.Workspace != filepath.Join(root, "workspace") {
 		t.Errorf("Workspace = %q", ctx.Workspace)
@@ -175,7 +175,7 @@ func TestWorkDirAbs(t *testing.T) {
 func TestPathExistsAndIsDir(t *testing.T) {
 	root := t.TempDir()
 	file := filepath.Join(root, "f.txt")
-	os.WriteFile(file, []byte("x"), 0o644)
+	_ = os.WriteFile(file, []byte("x"), 0o644)
 	if !pathExists(file) {
 		t.Error("pathExists should be true")
 	}
@@ -192,7 +192,7 @@ func TestPathExistsAndIsDir(t *testing.T) {
 
 func TestLoadBotConfigErrorWrapped(t *testing.T) {
 	root := t.TempDir()
-	os.MkdirAll(filepath.Join(root, "bot.toml"), 0o755)
+	_ = os.MkdirAll(filepath.Join(root, "bot.toml"), 0o755)
 	_, err := loadBotConfig(root)
 	if err == nil || !strings.Contains(err.Error(), "read bot.toml") {
 		t.Errorf("err = %v", err)

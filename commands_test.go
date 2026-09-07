@@ -19,8 +19,8 @@ func TestExpandPromptCommandNotFound(t *testing.T) {
 
 func TestExpandPromptCommandExpands(t *testing.T) {
 	root := t.TempDir()
-	os.MkdirAll(filepath.Join(root, "commands"), 0o755)
-	os.WriteFile(filepath.Join(root, "commands", "greet.md"), []byte("---\ndescription: greet\n---\nHello $1 $2"), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, "commands"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "commands", "greet.md"), []byte("---\ndescription: greet\n---\nHello $1 $2"), 0o644)
 	got := expandPromptCommand("/greet Alice Bob", root)
 	if got != "Hello Alice Bob" {
 		t.Errorf("expanded = %q", got)
@@ -29,8 +29,8 @@ func TestExpandPromptCommandExpands(t *testing.T) {
 
 func TestExpandPromptCommandQuotedArg(t *testing.T) {
 	root := t.TempDir()
-	os.MkdirAll(filepath.Join(root, "commands"), 0o755)
-	os.WriteFile(filepath.Join(root, "commands", "greet.md"), []byte("Hello $1"), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, "commands"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "commands", "greet.md"), []byte("Hello $1"), 0o644)
 	got := expandPromptCommand("/greet \"Alice Bob\"", root)
 	if got != "Hello Alice Bob" {
 		t.Errorf("quoted = %q", got)
@@ -117,10 +117,10 @@ func TestParseCommandArgsQuotes(t *testing.T) {
 func TestLoadUserCommandsFiltersAndSorts(t *testing.T) {
 	root := t.TempDir()
 	cmds := filepath.Join(root, "commands")
-	os.MkdirAll(filepath.Join(cmds, "sub"), 0o755)
-	os.WriteFile(filepath.Join(cmds, "b.md"), []byte("---\ndescription: bee\n---\nbody b"), 0o644)
-	os.WriteFile(filepath.Join(cmds, "a.md"), []byte("body a"), 0o644)
-	os.WriteFile(filepath.Join(cmds, "ignore.txt"), []byte("x"), 0o644)
+	_ = os.MkdirAll(filepath.Join(cmds, "sub"), 0o755)
+	_ = os.WriteFile(filepath.Join(cmds, "b.md"), []byte("---\ndescription: bee\n---\nbody b"), 0o644)
+	_ = os.WriteFile(filepath.Join(cmds, "a.md"), []byte("body a"), 0o644)
+	_ = os.WriteFile(filepath.Join(cmds, "ignore.txt"), []byte("x"), 0o644)
 
 	got := loadUserCommands(root)
 	if len(got) != 2 {

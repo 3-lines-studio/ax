@@ -68,7 +68,7 @@ func TestLoadPathReadsMixedLines(t *testing.T) {
 	content := `{"type":"message","message":{"Role":"user","Content":"hi"}}` + "\n" +
 		`{"Role":"assistant","Content":"yo"}` + "\n" +
 		`{"type":"usage","usage":{"input":1,"output":1,"model":"m"}}` + "\n"
-	os.WriteFile(path, []byte(content), 0o644)
+	_ = os.WriteFile(path, []byte(content), 0o644)
 	entries, err := loadPath(path)
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +85,7 @@ func TestLoadPathReadsMixedLines(t *testing.T) {
 func TestLoadPathSkipsBlankLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	content := "{\"type\":\"message\",\"message\":{\"Role\":\"user\",\"Content\":\"a\"}}\n\n   \n{\"type\":\"message\",\"message\":{\"Role\":\"user\",\"Content\":\"b\"}}\n"
-	os.WriteFile(path, []byte(content), 0o644)
+	_ = os.WriteFile(path, []byte(content), 0o644)
 	entries, err := loadPath(path)
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestLoadPathSkipsBlankLines(t *testing.T) {
 
 func TestLoadPathInvalidLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	os.WriteFile(path, []byte("this is not json\n"), 0o644)
+	_ = os.WriteFile(path, []byte("this is not json\n"), 0o644)
 	_, err := loadPath(path)
 	if err == nil || !strings.Contains(err.Error(), "invalid session") {
 		t.Errorf("err = %v", err)
@@ -117,7 +117,7 @@ func TestAtomicWriteCreatesDirs(t *testing.T) {
 
 func TestAtomicWriteOverwrites(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "out.txt")
-	os.WriteFile(path, []byte("old"), 0o644)
+	_ = os.WriteFile(path, []byte("old"), 0o644)
 	if err := atomicWrite(path, []byte("new")); err != nil {
 		t.Fatal(err)
 	}

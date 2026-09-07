@@ -22,9 +22,9 @@ func captureStdout(t *testing.T, fn func()) string {
 		t.Fatal(err)
 	}
 	os.Stdout = f
-	defer func() { os.Stdout = old; f.Close() }()
+	defer func() { os.Stdout = old; _ = f.Close() }()
 	fn()
-	f.Sync()
+	_ = f.Sync()
 	if _, err := f.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestOneShotEventsFraming(t *testing.T) {
 		"data: [DONE]\n\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte(body))
+		_, _ = w.Write([]byte(body))
 	}))
 	defer srv.Close()
 
@@ -202,7 +202,7 @@ func TestOneShotEventsFraming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	oldStdin := os.Stdin
 	os.Stdin = f
 	defer func() { os.Stdin = oldStdin }()

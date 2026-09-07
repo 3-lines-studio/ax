@@ -96,7 +96,7 @@ func appendUsage(path string, input, output, cached int, window *int, model stri
 	if err != nil {
 		return fmt.Errorf("open session %s: %w", path, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	if _, err := file.Write(append(line, '\n')); err != nil {
 		return fmt.Errorf("write session %s: %w", path, err)
 	}
@@ -128,8 +128,7 @@ func appendMessages(path string, messages []Message) error {
 }
 
 func atomicWrite(path string, data []byte) error {
-	var tag uint64
-	tag = atomic.AddUint64(&writeTag, 1)
+	tag := atomic.AddUint64(&writeTag, 1)
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -145,11 +144,11 @@ func atomicWrite(path string, data []byte) error {
 		werr = cerr
 	}
 	if werr != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return werr
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	return nil

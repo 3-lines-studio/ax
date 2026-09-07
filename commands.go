@@ -68,10 +68,10 @@ func parseCommandArgs(s string) []string {
 			}
 			continue
 		}
-		switch {
-		case r == '"' || r == '\'':
+		switch r {
+		case '"', '\'':
 			quote = byte(r)
-		case r == ' ' || r == '\t' || r == '\n':
+		case ' ', '\t', '\n':
 			if current.Len() > 0 {
 				args = append(args, current.String())
 				current.Reset()

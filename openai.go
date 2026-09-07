@@ -134,7 +134,7 @@ func (o OpenAI) runRequest(built builtRequest, cancel *atomic.Bool, events chan 
 		}
 		return Response{}, newTransport(err.Error())
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

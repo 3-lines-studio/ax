@@ -1,15 +1,10 @@
 PREFIX ?= $(HOME)/.local
 BIN := ax
 
-.PHONY: check build run dev harness eval install clean
+include ../check.mk
 
-check:
-	test -z "$$(gofmt -l .)"
-	go vet ./...
-	go test ./...
-	go test -race ./...
-	$(MAKE) build
-	python3 scripts/harness.py --bin $(BIN)
+.PHONY: build run dev harness eval install clean
+check: harness
 
 build:
 	go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o $(BIN) .
