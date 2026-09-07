@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -154,6 +155,10 @@ func (o OpenAI) runRequest(built builtRequest, cancel *atomic.Bool, events chan 
 			if cancel != nil && cancel.Load() {
 				return Response{}, newProvider("interrupted")
 			}
+			var mse malformedStreamError
+			if errors.As(err, &mse) {
+				return Response{}, newProvider(mse.Error())
+			}
 			return Response{}, newTransport(err.Error())
 		}
 		if acc.events == 0 {
@@ -215,6 +220,15 @@ func watchCancel(ctx context.Context, cancelCtx context.CancelFunc, cancel *atom
 	}
 }
 
+// malformedStreamError means the provider sent a stream chunk that could not
+// be decoded. It is provider-data corruption, not a transport failure, so the
+// run fails rather than silently dropping the chunk.
+type malformedStreamError struct{ err error }
+
+func (e malformedStreamError) Error() string {
+	return "openai: malformed stream chunk: " + e.err.Error()
+}
+
 type streamAcc struct {
 	raw          []byte
 	buf          []byte
@@ -231,7 +245,9 @@ func (acc *streamAcc) feedReader(r io.Reader, tx chan StreamEvent) error {
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
-			acc.feed(buf[:n], tx)
+			if err := acc.feed(buf[:n], tx); err != nil {
+				return err
+			}
 		}
 		if err == io.EOF {
 			return nil
@@ -242,7 +258,7 @@ func (acc *streamAcc) feedReader(r io.Reader, tx chan StreamEvent) error {
 	}
 }
 
-func (acc *streamAcc) feed(data []byte, tx chan StreamEvent) {
+func (acc *streamAcc) feed(data []byte, tx chan StreamEvent) error {
 	acc.raw = append(acc.raw, data...)
 	if bytes.Contains(data, []byte{'\r'}) || (len(acc.buf) > 0 && acc.buf[len(acc.buf)-1] == '\r') {
 		prevCR := len(acc.buf) > 0 && acc.buf[len(acc.buf)-1] == '\r'
@@ -263,11 +279,14 @@ func (acc *streamAcc) feed(data []byte, tx chan StreamEvent) {
 		}
 		event := acc.buf[:sep+2]
 		acc.buf = acc.buf[sep+2:]
-		acc.handleEvent(event, tx)
+		if err := acc.handleEvent(event, tx); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (acc *streamAcc) handleEvent(event []byte, tx chan StreamEvent) {
+func (acc *streamAcc) handleEvent(event []byte, tx chan StreamEvent) error {
 	var payload strings.Builder
 	hasData := false
 	for _, line := range bytes.Split(event, []byte("\n")) {
@@ -281,16 +300,16 @@ func (acc *streamAcc) handleEvent(event []byte, tx chan StreamEvent) {
 		}
 	}
 	if !hasData {
-		return
+		return nil
 	}
 	acc.events++
 	text := payload.String()
 	if text == "[DONE]" {
-		return
+		return nil
 	}
 	var chunk oaStreamChunk
 	if err := json.Unmarshal([]byte(text), &chunk); err != nil {
-		return
+		return malformedStreamError{err: fmt.Errorf("%w (after %d events)", err, acc.events)}
 	}
 	if chunk.Usage.PromptTokens != 0 || chunk.Usage.CompletionTokens != 0 {
 		acc.usage = chunk.Usage
@@ -302,7 +321,7 @@ func (acc *streamAcc) handleEvent(event []byte, tx chan StreamEvent) {
 		}
 	}
 	if len(chunk.Choices) == 0 {
-		return
+		return nil
 	}
 	choice := chunk.Choices[0]
 	if choice.FinishReason != nil && *choice.FinishReason != "" {
@@ -350,6 +369,7 @@ func (acc *streamAcc) handleEvent(event []byte, tx chan StreamEvent) {
 			}
 		}
 	}
+	return nil
 }
 
 func (acc *streamAcc) toolCalls() []ToolCall {

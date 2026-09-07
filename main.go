@@ -216,6 +216,7 @@ func eventFailure(message string) {
 func printJSON(value any) {
 	data, err := json.Marshal(value)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: encode event: %v\n", err)
 		return
 	}
 	fmt.Println(string(data))

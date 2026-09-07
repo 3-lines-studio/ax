@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +19,9 @@ func loadUserCommands(axRoot string) []userCommand {
 	dir := filepath.Join(axRoot, "commands")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "warning: list user commands %s: %v\n", dir, err)
+		}
 		return nil
 	}
 	var out []userCommand
@@ -28,6 +32,7 @@ func loadUserCommands(axRoot string) []userCommand {
 		name := strings.TrimSuffix(entry.Name(), ".md")
 		content, err := os.ReadFile(filepath.Join(dir, entry.Name()))
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: read user command %s: %v\n", filepath.Join(dir, entry.Name()), err)
 			continue
 		}
 		description, body := parseFrontmatter(string(content))
