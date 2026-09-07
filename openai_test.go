@@ -70,8 +70,8 @@ func TestOpenAICompleteSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		data, _ := io.ReadAll(r.Body)
-		json.Unmarshal(data, &gotBody)
-		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"hi there"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":3}}}`)
+		_ = json.Unmarshal(data, &gotBody)
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"hi there"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":3}}}`)
 	}))
 	defer srv.Close()
 
@@ -96,7 +96,7 @@ func TestOpenAICompleteSuccess(t *testing.T) {
 
 func TestOpenAICompleteToolCalls(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call_7","type":"function","function":{"name":"read","arguments":"{\"path\":\"a.txt\"}"}}]},"finish_reason":"tool_calls"}]}`)
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call_7","type":"function","function":{"name":"read","arguments":"{\"path\":\"a.txt\"}"}}]},"finish_reason":"tool_calls"}]}`)
 	}))
 	defer srv.Close()
 	o := NewOpenAI(srv.URL, "k")
@@ -122,7 +122,7 @@ func TestOpenAIStreamContent(t *testing.T) {
 		"data: [DONE]\n\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte(body))
+		_, _ = w.Write([]byte(body))
 	}))
 	defer srv.Close()
 
@@ -169,7 +169,7 @@ func TestOpenAIStreamToolCallAccumulation(t *testing.T) {
 		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n" +
 		"data: [DONE]\n\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(body))
+		_, _ = w.Write([]byte(body))
 	}))
 	defer srv.Close()
 
@@ -199,7 +199,7 @@ func TestOpenAIStreamToolCallAccumulation(t *testing.T) {
 func TestOpenAIHTTPErrorStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(429)
-		fmt.Fprint(w, `{"error":{"message":"rate limited"}}`)
+		_, _ = fmt.Fprint(w, `{"error":{"message":"rate limited"}}`)
 	}))
 	defer srv.Close()
 	o := NewOpenAI(srv.URL, "k")
@@ -219,7 +219,7 @@ func TestOpenAIHTTPErrorStatus(t *testing.T) {
 func TestOpenAIUnexpectedStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
-		fmt.Fprint(w, "oops")
+		_, _ = fmt.Fprint(w, "oops")
 	}))
 	defer srv.Close()
 	o := NewOpenAI(srv.URL, "k")
@@ -231,7 +231,7 @@ func TestOpenAIUnexpectedStatus(t *testing.T) {
 
 func TestOpenAINoChoices(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"choices":[]}`)
+		_, _ = fmt.Fprint(w, `{"choices":[]}`)
 	}))
 	defer srv.Close()
 	o := NewOpenAI(srv.URL, "k")
@@ -243,7 +243,7 @@ func TestOpenAINoChoices(t *testing.T) {
 
 func TestOpenAIInvalidJSONBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "garbage")
+		_, _ = fmt.Fprint(w, "garbage")
 	}))
 	defer srv.Close()
 	o := NewOpenAI(srv.URL, "k")
@@ -255,7 +255,7 @@ func TestOpenAIInvalidJSONBody(t *testing.T) {
 
 func TestOpenAIStreamInvalidBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("not an sse stream"))
+		_, _ = w.Write([]byte("not an sse stream"))
 	}))
 	defer srv.Close()
 	o := NewOpenAI(srv.URL, "k")
@@ -275,7 +275,7 @@ func TestOpenAITransportError(t *testing.T) {
 		t.Fatal(err)
 	}
 	addr := ln.Addr().String()
-	ln.Close()
+	_ = ln.Close()
 	o := NewOpenAI("http://"+addr, "k")
 	_, err = o.complete(&Request{Model: "gpt-4"})
 	if err == nil {

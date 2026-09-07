@@ -175,9 +175,9 @@ func TestAPIKeyPrecedence(t *testing.T) {
 func TestLoadConfigParsesLegacyConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgDir := filepath.Join(dir, "ax")
-	os.MkdirAll(cfgDir, 0o755)
+	_ = os.MkdirAll(cfgDir, 0o755)
 	content := "# comment\n\napi_key = \"sk-123\"\nmodel = \"gpt-4\"\nbase = \"http://len\"\ntools = \"bash edit\"\n"
-	os.WriteFile(filepath.Join(cfgDir, "config"), []byte(content), 0o644)
+	_ = os.WriteFile(filepath.Join(cfgDir, "config"), []byte(content), 0o644)
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
 	c := loadConfig()
@@ -188,8 +188,8 @@ func TestLoadConfigParsesLegacyConfig(t *testing.T) {
 
 func TestLoadConfigQuotedValues(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, "ax"), 0o755)
-	os.WriteFile(filepath.Join(dir, "ax", "config"), []byte("model=\"quoted-model\"\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, "ax"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "ax", "config"), []byte("model=\"quoted-model\"\n"), 0o644)
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	if c := loadConfig(); c.model != "quoted-model" {
 		t.Errorf("model = %q", c.model)
@@ -207,12 +207,12 @@ func TestLoadConfigMissingReturnsZero(t *testing.T) {
 
 func TestConfigPrecedenceChain(t *testing.T) {
 	legacyDir := t.TempDir()
-	os.MkdirAll(filepath.Join(legacyDir, "ax"), 0o755)
-	os.WriteFile(filepath.Join(legacyDir, "ax", "config"), []byte("model = \"legacy-model\"\nbase = \"legacy-base\"\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(legacyDir, "ax"), 0o755)
+	_ = os.WriteFile(filepath.Join(legacyDir, "ax", "config"), []byte("model = \"legacy-model\"\nbase = \"legacy-base\"\n"), 0o644)
 	t.Setenv("XDG_CONFIG_HOME", legacyDir)
 
 	botDir := t.TempDir()
-	os.WriteFile(filepath.Join(botDir, "bot.toml"), []byte("model = \"bot-model\"\nbase_url = \"bot-base\"\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(botDir, "bot.toml"), []byte("model = \"bot-model\"\nbase_url = \"bot-base\"\n"), 0o644)
 	bc, err := loadBotConfig(botDir)
 	if err != nil {
 		t.Fatal(err)
@@ -254,8 +254,8 @@ func TestConfigPrecedenceDefaultsWhenNothingSet(t *testing.T) {
 
 func TestLoadConfigSkipsMalformedLines(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, "ax"), 0o755)
-	os.WriteFile(filepath.Join(dir, "ax", "config"), []byte("no-equals-line\nmodel = \"m1\"\nunknown_key = \"u\"\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, "ax"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "ax", "config"), []byte("no-equals-line\nmodel = \"m1\"\nunknown_key = \"u\"\n"), 0o644)
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	c := loadConfig()
 	if c.model != "m1" {

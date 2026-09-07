@@ -118,7 +118,9 @@ func TestSSEAccumulatesToolCall(t *testing.T) {
 	acc := &streamAcc{}
 	events := make(chan StreamEvent, 16)
 	full := `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"echo hi\"}"}}]},"finish_reason":"tool_calls"}]}` + "\n\n"
-	acc.feed([]byte(full), events)
+	if err := acc.feed([]byte(full), events); err != nil {
+		t.Fatal(err)
+	}
 	acc.finish(events)
 	close(events)
 
@@ -148,8 +150,12 @@ func TestSSECRLFSplitAcrossChunkBoundary(t *testing.T) {
 	events := make(chan StreamEvent, 16)
 	full := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\r\n\r\n"
 	split := strings.Index(full, "\r")
-	acc.feed([]byte(full[:split]), events)
-	acc.feed([]byte(full[split:]), events)
+	if err := acc.feed([]byte(full[:split]), events); err != nil {
+		t.Fatal(err)
+	}
+	if err := acc.feed([]byte(full[split:]), events); err != nil {
+		t.Fatal(err)
+	}
 	close(events)
 
 	found := false

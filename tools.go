@@ -57,7 +57,7 @@ func sanitize(value string) string {
 		code := r
 		if code == 0x09 || code == 0x0a || code == 0x0d {
 			out.WriteRune(r)
-		} else if code > 0x1f && !(code >= 0xfff9 && code <= 0xfffb) {
+		} else if code > 0x1f && (code < 0xfff9 || code > 0xfffb) {
 			out.WriteRune(r)
 		}
 	}

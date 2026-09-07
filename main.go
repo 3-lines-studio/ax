@@ -66,7 +66,7 @@ func main() {
 	cfg.base = firstNonEmpty(cfg.base, fc.base, "https://api.openai.com/v1")
 	cfg.model = firstNonEmpty(cfg.model, fc.model, "gpt-4.1-mini")
 	bot := resolveBotCtx(botRoot)
-	os.Setenv("BOT_ROOT", bot.Root)
+	_ = os.Setenv("BOT_ROOT", bot.Root)
 	if len(prompt) == 0 {
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {

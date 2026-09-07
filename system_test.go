@@ -60,8 +60,8 @@ func TestBuildSystemPromptAppendsBotPrompt(t *testing.T) {
 
 func TestBuildSystemPromptAppendsUserSystemPrompt(t *testing.T) {
 	cfg := t.TempDir()
-	os.MkdirAll(filepath.Join(cfg, "ax"), 0o755)
-	os.WriteFile(filepath.Join(cfg, "ax", "SYSTEM.md"), []byte("call me assistant"), 0o644)
+	_ = os.MkdirAll(filepath.Join(cfg, "ax"), 0o755)
+	_ = os.WriteFile(filepath.Join(cfg, "ax", "SYSTEM.md"), []byte("call me assistant"), 0o644)
 	t.Setenv("XDG_CONFIG_HOME", cfg)
 	t.Setenv("HOME", "")
 	prompt := buildSystemPrompt(nil, "/ws", nil)
@@ -72,7 +72,7 @@ func TestBuildSystemPromptAppendsUserSystemPrompt(t *testing.T) {
 
 func TestBuildSystemPromptNoUserPrompt(t *testing.T) {
 	cfg := t.TempDir()
-	os.MkdirAll(filepath.Join(cfg, "ax"), 0o755)
+	_ = os.MkdirAll(filepath.Join(cfg, "ax"), 0o755)
 	t.Setenv("XDG_CONFIG_HOME", cfg)
 	t.Setenv("HOME", "")
 	prompt := buildSystemPrompt(nil, "/ws", nil)
@@ -103,8 +103,8 @@ func TestResolveSystemFallsBackToBuild(t *testing.T) {
 
 func TestUserSystemPromptReadsSYSTEMMd(t *testing.T) {
 	cfg := t.TempDir()
-	os.MkdirAll(filepath.Join(cfg, "ax"), 0o755)
-	os.WriteFile(filepath.Join(cfg, "ax", "SYSTEM.md"), []byte("  trimmed content  \n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(cfg, "ax"), 0o755)
+	_ = os.WriteFile(filepath.Join(cfg, "ax", "SYSTEM.md"), []byte("  trimmed content  \n"), 0o644)
 	t.Setenv("XDG_CONFIG_HOME", cfg)
 	t.Setenv("HOME", "")
 	if got := userSystemPrompt(); got != "trimmed content" {
@@ -114,8 +114,8 @@ func TestUserSystemPromptReadsSYSTEMMd(t *testing.T) {
 
 func TestUserSystemPromptEmpty(t *testing.T) {
 	cfg := t.TempDir()
-	os.MkdirAll(filepath.Join(cfg, "ax"), 0o755)
-	os.WriteFile(filepath.Join(cfg, "ax", "SYSTEM.md"), []byte("   \n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(cfg, "ax"), 0o755)
+	_ = os.WriteFile(filepath.Join(cfg, "ax", "SYSTEM.md"), []byte("   \n"), 0o644)
 	t.Setenv("XDG_CONFIG_HOME", cfg)
 	t.Setenv("HOME", "")
 	if got := userSystemPrompt(); got != "" {
@@ -125,7 +125,7 @@ func TestUserSystemPromptEmpty(t *testing.T) {
 
 func TestUserSystemPromptMissingFile(t *testing.T) {
 	cfg := t.TempDir()
-	os.MkdirAll(filepath.Join(cfg, "ax"), 0o755)
+	_ = os.MkdirAll(filepath.Join(cfg, "ax"), 0o755)
 	t.Setenv("XDG_CONFIG_HOME", cfg)
 	t.Setenv("HOME", "")
 	if got := userSystemPrompt(); got != "" {

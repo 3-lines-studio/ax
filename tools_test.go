@@ -91,7 +91,7 @@ exit 0
 func writeMockTool(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "mocktool")
-	os.WriteFile(path, []byte(content), 0o755)
+	_ = os.WriteFile(path, []byte(content), 0o755)
 	return path
 }
 
