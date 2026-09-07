@@ -129,6 +129,36 @@ func TestResolveBotCtxFileWorkspaceAssigned(t *testing.T) {
 	}
 }
 
+func TestResolveBotCtxUsesBotDataRoot(t *testing.T) {
+	root := t.TempDir()
+	data := t.TempDir()
+	_ = os.WriteFile(filepath.Join(root, "bot.toml"), []byte(""), 0o644)
+	t.Setenv("BOT_DATA", data)
+
+	ctx := resolveBotCtx(root)
+	wantWorkspace := filepath.Join(data, "workspace")
+	if ctx.Workspace != wantWorkspace {
+		t.Errorf("Workspace = %q, want %q", ctx.Workspace, wantWorkspace)
+	}
+	if _, err := os.Stat(filepath.Join(root, "workspace")); err == nil {
+		t.Error("workspace must be created under BOT_DATA, not the bot root")
+	}
+
+	// Definition paths stay on the bot root even when BOT_DATA is set.
+	_ = os.MkdirAll(filepath.Join(root, "skills"), 0o755)
+	ctx = resolveBotCtx(root)
+	if ctx.Skills != filepath.Join(root, "skills") {
+		t.Errorf("Skills = %q, want bot-root skills", ctx.Skills)
+	}
+	if ctx.Prompt == "" {
+		_ = os.WriteFile(filepath.Join(root, "bot.md"), []byte("hi"), 0o644)
+		ctx = resolveBotCtx(root)
+	}
+	if ctx.Prompt != "hi" {
+		t.Errorf("Prompt = %q, want bot-root prompt", ctx.Prompt)
+	}
+}
+
 func TestConfigDirPrecedence(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/x/cfg")
 	t.Setenv("HOME", "/home/u")

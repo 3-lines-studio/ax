@@ -697,6 +697,24 @@ def oneshot_bot_workspace(h, ax):
         check((ws / "out.txt").read_text() == "hi", "tool did not run in workspace")
 
 
+@case
+def oneshot_bot_workspace_split(h, ax):
+    h.write_config('model = "bot-model"\n')
+    data = h.root / "data"
+    ws = data / "workspace"
+    ws.mkdir(parents=True)
+    with h.mock(WRITE_FILE_SCENARIO) as srv:
+        p = h.oneshot(
+            ax,
+            ["write a file"],
+            base=srv.base_url,
+            extra_env={"AX_TOOLS": str(bash_provider(h)), "BOT_DATA": str(data)},
+        )
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        check((ws / "out.txt").read_text() == "hi", "tool did not run in BOT_DATA workspace")
+        check(not (h.work / "workspace" / "out.txt").exists(), "tool wrote to bot root workspace instead of BOT_DATA")
+
+
 def main(argv):
     ax = "target/release/ax"
     filt = None

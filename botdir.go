@@ -45,7 +45,8 @@ func resolveBotCtx(root string) *botCtx {
 	if pathExists(filepath.Join(root, "bot.toml")) {
 		ctx.IsBot = true
 	}
-	workspace := filepath.Join(root, "workspace")
+	dataRoot := botDataRoot(root)
+	workspace := filepath.Join(dataRoot, "workspace")
 	if info, err := os.Stat(workspace); err == nil && info.IsDir() {
 		ctx.Workspace = workspace
 	} else if ctx.IsBot {
@@ -55,7 +56,7 @@ func resolveBotCtx(root string) *botCtx {
 		ctx.Workspace = workspace
 	}
 	if ctx.Workspace == "" {
-		ctx.Workspace = root
+		ctx.Workspace = dataRoot
 	}
 	if skills := filepath.Join(root, "skills"); pathIsDir(skills) {
 		ctx.Skills = skills
@@ -90,6 +91,13 @@ func mergeBotConfig(fc fileConfig, bc botConfig) fileConfig {
 func pathExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func botDataRoot(root string) string {
+	if d := os.Getenv("BOT_DATA"); d != "" {
+		return d
+	}
+	return root
 }
 
 func pathIsDir(path string) bool {
