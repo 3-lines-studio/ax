@@ -10,9 +10,6 @@ import (
 	"time"
 )
 
-// sessionEntry is one JSONL line of a session file: a message or a usage
-// record, tagged by `type`. Older files that store a bare Message line (no
-// `type`) still load.
 type sessionEntry struct {
 	Type    string     `json:"type"`
 	Message *Message   `json:"message,omitempty"`
@@ -29,8 +26,6 @@ type usageInfo struct {
 	Model         string `json:"model"`
 }
 
-// contextMessages projects entries into the LLM context, dropping usage
-// records.
 func contextMessages(entries []sessionEntry) []Message {
 	var out []Message
 	for _, e := range entries {
@@ -41,7 +36,6 @@ func contextMessages(entries []sessionEntry) []Message {
 	return out
 }
 
-// parseEntryLine parses one line as an Entry, falling back to a bare Message.
 func parseEntryLine(line string) (sessionEntry, bool) {
 	var entry sessionEntry
 	if err := json.Unmarshal([]byte(line), &entry); err == nil && entry.Type != "" {
@@ -133,8 +127,6 @@ func appendMessages(path string, messages []Message) error {
 	return nil
 }
 
-// atomicWrite writes via temp file + rename in the destination directory so a
-// crash or full disk never leaves a truncated file behind.
 func atomicWrite(path string, data []byte) error {
 	var tag uint64
 	tag = atomic.AddUint64(&writeTag, 1)

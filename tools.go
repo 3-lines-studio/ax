@@ -29,8 +29,6 @@ var (
 	signalOnce  sync.Once
 )
 
-// ensureSignalHandler reaps child process groups when ax is itself
-// terminated, so a killed run never orphans its tool children.
 func ensureSignalHandler() {
 	signalOnce.Do(func() {
 		ch := make(chan os.Signal, 1)
@@ -91,8 +89,6 @@ func validToolName(name string) bool {
 	return true
 }
 
-// boundedBuffer keeps output up to limit and records overflow without
-// blocking the child (see Rust bounded_output semantics).
 type boundedBuffer struct {
 	buf      []byte
 	limit    int
@@ -111,9 +107,6 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// boundedOutput runs a discovery command, capturing stdout/stderr bounded at
-// limit. Returns the exit code (or -1 on start error), the outputs, and any
-// start error.
 func boundedOutput(command *exec.Cmd, limit int) (int, []byte, []byte, error) {
 	ensureSignalHandler()
 	var stdout, stderr boundedBuffer

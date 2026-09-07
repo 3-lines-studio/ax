@@ -9,8 +9,6 @@ import (
 
 const maxRetries = 2
 
-// runStream is the streaming agent loop: messages -> provider -> tool calls ->
-// results, repeating until the model stops or max_turns is hit.
 func runStream(provider Provider, opts *runOptions, msgs []Message, cancel *atomic.Bool, sink runSink) runEnd {
 	history := append([]Message(nil), msgs...)
 	usage := Usage{}
@@ -47,8 +45,6 @@ func runStream(provider Provider, opts *runOptions, msgs []Message, cancel *atom
 	return runEnd{messages: history, usage: usage, outcome: outcomeMaxTurns}
 }
 
-// requestStream issues a streaming completion with retries. It only retries
-// failures that emitted no events yet, so content is never duplicated.
 func requestStream(provider Provider, opts *runOptions, history []Message, cancel *atomic.Bool, sink runSink) (Response, []ToolCall, error) {
 	req := &Request{Model: opts.model, System: opts.system, Messages: history, Tools: opts.tools}
 	attempt := 0
@@ -135,7 +131,7 @@ func runToolBatch(tools []Tool, calls []ToolCall, truncated bool, turn int, canc
 }
 
 type parallelMsg struct {
-	kind   int // 0 = delta, 1 = done
+	kind   int
 	idx    int
 	text   string
 	output string
@@ -184,8 +180,6 @@ func runParallel(tools []Tool, calls []ToolCall, turn int, cancel *atomic.Bool, 
 	return !cancel.Load()
 }
 
-// backoff returns a jittered retry delay in milliseconds that grows with the
-// attempt number, capped at 8 seconds.
 func backoff(attempt int) int {
 	shift := attempt - 1
 	if shift > 4 {

@@ -2,8 +2,6 @@ package main
 
 import "strings"
 
-// parseFrontmatter splits a `--- fenced frontmatter ---` header, extracting
-// the `description` key and the body. Used for user commands and skills.
 func parseFrontmatter(text string) (string, string) {
 	rest, ok := strings.CutPrefix(text, "---")
 	if ok {

@@ -50,8 +50,6 @@ func expandUserCommand(uc userCommand, rest string) string {
 	return substituted
 }
 
-// parseCommandArgs splits command arguments respecting quoted strings
-// (bash-style).
 func parseCommandArgs(s string) []string {
 	args := []string{}
 	var current strings.Builder
@@ -83,8 +81,6 @@ func parseCommandArgs(s string) []string {
 	return args
 }
 
-// substituteArgs replaces `$1`..`$9`, `$@`/`$ARGUMENTS`, `${2:-default}`,
-// `${@:N}` and `${@:N:L}` placeholders.
 func substituteArgs(content string, args []string) string {
 	all := strings.Join(args, " ")
 	var out strings.Builder

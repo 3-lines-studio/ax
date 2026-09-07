@@ -14,7 +14,6 @@ import (
 
 const maxStreamToolCalls = 64
 
-// OpenAI is an OpenAI-compatible chat completions provider.
 type OpenAI struct {
 	BaseURL string
 	APIKey  string
@@ -168,7 +167,6 @@ func (o OpenAI) runRequest(built builtRequest, cancel *atomic.Bool, events chan 
 		return acc.response(), nil
 	}
 
-	// Non-streaming path.
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var parsed oaResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
@@ -395,8 +393,6 @@ func (acc *streamAcc) response() Response {
 		StopReason: acc.finishReason,
 	}
 }
-
-// --- OpenAI wire formats -------------------------------------------------
 
 type oaRequest struct {
 	Model    string      `json:"model"`
