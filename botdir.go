@@ -9,28 +9,22 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// botConfig holds the Botdir bot.toml keys owned by the ax consumer. Root
-// keys are reserved by Botdir; unknown keys and tables (e.g. [slack]) are
-// ignored for forward compatibility.
 type botConfig struct {
 	Model   string   `toml:"model"`
 	BaseURL string   `toml:"base_url"`
 	Tools   []string `toml:"tools"`
 }
 
-// botCtx is the resolved Botdir context for one ax run.
 type botCtx struct {
-	Root      string // absolute bot root (initial CWD or -C)
-	Workspace string // model work area: Root/workspace when present/used, else Root
-	Skills    string // Root/skills; tool providers derive it from BOT_ROOT
-	Prompt    string // Root/bot.md content, appended to the system prompt
-	APIKey    string // Root/secrets/api-key value
+	Root      string
+	Workspace string
+	Skills    string
+	Prompt    string
+	APIKey    string
 	HasAPIKey bool
-	IsBot     bool // Root/bot.toml present
+	IsBot     bool
 }
 
-// loadBotConfig reads Root/bot.toml if present. A missing file is an empty
-// config; an unreadable or invalid file is an error.
 func loadBotConfig(root string) (botConfig, error) {
 	data, err := os.ReadFile(filepath.Join(root, "bot.toml"))
 	if err != nil {
@@ -46,7 +40,6 @@ func loadBotConfig(root string) (botConfig, error) {
 	return bc, nil
 }
 
-// resolveBotCtx fills the Botdir context for a bot root.
 func resolveBotCtx(root string) *botCtx {
 	ctx := &botCtx{Root: root}
 	if pathExists(filepath.Join(root, "bot.toml")) {
@@ -56,7 +49,6 @@ func resolveBotCtx(root string) *botCtx {
 	if info, err := os.Stat(workspace); err == nil && info.IsDir() {
 		ctx.Workspace = workspace
 	} else if ctx.IsBot {
-		// A runtime bot builds its mutable paths on first run.
 		_ = os.MkdirAll(workspace, 0o755)
 		ctx.Workspace = workspace
 	}
@@ -80,7 +72,6 @@ func resolveBotCtx(root string) *botCtx {
 	return ctx
 }
 
-// mergeBotConfig overlays bot.toml values over the legacy file config.
 func mergeBotConfig(fc fileConfig, bc botConfig) fileConfig {
 	if bc.Model != "" {
 		fc.model = bc.Model
@@ -104,8 +95,6 @@ func pathIsDir(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// botRootArg returns the -C/--C value from args before the prompt starts,
-// without fully parsing them. It returns "" when no directory flag is given.
 func botRootArg(args []string) string {
 	i := 0
 	for i < len(args) {

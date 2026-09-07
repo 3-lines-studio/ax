@@ -1,7 +1,7 @@
 PREFIX ?= $(HOME)/.local
 BIN := ax
 
-.PHONY: check build run dev harness install clean
+.PHONY: check build run dev harness eval install clean
 
 check:
 	test -z "$$(gofmt -l .)"
@@ -24,6 +24,9 @@ dev:
 harness:
 	$(MAKE) build
 	python3 scripts/harness.py --bin $(BIN)
+
+eval:
+	python3 scripts/eval.py
 
 install: build
 	install -d "$(PREFIX)/bin"

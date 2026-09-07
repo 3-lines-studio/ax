@@ -2,3 +2,4 @@
 .ax/
 ax-*
 __pycache__/
+.env

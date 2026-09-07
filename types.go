@@ -6,9 +6,6 @@ import (
 	"sync/atomic"
 )
 
-// ToolCall and Message serialize with PascalCase field names (session storage
-// and the AX `result` event); the OpenAI provider maps them to the wire
-// format separately.
 type ToolCall struct {
 	ID        string `json:"ID"`
 	Name      string `json:"Name"`
@@ -34,8 +31,6 @@ type Event struct {
 	Usage   Usage
 }
 
-// runSink receives callbacks during a run. The CLI EventSink and the SDK
-// agent sink implement it.
 type runSink interface {
 	assistantDelta(text string)
 	assistantDone()
@@ -73,10 +68,6 @@ type runEnd struct {
 	failMsg  string
 }
 
-// Tool is a callable capability. Run receives the raw JSON arguments and a
-// progress callback for live output; it returns the tool result text. A
-// non-empty return is always the model-visible result; tool errors are
-// expressed as text so the model can self-correct.
 type Tool struct {
 	Name        string
 	Description string
@@ -86,7 +77,6 @@ type Tool struct {
 	Run         func(arguments string, progress func(string)) string
 }
 
-// Provider is any OpenAI-compatible chat completions backend.
 type Provider interface {
 	stream(req *Request, cancel *atomic.Bool) *StreamHandle
 }
@@ -104,7 +94,6 @@ type Response struct {
 	StopReason string
 }
 
-// StreamEvent is a unit of streamed output from a provider.
 type StreamEvent struct {
 	Kind  streamEventKind
 	Text  string
@@ -121,7 +110,6 @@ const (
 	eventDone
 )
 
-// StreamHandle yields events and joins back to the final Response.
 type StreamHandle struct {
 	events chan StreamEvent
 	join   func() (Response, error)
@@ -138,7 +126,6 @@ const (
 	errHTTP
 )
 
-// axError is a typed provider error, used to decide retryability.
 type axError struct {
 	kind    errorKind
 	status  int
