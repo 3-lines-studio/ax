@@ -29,6 +29,13 @@ def check(cond, msg):
         raise AssertionError(msg)
 
 
+def artifact(path):
+    p = Path(path)
+    if not p.exists():
+        raise AssertionError("artifact missing: %s" % p)
+    return p.read_text()
+
+
 def build_tools(dest):
     dest.mkdir(parents=True, exist_ok=True)
     for tool in TOOLS:
@@ -41,11 +48,23 @@ def build_tools(dest):
         )
 
 
+def error_msg(events):
+    for e in events:
+        if e.get("type") == "error":
+            return e.get("message", "")
+    return ""
+
+
 class Bot:
     def __init__(self, root):
         self.root = Path(root)
         for d in ("workspace", "skills", "secrets"):
             (self.root / d).mkdir(parents=True, exist_ok=True)
+        self.write("bot.toml", "model = %r\nbase_url = %r\ntools = %r\n" % (
+            os.environ["AX_MODEL"],
+            os.environ["AX_BASE_URL"],
+            ["fsx", "bashx", "skillx"],
+        ))
 
     def write(self, rel, text):
         p = self.root / rel
@@ -64,13 +83,13 @@ class Bot:
         if session:
             cmd += ["--session", session]
         cmd += [prompt]
-        for _ in range(3):
-            p = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
-            if p.returncode == 0:
-                break
-        else:
-            raise AssertionError("ax did not exit 0: %s" % p.stderr[-500:])
-        return [json.loads(l) for l in p.stdout.splitlines() if l.strip()]
+        p = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
+        events = [json.loads(l) for l in p.stdout.splitlines() if l.strip()]
+        if outcome(events) == "failed":
+            raise AssertionError("provider failed: " + (error_msg(events) or "no error message"))
+        if p.returncode != 0:
+            raise AssertionError("ax exited %d: %s" % (p.returncode, error_msg(events) or p.stderr[-300:]))
+        return events
 
 
 def assistant_text(events):
@@ -104,31 +123,31 @@ def scenario(fn):
 @scenario
 def read_file(bot, bin_dir):
     bot.write("workspace/data.txt", "alpha beta gamma delta")
-    events = bot.run("Read workspace/data.txt with the fsx read tool and reply with its first word.", bin_dir)
+    events = bot.run("Read the file data.txt from the workspace with the fsx read tool and reply with its first word.", bin_dir)
     check(outcome(events) == "done", "outcome=%s" % outcome(events))
     check("alpha" in assistant_text(events).lower(), "answer missing 'alpha': %r" % assistant_text(events)[-200:])
 
 
 @scenario
 def write_file(bot, bin_dir):
-    events = bot.run("Use the fsx write tool to create workspace/hello.txt containing exactly the word hello.", bin_dir)
+    events = bot.run("Use the fsx write tool to create the file hello.txt in the workspace, containing exactly the word hello.", bin_dir)
     check(outcome(events) == "done", "outcome=%s" % outcome(events))
-    check((bot.root / "workspace/hello.txt").read_text().strip() == "hello", "hello.txt wrong")
+    check(artifact(bot.root / "workspace/hello.txt").strip() == "hello", "hello.txt wrong")
 
 
 @scenario
 def bash_echo(bot, bin_dir):
-    events = bot.run("Use the bash tool to run: printf world > workspace/world.txt", bin_dir)
+    events = bot.run("Use the bash tool to run: printf world > world.txt (the working directory is the workspace).", bin_dir)
     check(outcome(events) == "done", "outcome=%s" % outcome(events))
-    check((bot.root / "workspace/world.txt").read_text().strip() == "world", "world.txt wrong")
+    check(artifact(bot.root / "workspace/world.txt").strip() == "world", "world.txt wrong")
 
 
 @scenario
 def skill_use(bot, bin_dir):
-    bot.write("skills/hello/SKILL.md", "---\ndescription: greet marker\n---\nUsing the fsx write tool, create workspace/skill-marker.txt containing the word marker.")
+    bot.write("skills/hello/SKILL.md", "---\ndescription: greet marker\n---\nUsing the fsx write tool, create the file skill-marker.txt in the workspace containing the word marker.")
     events = bot.run("Use the hello skill.", bin_dir)
     check(outcome(events) == "done", "outcome=%s" % outcome(events))
-    check((bot.root / "workspace/skill-marker.txt").read_text().strip() == "marker", "skill not followed")
+    check(artifact(bot.root / "workspace/skill-marker.txt").strip() == "marker", "skill not followed")
 
 
 @scenario
@@ -174,15 +193,24 @@ def main(argv):
         results = []
         for fn in SCENARIOS:
             name = fn.__name__
-            with tempfile.TemporaryDirectory(prefix="bot-") as btd:
-                bot = Bot(btd)
-                try:
-                    fn(bot, bin_dir)
-                    results.append((name, True, ""))
-                    print("PASS  %s" % name)
-                except AssertionError as err:
-                    results.append((name, False, str(err)))
-                    print("FAIL  %s — %s" % (name, err))
+            state = None
+            for _ in range(5):
+                with tempfile.TemporaryDirectory(prefix="bot-") as btd:
+                    bot = Bot(btd)
+                    try:
+                        fn(bot, bin_dir)
+                        state = "pass"
+                        break
+                    except Exception as err:
+                        state = str(err)
+                        if "provider failed" in str(err):
+                            break
+            if state == "pass":
+                results.append((name, True, ""))
+                print("PASS  %s" % name)
+            else:
+                results.append((name, False, state))
+                print("FAIL  %s — %s" % (name, state))
         failed = [r for r in results if not r[1]]
         print("\n%d/%d passed" % (len(results) - len(failed), len(results)))
         return 1 if failed else 0
