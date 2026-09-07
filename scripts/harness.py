@@ -245,7 +245,12 @@ class Harness:
         return self.ax_root() / "projects" / f"{value:016x}"
 
     def write_config(self, text):
-        (self.ax_root() / "config").write_text(text)
+        (self.work / "bot.toml").write_text(text)
+
+    def write_secret(self, name, value):
+        d = self.work / "secrets"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text(value)
 
     def write_command(self, name, text):
         d = self.ax_root() / "commands"
@@ -552,7 +557,7 @@ def oneshot_tool_workdir(h, ax):
 
 @case
 def oneshot_flags_and_config(h, ax):
-    h.write_config('base = "http://127.0.0.1:9"\nmodel = "cfg-model"\n')
+    h.write_config('base_url = "http://127.0.0.1:9"\nmodel = "cfg-model"\n')
     with h.mock(ANSWER_SCENARIO) as srv:
         p = h.oneshot(ax, ["-model", "flag-model", "-system", "You are Taco.", "hi"], base=srv.base_url)
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
@@ -568,7 +573,7 @@ def oneshot_flags_and_config(h, ax):
 
 @case
 def oneshot_config_api_key(h, ax):
-    h.write_config('api_key = "cfg-key"\n')
+    h.write_secret("api-key", "cfg-key")
     with h.mock(ANSWER_SCENARIO) as srv:
         p = h.oneshot(ax, ["hi"], base=srv.base_url, api_key=None)
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
@@ -580,7 +585,7 @@ def oneshot_config_api_key(h, ax):
 
 @case
 def oneshot_env_beats_config(h, ax):
-    h.write_config('api_key = "cfg-key"\n')
+    h.write_secret("api-key", "cfg-key")
     with h.mock(ANSWER_SCENARIO) as srv:
         p = h.oneshot(ax, ["hi"], base=srv.base_url, api_key="env-key")
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
@@ -652,6 +657,44 @@ def oneshot_user_command(h, ax):
         )
 
 
+
+
+@case
+def oneshot_bot_config_and_prompt(h, ax):
+    h.write_config('model = "bot-model"\n')
+    (h.work / "bot.md").write_text("You are the bot instructions.")
+    with h.mock(ANSWER_SCENARIO) as srv:
+        p = h.oneshot(ax, ["hi"], base=srv.base_url)
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        req = srv.requests[0]["json"]
+        check(req["model"] == "bot-model", "bot.toml model ignored: %s" % req["model"])
+        sys_msgs = [m for m in req["messages"] if m["role"] == "system"]
+        check(any("bot instructions" in m.get("content", "") for m in sys_msgs), "bot.md not in system")
+
+
+@case
+def oneshot_bot_unknown_keys(h, ax):
+    h.write_config('model = "bot-model"\n\n[slack]\nmention_only = true\nnewkey = "x"\n')
+    with h.mock(ANSWER_SCENARIO) as srv:
+        p = h.oneshot(ax, ["hi"], base=srv.base_url)
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        check(srv.requests[0]["json"]["model"] == "bot-model", "model lost with unknown keys")
+
+
+@case
+def oneshot_bot_workspace(h, ax):
+    h.write_config('model = "bot-model"\n')
+    ws = h.work / "workspace"
+    ws.mkdir()
+    with h.mock(WRITE_FILE_SCENARIO) as srv:
+        p = h.oneshot(
+            ax,
+            ["write a file"],
+            base=srv.base_url,
+            extra_env={"AX_TOOLS": str(bash_provider(h))},
+        )
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        check((ws / "out.txt").read_text() == "hi", "tool did not run in workspace")
 
 
 def main(argv):

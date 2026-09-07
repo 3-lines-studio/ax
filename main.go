@@ -29,29 +29,45 @@ type fileConfig struct {
 func main() {
 	args := os.Args[1:]
 	fc := loadConfig()
-	cfg, prompt, err := parseArgs(args, fc)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		usage()
-		os.Exit(2)
-	}
-	if cfg.dir != "" {
-		directory, err := filepath.Abs(cfg.dir)
+	root := botRootArg(args)
+	if root != "" {
+		directory, err := filepath.Abs(root)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: cannot use %s: %v\n", cfg.dir, err)
+			fmt.Fprintf(os.Stderr, "error: cannot use %s: %v\n", root, err)
 			os.Exit(1)
 		}
 		canonical, err := filepath.EvalSymlinks(directory)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: cannot use %s: %v\n", cfg.dir, err)
+			fmt.Fprintf(os.Stderr, "error: cannot use %s: %v\n", root, err)
 			os.Exit(1)
 		}
 		if err := os.Chdir(canonical); err != nil {
 			fmt.Fprintf(os.Stderr, "error: cannot use %s: %v\n", canonical, err)
 			os.Exit(1)
 		}
-		cfg.dir = canonical
 	}
+	cfg, prompt, err := parseArgs(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		usage()
+		os.Exit(2)
+	}
+	botRoot, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error: working directory")
+		os.Exit(1)
+	}
+	if bc, err := loadBotConfig(botRoot); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	} else {
+		fc = mergeBotConfig(fc, bc)
+	}
+	cfg.base = firstNonEmpty(cfg.base, fc.base, "https://api.openai.com/v1")
+	cfg.model = firstNonEmpty(cfg.model, fc.model, "gpt-4.1-mini")
+	bot := resolveBotCtx(botRoot)
+	// BOT_ROOT anchors the bot; tool providers derive workspace/, skills/, etc.
+	os.Setenv("BOT_ROOT", bot.Root)
 	if len(prompt) == 0 {
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
@@ -60,14 +76,11 @@ func main() {
 		}
 		prompt = []string{string(data)}
 	}
-	oneShotEvents(cfg, fc, prompt)
+	oneShotEvents(cfg, fc, bot, prompt)
 }
 
-func parseArgs(args []string, fc fileConfig) (cliConfig, []string, error) {
-	cfg := cliConfig{
-		base:  firstNonEmpty(fc.base, "https://api.openai.com/v1"),
-		model: firstNonEmpty(fc.model, "gpt-4.1-mini"),
-	}
+func parseArgs(args []string) (cliConfig, []string, error) {
+	cfg := cliConfig{}
 	var rest []string
 	i := 0
 	for i < len(args) {
@@ -124,10 +137,10 @@ func parseArgs(args []string, fc fileConfig) (cliConfig, []string, error) {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, "Usage: ax [flags] [prompt]\n\nFlags:\n  -base URL    OpenAI-compatible API base URL (default \"https://api.openai.com/v1\")\n  -model NAME  model name (default \"gpt-4.1-mini\")\n  -system TEXT  system prompt (default: built-in)\n  -C DIR       working directory context\n  --session FILE  use an explicit session file\n  --events      emit JSONL events on stdout\n\nWith no prompt, reads the prompt from stdin.\nA prompt of the form /name [args] expands a user command from\n~/.config/ax/commands/<name>.md.\n")
+	fmt.Fprint(os.Stderr, "Usage: ax [flags] [prompt]\n\nFlags:\n  -base URL    OpenAI-compatible API base URL (default \"https://api.openai.com/v1\")\n  -model NAME  model name (default \"gpt-4.1-mini\")\n  -system TEXT  system prompt override (default: built-in + bot.md)\n  -C DIR       bot directory root (default: current directory)\n  --session FILE  use an explicit session file\n  --events      emit JSONL events on stdout\n\nWith no prompt, reads the prompt from stdin.\nA prompt of the form /name [args] expands a user command from\n~/.config/ax/commands/<name>.md.\n")
 }
 
-func oneShotEvents(cfg cliConfig, fc fileConfig, prompt []string) {
+func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 	printJSON(map[string]any{"type": "protocol", "version": 1})
 	var history []Message
 	if cfg.session != "" {
@@ -145,9 +158,9 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, prompt []string) {
 		go readControls(&cancel)
 	}
 
-	tools := toolsOrExit(fc)
-	system := resolveSystem(cfg, tools)
-	provider := NewOpenAI(cfg.base, apiKey(fc))
+	tools := toolsOrExit(fc, bot.Workspace)
+	system := resolveSystem(cfg, tools, bot)
+	provider := NewOpenAI(cfg.base, apiKey(fc, bot))
 	sink := &eventSink{
 		session: cfg.session,
 		seen:    []Message{},
@@ -226,7 +239,7 @@ func expandPromptCommand(prompt, axRoot string) string {
 	return prompt
 }
 
-func toolsOrExit(config fileConfig) []Tool {
+func toolsOrExit(config fileConfig, workdir string) []Tool {
 	commands := config.tools
 	if value, present := os.LookupEnv("AX_TOOLS"); present {
 		commands = value
@@ -234,7 +247,7 @@ func toolsOrExit(config fileConfig) []Tool {
 	var tools []Tool
 	if commands != "" {
 		var err error
-		tools, err = tryExternalTools(commands)
+		tools, err = tryExternalTools(commands, workdir)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
@@ -243,31 +256,24 @@ func toolsOrExit(config fileConfig) []Tool {
 	return tools
 }
 
-func apiKey(fc fileConfig) string {
+func apiKey(fc fileConfig, bot *botCtx) string {
 	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
 		return key
+	}
+	if bot != nil && bot.HasAPIKey {
+		return bot.APIKey
 	}
 	return fc.apiKey
 }
 
-func workDir(cfg cliConfig) string {
-	if cfg.dir != "" {
-		return cfg.dir
-	}
-	if dir, err := os.Getwd(); err == nil {
-		return dir
-	}
-	return ""
-}
-
-func resolveSystem(cfg cliConfig, tools []Tool) string {
+func resolveSystem(cfg cliConfig, tools []Tool, bot *botCtx) string {
 	if cfg.system != "" {
 		return cfg.system
 	}
-	return buildSystemPrompt(tools, workDir(cfg))
+	return buildSystemPrompt(tools, bot.Workspace, bot)
 }
 
-func buildSystemPrompt(tools []Tool, dir string) string {
+func buildSystemPrompt(tools []Tool, dir string, bot *botCtx) string {
 	var out strings.Builder
 	out.WriteString("You are an expert assistant operating inside ax.\n\nAvailable tools:\n")
 	for _, tool := range tools {
@@ -285,6 +291,9 @@ func buildSystemPrompt(tools []Tool, dir string) string {
 		}
 	}
 	fmt.Fprintf(&out, "\nCurrent working directory: %s", dir)
+	if bot != nil && bot.Prompt != "" {
+		out.WriteString("\n\n" + bot.Prompt)
+	}
 	if up := userSystemPrompt(); up != "" {
 		out.WriteString("\n\n" + up)
 	}
@@ -391,11 +400,13 @@ func readControls(cancel *atomic.Bool) {
 	}
 }
 
-func firstNonEmpty(primary, fallback string) string {
-	if primary != "" {
-		return primary
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
 	}
-	return fallback
+	return ""
 }
 
 // --- eventSink -----------------------------------------------------------

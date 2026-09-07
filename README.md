@@ -86,7 +86,7 @@ AX has no built-in tools. Register every capability explicitly:
 AX_TOOLS="fsx bashx skillx" ax
 ```
 
-Fsx and Bashx use AX's working directory. Skillx merges project and home skills. Use `-C` to select another project:
+Fsx and Bashx use AX's working directory. Skillx reads the bot's `skills/` (and home skills). In a Botdir bot the working directory is `workspace/`. Use `-C` to select another bot root:
 
 ```sh
 AX_TOOLS="fsx bashx skillx" ax -C /path/to/project
@@ -96,16 +96,26 @@ AX runs without tools when `AX_TOOLS` is unset.
 
 ## Config
 
-`~/.config/ax/config` (or `$XDG_CONFIG_HOME/ax/config`):
+ax is a Botdir consumer. The bot root is the current directory or `-C DIR`. It reads `bot.toml` at the bot root:
+
+```toml
+model = "glm-4.5"
+base_url = "http://localhost:11434/v1"
+tools = ["fsx", "bashx", "skillx"]    # optional: external providers
+```
+
+The standard Botdir keys are `model`, `base_url`, and `tools`. Unknown keys and tables (e.g. `[slack]`) are ignored. `AX_TOOLS` overrides `tools`. Precedence is flags > env > `bot.toml` > the legacy `~/.config/ax/config` > defaults.
+
+The legacy `~/.config/ax/config` (or `$XDG_CONFIG_HOME/ax/config`) is still accepted:
 
 ```
-api_key = "sk-..."        # used when OPENAI_API_KEY is unset
+api_key = "sk-..."
 model = "glm-4.5"
 base = "http://localhost:11434/v1"
-tools = "fsx bashx skillx"    # optional: external providers
+tools = "fsx bashx skillx"
 ```
 
-Plain `key = value` lines, `#` comments. `AX_TOOLS` overrides `tools`. Other precedence is flags > env > config.
+The model API key comes from `OPENAI_API_KEY` or `secrets/api-key`; bot instructions come from `bot.md`. When the bot root is a Botdir bot (has `workspace/`), the model's working directory is `workspace/` and tool providers run there; otherwise it is the bot root.
 
 ## Files
 
@@ -115,12 +125,13 @@ Everything is files; there is no state machine.
   `/name [args]`. `$ARGUMENTS` and `$@` are all args, `$1..$9` positional,
   `${2:-default}` defaults, `${@:N}` and `${@:N:L}` slices; quoted args are
   parsed.
-- `~/.agents/skills/<name>/SKILL.md` — skills. The model discovers them
-  through the `skills` tool and reads one with the `skill` tool.
-- `~/.config/ax/SYSTEM.md` — optional system prompt, appended to the
-  built-in one.
+- bot `skills/<name>/SKILL.md` (and `$HOME/.agents/skills` for shared skills) —
+  skills, exposed through the `skills` and `skill` tools provided by Skillx.
+- `~/.config/ax/SYSTEM.md` — optional user system prompt, appended to the
+  built-in one after the bot's `bot.md`.
 - Sessions are JSONL: one line per message or usage entry. `--session FILE`
-  points at the file; there is no per-project store.
+  points at the file; there is no per-project store. A Botdir host routes
+  session files under `state/ax/`.
 
 ## Design
 

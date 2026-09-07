@@ -136,10 +136,12 @@ func boundedOutput(command *exec.Cmd, limit int) (int, []byte, []byte, error) {
 	return 0, stdout.buf, stderr.buf, nil
 }
 
-func tryExternalTools(commands string) ([]Tool, error) {
+func tryExternalTools(commands string, workdir string) ([]Tool, error) {
 	var tools []Tool
 	for _, command := range strings.Fields(commands) {
-		code, stdout, stderr, err := boundedOutput(exec.Command(command, "describe"), maxDescribeOutput)
+		describe := exec.Command(command, "describe")
+		describe.Dir = workdir
+		code, stdout, stderr, err := boundedOutput(describe, maxDescribeOutput)
 		if err != nil {
 			return nil, fmt.Errorf("discover tools from %s: %w", command, err)
 		}
@@ -189,7 +191,7 @@ func tryExternalTools(commands string) ([]Tool, error) {
 				Snippet:     snippet,
 				Sequential:  false,
 				Run: func(arguments string, _ func(string)) string {
-					return runExternalTool(executable, toolName, arguments)
+					return runExternalTool(executable, toolName, arguments, workdir)
 				},
 			}
 			if tool.Snippet == "" {
@@ -206,9 +208,10 @@ func isJSONObject(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &obj) == nil
 }
 
-func runExternalTool(command, name, arguments string) string {
+func runExternalTool(command, name, arguments, workdir string) string {
 	ensureSignalHandler()
 	cmd := exec.Command(command, "run", name)
+	cmd.Dir = workdir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin = strings.NewReader(arguments)
 	var stdout, stderr bytes.Buffer
