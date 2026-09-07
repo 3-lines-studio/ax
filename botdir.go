@@ -49,7 +49,9 @@ func resolveBotCtx(root string) *botCtx {
 	if info, err := os.Stat(workspace); err == nil && info.IsDir() {
 		ctx.Workspace = workspace
 	} else if ctx.IsBot {
-		_ = os.MkdirAll(workspace, 0o755)
+		if err := os.MkdirAll(workspace, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: create workspace: %v\n", err)
+		}
 		ctx.Workspace = workspace
 	}
 	if ctx.Workspace == "" {
