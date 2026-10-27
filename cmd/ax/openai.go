@@ -8,16 +8,26 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 )
 
-const maxStreamToolCalls = 64
+const (
+	maxStreamToolCalls = 64
+	maxRequestBody     = 48 << 20 // DeepSeek request body limit
+)
 
 type OpenAI struct {
 	BaseURL string
 	APIKey  string
+	// SessionPath resolves image blobs to data URLs at request time.
+	SessionPath string
+	// Thinking is nil for auto: DeepSeek models think, others do not.
+	Thinking  *bool
+	Effort    string
+	MaxTokens int
 }
 
 func NewOpenAI(baseURL, apiKey string) OpenAI {
@@ -35,35 +45,64 @@ type resultPair struct {
 	err  error
 }
 
+func (o OpenAI) deepSeek(model string) bool {
+	base := strings.ToLower(o.BaseURL)
+	return strings.Contains(base, "deepseek") || strings.HasPrefix(strings.ToLower(model), "deepseek")
+}
+
+// thinkingFor reports whether thinking is enabled and whether the field should
+// be sent at all. Non-DeepSeek providers omit the field unless the caller set
+// it explicitly.
+func (o OpenAI) thinkingFor(model string) (enabled, explicit bool) {
+	if o.Thinking != nil {
+		return *o.Thinking, true
+	}
+	if o.deepSeek(model) {
+		return true, true
+	}
+	return false, false
+}
+
 func (o OpenAI) buildRequest(req *Request, stream bool) (builtRequest, error) {
 	var msgs []oaMessage
 	if req.System != "" {
 		system := req.System
-		msgs = append(msgs, oaMessage{Role: "system", Content: &system})
+		msgs = append(msgs, oaMessage{Role: "system", Content: system})
 	}
+	hasTools := len(req.Tools) > 0
 	for _, m := range req.Messages {
-		var toolCalls []oaToolCall
+		message := oaMessage{Role: m.Role}
 		if len(m.ToolCalls) > 0 {
 			for _, c := range m.ToolCalls {
-				toolCalls = append(toolCalls, oaToolCall{
+				message.ToolCalls = append(message.ToolCalls, oaToolCall{
 					ID: c.ID, Type: "function",
 					Function: oaFunction{Name: c.Name, Arguments: c.Arguments},
 				})
 			}
 		}
-		var content *string
-		if m.Content != "" || m.Role == "tool" {
-			c := m.Content
-			content = &c
+		if m.Role == "user" && len(m.ContentParts) > 0 {
+			parts, err := o.contentParts(m)
+			if err != nil {
+				return builtRequest{}, err
+			}
+			message.Content = parts
+		} else if m.Content != "" || m.Role == "tool" {
+			content := m.Content
+			message.Content = content
 		}
-		var toolCallID *string
 		if m.ToolCallID != "" {
 			tc := m.ToolCallID
-			toolCallID = &tc
+			message.ToolCallID = &tc
 		}
-		msgs = append(msgs, oaMessage{
-			Role: m.Role, Content: content, ToolCalls: toolCalls, ToolCallID: toolCallID,
-		})
+		// DeepSeek requires reasoning_content on every assistant message when
+		// the request carries tools. Legacy sessions did not store it; an
+		// empty string keeps those histories structurally valid. Other
+		// providers only see the field when there is real reasoning.
+		if m.Role == "assistant" && (m.ReasoningContent != "" || (hasTools && o.deepSeek(req.Model))) {
+			reasoning := m.ReasoningContent
+			message.ReasoningContent = &reasoning
+		}
+		msgs = append(msgs, message)
 	}
 	var tools []oaTool
 	for _, t := range req.Tools {
@@ -71,15 +110,81 @@ func (o OpenAI) buildRequest(req *Request, stream bool) (builtRequest, error) {
 			Name: t.Name, Description: t.Description, Parameters: t.Parameters,
 		}})
 	}
-	body, err := json.Marshal(oaRequest{Model: req.Model, Messages: msgs, Tools: tools, Stream: stream})
+	request := oaRequest{Model: req.Model, Messages: msgs, Tools: tools, Stream: stream}
+	if stream {
+		request.StreamOptions = &oaStreamOptions{IncludeUsage: true}
+	}
+	enabled, explicit := o.thinkingFor(req.Model)
+	// A resumed session written before reasoning was recorded cannot satisfy
+	// DeepSeek's thinking-mode rule. In auto mode, drop to non-thinking for
+	// that request instead of failing the whole history.
+	if enabled && hasTools && o.Thinking == nil {
+		for _, message := range req.Messages {
+			if message.Role == "assistant" && message.ReasoningContent == "" {
+				enabled = false
+				break
+			}
+		}
+	}
+	if explicit {
+		kind := "disabled"
+		if enabled {
+			kind = "enabled"
+			effort := o.Effort
+			if effort == "" {
+				effort = "high"
+			}
+			request.ReasoningEffort = effort
+		}
+		request.Thinking = &oaThinking{Type: kind}
+	}
+	if o.MaxTokens > 0 {
+		request.MaxTokens = o.MaxTokens
+	}
+	body, err := json.Marshal(request)
 	if err != nil {
 		return builtRequest{}, newProvider(err.Error())
+	}
+	if len(body) > maxRequestBody && o.deepSeek(req.Model) {
+		return builtRequest{}, newProvider(fmt.Sprintf("request body is %d MiB, over DeepSeek's 48 MiB limit; use image URLs or smaller images", len(body)>>20))
 	}
 	return builtRequest{
 		url:     o.BaseURL + "/chat/completions",
 		headers: [][2]string{{"Content-Type", "application/json"}, {"Authorization", "Bearer " + o.APIKey}},
 		body:    body,
 	}, nil
+}
+
+func (o OpenAI) contentParts(m Message) ([]oaContentPart, error) {
+	parts := make([]oaContentPart, 0, len(m.ContentParts))
+	hasText := false
+	for _, part := range m.ContentParts {
+		switch part.Type {
+		case "text":
+			if part.Text == "" {
+				continue
+			}
+			hasText = true
+			parts = append(parts, oaContentPart{Type: "text", Text: part.Text})
+		case "image":
+			if part.Image == nil {
+				continue
+			}
+			url, err := imageURL(*part.Image, o.SessionPath)
+			if err != nil {
+				return nil, err
+			}
+			image := &oaImageURL{URL: url, Detail: part.Image.Detail}
+			parts = append(parts, oaContentPart{Type: "image_url", ImageURL: image})
+		}
+	}
+	if !hasText && m.Content != "" {
+		parts = append([]oaContentPart{{Type: "text", Text: m.Content}}, parts...)
+	}
+	if len(parts) == 0 {
+		return nil, newProvider("message has content parts but no usable text or image")
+	}
+	return parts, nil
 }
 
 func (o OpenAI) stream(req *Request, cancel *atomic.Bool) *StreamHandle {
@@ -143,10 +248,16 @@ func (o OpenAI) runRequest(built builtRequest, cancel *atomic.Bool, events chan 
 		if json.Unmarshal(body, &e) == nil && e.Error.Message != "" {
 			message = e.Error.Message
 		}
+		var axErr *axError
 		if message != "" {
-			return Response{}, newHTTP(resp.StatusCode, fmt.Sprintf("openai: %d: %s", resp.StatusCode, message))
+			axErr = &axError{kind: errHTTP, status: resp.StatusCode, message: fmt.Sprintf("openai: %d: %s", resp.StatusCode, message)}
+		} else {
+			axErr = &axError{kind: errHTTP, status: resp.StatusCode, message: fmt.Sprintf("openai: unexpected status %d", resp.StatusCode)}
 		}
-		return Response{}, newHTTP(resp.StatusCode, fmt.Sprintf("openai: unexpected status %d", resp.StatusCode))
+		if seconds, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && seconds > 0 {
+			axErr.retryAfter = time.Duration(seconds) * time.Second
+		}
+		return Response{}, axErr
 	}
 
 	acc := &streamAcc{}
@@ -189,17 +300,14 @@ func (o OpenAI) runRequest(built builtRequest, cancel *atomic.Bool, events chan 
 	for _, c := range choice.Message.ToolCalls {
 		calls = append(calls, ToolCall{ID: c.ID, Name: c.Function.Name, Arguments: c.Function.Arguments})
 	}
-	content := ""
-	if choice.Message.Content != nil {
-		content = *choice.Message.Content
+	content := contentString(choice.Message.Content)
+	reasoning := ""
+	if choice.Message.ReasoningContent != nil {
+		reasoning = *choice.Message.ReasoningContent
 	}
 	return Response{
-		Message: Message{Role: "assistant", Content: content, ToolCalls: calls},
-		Usage: Usage{
-			Input:       parsed.Usage.PromptTokens,
-			Output:      parsed.Usage.CompletionTokens,
-			CachedInput: parsed.Usage.PromptTokensDetails.CachedTokens,
-		},
+		Message:    Message{Role: "assistant", Content: content, ReasoningContent: reasoning, ToolCalls: calls},
+		Usage:      parsed.Usage.usage(),
 		StopReason: stopReason,
 	}, nil
 }
@@ -233,6 +341,7 @@ type streamAcc struct {
 	raw          []byte
 	buf          []byte
 	content      string
+	reasoning    string
 	calls        []oaToolCallDelta
 	usage        oaUsage
 	outTokens    int
@@ -311,13 +420,10 @@ func (acc *streamAcc) handleEvent(event []byte, tx chan StreamEvent) error {
 	if err := json.Unmarshal([]byte(text), &chunk); err != nil {
 		return malformedStreamError{err: fmt.Errorf("%w (after %d events)", err, acc.events)}
 	}
-	if chunk.Usage.PromptTokens != 0 || chunk.Usage.CompletionTokens != 0 {
+	if chunk.Usage.PromptTokens != 0 || chunk.Usage.CompletionTokens != 0 || chunk.Usage.PromptCacheHitTokens != 0 {
 		acc.usage = chunk.Usage
 		if tx != nil {
-			tx <- StreamEvent{Kind: eventTokens, Usage: Usage{
-				Input: acc.usage.PromptTokens, Output: acc.usage.CompletionTokens,
-				CachedInput: acc.usage.PromptTokensDetails.CachedTokens,
-			}}
+			tx <- StreamEvent{Kind: eventTokens, Usage: acc.usage.usage()}
 		}
 	}
 	if len(chunk.Choices) == 0 {
@@ -327,6 +433,17 @@ func (acc *streamAcc) handleEvent(event []byte, tx chan StreamEvent) error {
 	if choice.FinishReason != nil && *choice.FinishReason != "" {
 		acc.finishReason = *choice.FinishReason
 	}
+	if choice.Delta.ReasoningContent != nil && *choice.Delta.ReasoningContent != "" {
+		acc.reasoning += *choice.Delta.ReasoningContent
+		acc.outTokens++
+		if tx != nil {
+			tx <- StreamEvent{Kind: eventReasoning, Reasoning: *choice.Delta.ReasoningContent}
+			tx <- StreamEvent{Kind: eventTokens, Usage: Usage{
+				Input: acc.usage.PromptTokens, Output: acc.outTokens,
+				CachedInput: acc.usage.cached(),
+			}}
+		}
+	}
 	if choice.Delta.Content != nil && *choice.Delta.Content != "" {
 		acc.content += *choice.Delta.Content
 		acc.outTokens++
@@ -334,7 +451,7 @@ func (acc *streamAcc) handleEvent(event []byte, tx chan StreamEvent) error {
 			tx <- StreamEvent{Kind: eventContent, Text: *choice.Delta.Content}
 			tx <- StreamEvent{Kind: eventTokens, Usage: Usage{
 				Input: acc.usage.PromptTokens, Output: acc.outTokens,
-				CachedInput: acc.usage.PromptTokensDetails.CachedTokens,
+				CachedInput: acc.usage.cached(),
 			}}
 		}
 	}
@@ -404,28 +521,60 @@ func (acc *streamAcc) finish(tx chan StreamEvent) {
 
 func (acc *streamAcc) response() Response {
 	return Response{
-		Message: Message{Role: "assistant", Content: acc.content, ToolCalls: acc.toolCalls()},
-		Usage: Usage{
-			Input:       acc.usage.PromptTokens,
-			Output:      acc.usage.CompletionTokens,
-			CachedInput: acc.usage.PromptTokensDetails.CachedTokens,
-		},
+		Message:    Message{Role: "assistant", Content: acc.content, ReasoningContent: acc.reasoning, ToolCalls: acc.toolCalls()},
+		Usage:      acc.usage.usage(),
 		StopReason: acc.finishReason,
 	}
 }
 
+func contentString(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	default:
+		data, _ := json.Marshal(typed)
+		return string(data)
+	}
+}
+
 type oaRequest struct {
-	Model    string      `json:"model"`
-	Messages []oaMessage `json:"messages"`
-	Tools    []oaTool    `json:"tools,omitempty"`
-	Stream   bool        `json:"stream"`
+	Model           string           `json:"model"`
+	Messages        []oaMessage      `json:"messages"`
+	Tools           []oaTool         `json:"tools,omitempty"`
+	Stream          bool             `json:"stream"`
+	StreamOptions   *oaStreamOptions `json:"stream_options,omitempty"`
+	Thinking        *oaThinking      `json:"thinking,omitempty"`
+	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
+	MaxTokens       int              `json:"max_tokens,omitempty"`
+}
+
+type oaStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+type oaThinking struct {
+	Type string `json:"type"`
 }
 
 type oaMessage struct {
-	Role       string       `json:"role"`
-	Content    *string      `json:"content,omitempty"`
-	ToolCalls  []oaToolCall `json:"tool_calls,omitempty"`
-	ToolCallID *string      `json:"tool_call_id,omitempty"`
+	Role             string       `json:"role"`
+	Content          any          `json:"content,omitempty"`
+	ReasoningContent *string      `json:"reasoning_content,omitempty"`
+	ToolCalls        []oaToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       *string      `json:"tool_call_id,omitempty"`
+}
+
+type oaContentPart struct {
+	Type     string      `json:"type"`
+	Text     string      `json:"text,omitempty"`
+	ImageURL *oaImageURL `json:"image_url,omitempty"`
+}
+
+type oaImageURL struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
 }
 
 type oaToolCall struct {
@@ -469,13 +618,32 @@ type oaError struct {
 }
 
 type oaUsage struct {
-	PromptTokens        int                `json:"prompt_tokens,omitempty"`
-	CompletionTokens    int                `json:"completion_tokens,omitempty"`
-	PromptTokensDetails promptTokensDetail `json:"prompt_tokens_details"`
+	PromptTokens        int `json:"prompt_tokens,omitempty"`
+	CompletionTokens    int `json:"completion_tokens,omitempty"`
+	PromptTokensDetails struct {
+		CachedTokens int `json:"cached_tokens,omitempty"`
+	} `json:"prompt_tokens_details"`
+	PromptCacheHitTokens    int `json:"prompt_cache_hit_tokens,omitempty"`
+	PromptCacheMissTokens   int `json:"prompt_cache_miss_tokens,omitempty"`
+	CompletionTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+	} `json:"completion_tokens_details"`
 }
 
-type promptTokensDetail struct {
-	CachedTokens int `json:"cached_tokens,omitempty"`
+func (u oaUsage) cached() int {
+	if u.PromptTokensDetails.CachedTokens != 0 {
+		return u.PromptTokensDetails.CachedTokens
+	}
+	return u.PromptCacheHitTokens
+}
+
+func (u oaUsage) usage() Usage {
+	return Usage{
+		Input:       u.PromptTokens,
+		Output:      u.CompletionTokens,
+		CachedInput: u.cached(),
+		Reasoning:   u.CompletionTokensDetails.ReasoningTokens,
+	}
 }
 
 type oaStreamChunk struct {
@@ -489,8 +657,9 @@ type oaStreamChoice struct {
 }
 
 type oaDeltaMessage struct {
-	Content   *string           `json:"content,omitempty"`
-	ToolCalls []oaToolCallDelta `json:"tool_calls,omitempty"`
+	Content          *string           `json:"content,omitempty"`
+	ReasoningContent *string           `json:"reasoning_content,omitempty"`
+	ToolCalls        []oaToolCallDelta `json:"tool_calls,omitempty"`
 }
 
 type oaToolCallDelta struct {

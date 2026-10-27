@@ -22,12 +22,12 @@ curl -fsSL https://github.com/3-lines-studio/ax/releases/latest/download/install
 
 ```sh
 export ACPI_AX_PATH=ax                              # default: ax (must be in PATH)
-export ACPI_MODEL=deepseek-v4-flash
+export ACPI_MODEL=deepseek-flash
 export ACPI_BASE_URL=https://api.deepseek.com
 export ACPI_SYSTEM_FILE=./prompt.md
 export ACPI_SESSION_DIR=./data/sessions
 export AX_TOOLS="wax bqx pgx fsx bashx skillx"       # read directly by ax, not acpi
-export OPENAI_API_KEY=...                            # or whatever ax's config expects
+export DEEPSEEK_API_KEY=...                          # or whatever ax's config expects
 acpi
 ```
 

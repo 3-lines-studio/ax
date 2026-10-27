@@ -26,6 +26,7 @@ While AX runs, stdin accepts JSONL controls:
 
 ```json
 {"type":"assistant_delta","text":"partial text"}
+{"type":"reasoning_delta","text":"partial reasoning"}
 {"type":"assistant_done"}
 {"type":"tool_start","id":"call_1","name":"read","arguments":"{\"path\":\"main.go\"}"}
 {"type":"tool_delta","id":"call_1","text":"partial output"}
@@ -39,6 +40,25 @@ While AX runs, stdin accepts JSONL controls:
 ```
 
 AX emits exactly one final `done` event. Outcomes are `done`, `cancelled`, `compact`, `max_turns`, or `failed`. Failed runs exit non-zero.
+
+`reasoning_delta` carries the model's thinking text. It arrives before and
+separately from `assistant_delta`; clients that only render the answer can
+ignore it. `assistant_done` closes the turn in either case.
+
+## Message content
+
+`message` events carry the stored `Message`: `Role`, `Content`, optional
+`ReasoningContent`, optional `ContentParts` and optional `ToolCalls`. A user
+message with images has `ContentParts` with `text` and `image` blocks plus a
+plain-text `Content` rendering; `image` blocks reference a session blob or an
+http(s) URL. A tool message carries `ToolCallID`.
+
+## Durable session log
+
+With `--session FILE`, AX appends the run to a JSONL log instead of keeping it
+only in memory. The log is the recovery contract described in
+[session.md](session.md): append-only, fsynced per entry, and resumed by the
+next invocation with the same `FILE`.
 
 ## External CLI tools
 

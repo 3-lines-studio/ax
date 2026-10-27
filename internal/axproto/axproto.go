@@ -19,6 +19,7 @@ const Version = 1
 const (
 	TypeProtocol       = "protocol"
 	TypeAssistantDelta = "assistant_delta"
+	TypeReasoningDelta = "reasoning_delta"
 	TypeAssistantDone  = "assistant_done"
 	TypeToolStart      = "tool_start"
 	TypeToolDelta      = "tool_delta"
@@ -47,4 +48,13 @@ type ToolSpec struct {
 	Description string          `json:"description"`
 	Parameters  json.RawMessage `json:"parameters"`
 	Snippet     string          `json:"snippet,omitempty"`
+	// Sequential asks the engine to run this tool alone, in call order, when
+	// it appears in a batch. Mutating tools set it so they never race.
+	Sequential bool `json:"sequential,omitempty"`
+	// Timeout is a per-call limit in seconds. Zero means the engine default.
+	Timeout int `json:"timeout,omitempty"`
+	// Replay is "safe" when re-running an interrupted call has no side
+	// effects. The engine still reports interrupted calls instead of
+	// replaying them automatically; the field records intent for hosts.
+	Replay string `json:"replay,omitempty"`
 }

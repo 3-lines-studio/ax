@@ -7,9 +7,12 @@ import (
 )
 
 type botConfig struct {
-	Model   string   `toml:"model"`
-	BaseURL string   `toml:"base_url"`
-	Tools   []string `toml:"tools"`
+	Model           string   `toml:"model"`
+	BaseURL         string   `toml:"base_url"`
+	Tools           []string `toml:"tools"`
+	Thinking        *bool    `toml:"thinking"`
+	ReasoningEffort string   `toml:"reasoning_effort"`
+	MaxTokens       int      `toml:"max_tokens"`
 }
 
 // botCtx is what the engine needs from the Botdir conventions.
@@ -35,6 +38,19 @@ func mergeBotConfig(fc fileConfig, bc botConfig) fileConfig {
 	}
 	if len(bc.Tools) > 0 {
 		fc.tools = strings.Join(bc.Tools, " ")
+	}
+	if bc.Thinking != nil {
+		if *bc.Thinking {
+			fc.thinking = "on"
+		} else {
+			fc.thinking = "off"
+		}
+	}
+	if bc.ReasoningEffort != "" {
+		fc.effort = bc.ReasoningEffort
+	}
+	if bc.MaxTokens > 0 {
+		fc.maxTokens = bc.MaxTokens
 	}
 	return fc
 }

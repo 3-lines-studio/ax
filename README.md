@@ -36,13 +36,14 @@ Linux x86-64/ARM64 and macOS ARM64, all SHA-256 verified.
 ## Quick start
 
 ```sh
-OPENAI_API_KEY=... ax "explain this repository"
+DEEPSEEK_API_KEY=... ax "explain this repository"
 AX_TOOLS="fsx bashx skillx" ax
 ```
 
-Any OpenAI-compatible endpoint works (`-base https://…`: OpenRouter, DeepSeek,
-Ollama, vLLM). `ax` has no built-in tools: every capability is an explicit
-external provider.
+`ax` defaults to DeepSeek (`deepseek-flash` at `https://api.deepseek.com`) and
+accepts any OpenAI-compatible endpoint with `-base` (OpenAI, OpenRouter, Ollama,
+vLLM). `ax` has no built-in tools: every capability is an explicit external
+provider.
 
 ## Programs
 

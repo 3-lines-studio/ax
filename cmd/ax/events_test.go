@@ -116,7 +116,7 @@ func TestEventSinkEmitsAssistantAndTool(t *testing.T) {
 func TestEventSinkTokensSetsLastUsage(t *testing.T) {
 	sink := &eventSink{model: "m"}
 	out := captureStdout(t, func() { sink.tokens(3, 4, 5) })
-	if sink.lastUsage == nil || *sink.lastUsage != (Usage{3, 4, 5}) {
+	if sink.lastUsage == nil || *sink.lastUsage != (Usage{Input: 3, Output: 4, CachedInput: 5}) {
 		t.Errorf("lastUsage = %+v", sink.lastUsage)
 	}
 	lines := decodeLines(t, out)
@@ -125,51 +125,71 @@ func TestEventSinkTokensSetsLastUsage(t *testing.T) {
 	}
 }
 
-func TestEventSinkSessionFlushOnRecord(t *testing.T) {
+func TestEventSinkPersistsMessages(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	sink := &eventSink{session: path, model: "m"}
-	sink.record(Message{Role: "user", Content: "hello"})
-	entries, err := loadPath(path)
+	log, err := openSessionLog(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Message == nil || entries[0].Message.Content != "hello" {
-		t.Errorf("entries = %+v", entries)
+	defer func() { _ = log.close() }()
+	sink := &eventSink{log: log, runID: "r1", model: "m", calls: map[string]ToolCall{}}
+	assistant := Message{Role: "assistant", Content: "answer", ReasoningContent: "because"}
+	sink.assistant(0, assistant, Usage{Input: 1, Output: 2, CachedInput: 1})
+	if err := log.append(sessionEntry{Type: entryRunEnd, RunID: "r1", Outcome: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	entries := mustLoad(t, path)
+	if len(entries) != 3 {
+		t.Fatalf("entries = %+v", entries)
+	}
+	if entries[0].Type != entryMessage || entries[0].Message == nil || entries[0].Message.ReasoningContent != "because" {
+		t.Errorf("message entry = %+v", entries[0])
+	}
+	if entries[1].Type != entryUsage || entries[1].Usage == nil || entries[1].Usage.CachedInput != 1 {
+		t.Errorf("usage entry = %+v", entries[1])
+	}
+	if entries[2].Type != entryRunEnd || entries[2].Outcome != "done" {
+		t.Errorf("run_end = %+v", entries[2])
 	}
 }
 
-func TestEventSinkHoldsToolBatchUntilComplete(t *testing.T) {
+func TestEventSinkPersistsToolIntentAndResult(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	sink := &eventSink{session: path, model: "m"}
-	sink.record(Message{Role: "user", Content: "hello"})
-	sink.record(Message{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Name: "bash"}}})
-	entriesAfterAssistant, _ := loadPath(path)
-	if len(entriesAfterAssistant) != 1 {
-		t.Errorf("assistant should not flush until results, got %d", len(entriesAfterAssistant))
-	}
-	sink.record(Message{Role: "tool", Content: "out", ToolCallID: "c1"})
-	entries, err := loadPath(path)
+	log, err := openSessionLog(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	msgs := contextMessages(entries)
-	if len(msgs) != 3 {
-		t.Fatalf("msgs = %+v", msgs)
+	defer func() { _ = log.close() }()
+	sink := &eventSink{log: log, runID: "r1", model: "m", calls: map[string]ToolCall{}}
+	call := ToolCall{ID: "c1", Name: "bash", Arguments: "{}"}
+	sink.toolStart(call)
+	sink.tool(0, Message{Role: "tool", Content: "out", ToolCallID: "c1"})
+	entries := mustLoad(t, path)
+	if len(entries) != 2 || entries[0].Type != entryToolIntent || entries[0].Call == nil {
+		t.Fatalf("entries = %+v", entries)
 	}
-	if msgs[2].Role != "tool" || msgs[2].ToolCallID != "c1" {
-		t.Errorf("last = %+v", msgs[2])
+	if entries[1].Type != entryToolResult || entries[1].Call == nil || entries[1].Call.ID != "c1" || entries[1].Output != "out" {
+		t.Errorf("tool result = %+v", entries[1])
 	}
 }
 
-func TestEventSinkFinalizeWritesRest(t *testing.T) {
+func TestEventSinkPersistsPartial(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	sink := &eventSink{session: path, model: "m"}
-	sink.record(Message{Role: "user", Content: "hello"})
-	full := []Message{{Role: "user", Content: "hello"}, {Role: "assistant", Content: "unexpected tail"}}
-	sink.finalize(full, 0)
-	msgs := contextMessages(mustLoad(t, path))
-	if len(msgs) != 2 || msgs[1].Content != "unexpected tail" {
-		t.Errorf("msgs = %+v", msgs)
+	log, err := openSessionLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = log.close() }()
+	sink := &eventSink{log: log, runID: "r1", model: "m", calls: map[string]ToolCall{}}
+	sink.partialContent.WriteString(strings.Repeat("x", 5000))
+	sink.maybeFlushPartial()
+	entries := mustLoad(t, path)
+	if len(entries) != 1 || entries[0].Type != entryAssistantPartial || entries[0].Message == nil {
+		t.Fatalf("entries = %+v", entries)
+	}
+	state := deriveSession(entries)
+	if len(state.Messages) != 0 || state.LastPartial == nil || len(state.LastPartial.Content) != 5000 {
+		t.Errorf("state = %+v", state)
 	}
 }
 

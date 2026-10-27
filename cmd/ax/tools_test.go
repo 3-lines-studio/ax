@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 const mockGreetTool = `#!/bin/sh
@@ -95,23 +98,23 @@ func writeMockTool(t *testing.T, content string) string {
 	return path
 }
 
-func TestBoundedBufferTruncates(t *testing.T) {
-	b := &boundedBuffer{limit: 5}
-	if n, _ := b.Write([]byte("abc")); n != 3 || string(b.buf) != "abc" || b.exceeded {
-		t.Errorf("first write n=%d buf=%q exceeded=%v", n, b.buf, b.exceeded)
+func TestTailBufferKeepsLastBytes(t *testing.T) {
+	b := &tailBuffer{limit: 5}
+	if n, _ := b.Write([]byte("abc")); n != 3 || b.String() != "abc" || b.Truncated() {
+		t.Errorf("first write n=%d buf=%q truncated=%v", n, b.String(), b.Truncated())
 	}
-	if n, _ := b.Write([]byte("def")); n != 3 || !b.exceeded || string(b.buf) != "abc" {
-		t.Errorf("overflow write n=%d buf=%q exceeded=%v", n, b.buf, b.exceeded)
+	if n, _ := b.Write([]byte("def")); n != 3 || b.String() != "bcdef" || !b.Truncated() {
+		t.Errorf("second write n=%d buf=%q truncated=%v", n, b.String(), b.Truncated())
 	}
-	if n, _ := b.Write([]byte("more")); n != 4 || string(b.buf) != "abc" {
-		t.Errorf("post-exceed write n=%d buf=%q", n, b.buf)
+	if n, _ := b.Write([]byte("0123456789")); n != 10 || b.String() != "56789" || !b.Truncated() {
+		t.Errorf("big write n=%d buf=%q", n, b.String())
 	}
 }
 
 func TestBoundedOutputExitCode(t *testing.T) {
 	path := writeMockTool(t, mockExit3)
 	cmd := exec.Command(path)
-	code, stdout, stderr, err := boundedOutput(cmd, 1024)
+	code, stdout, stderr, _, err := boundedDescribe(cmd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +129,7 @@ func TestBoundedOutputExitCode(t *testing.T) {
 func TestBoundedOutputSuccess(t *testing.T) {
 	path := writeMockTool(t, mockNoDescribeOut)
 	cmd := exec.Command(path)
-	code, stdout, _, err := boundedOutput(cmd, 1024)
+	code, stdout, _, _, err := boundedDescribe(cmd)
 	if err != nil || code != 0 {
 		t.Fatalf("code=%d err=%v", code, err)
 	}
@@ -137,7 +140,7 @@ func TestBoundedOutputSuccess(t *testing.T) {
 
 func TestBoundedOutputMissingCommand(t *testing.T) {
 	cmd := exec.Command("/nonexistent/tool/describe")
-	_, _, _, err := boundedOutput(cmd, 1024)
+	_, _, _, _, err := boundedDescribe(cmd)
 	if err == nil {
 		t.Fatal("expected start error")
 	}
@@ -157,7 +160,7 @@ func TestTryExternalToolsSingle(t *testing.T) {
 	if tool.Name != "greet" || tool.Description != "Greets the user" || tool.Snippet != "greets" {
 		t.Errorf("tool = %+v", tool)
 	}
-	if got := tool.Run("world", nil); got != "hello world" {
+	if got := runTool(context.Background(), tools, ToolCall{Name: "greet", Arguments: "{}"}, nil); got != "hello {}" {
 		t.Errorf("run = %q", got)
 	}
 }
@@ -239,7 +242,7 @@ func TestTryExternalToolsCommandNotFound(t *testing.T) {
 
 func TestRunExternalToolSuccess(t *testing.T) {
 	path := writeMockTool(t, mockGreetTool)
-	got := runExternalTool(path, "greet", "world", t.TempDir())
+	got := runExternalTool(context.Background(), path, "greet", "world", t.TempDir(), 5)
 	if got != "hello world" {
 		t.Errorf("run = %q", got)
 	}
@@ -247,7 +250,7 @@ func TestRunExternalToolSuccess(t *testing.T) {
 
 func TestRunExternalToolStderrOnFailure(t *testing.T) {
 	path := writeMockTool(t, mockGreetTool)
-	got := runExternalTool(path, "other", "x", t.TempDir())
+	got := runExternalTool(context.Background(), path, "other", "x", t.TempDir(), 5)
 	if !strings.Contains(got, "unknown tool other") {
 		t.Errorf("run = %q", got)
 	}
@@ -255,14 +258,14 @@ func TestRunExternalToolStderrOnFailure(t *testing.T) {
 
 func TestRunExternalToolNoOutput(t *testing.T) {
 	path := writeMockTool(t, mockEmptyRunOut)
-	got := runExternalTool(path, "greet", "", t.TempDir())
+	got := runExternalTool(context.Background(), path, "greet", "", t.TempDir(), 5)
 	if !strings.Contains(got, "returned no output") {
 		t.Errorf("run = %q", got)
 	}
 }
 
 func TestRunExternalToolMissingCommand(t *testing.T) {
-	got := runExternalTool("/no/such/binary", "greet", "", t.TempDir())
+	got := runExternalTool(context.Background(), "/no/such/binary", "greet", "", t.TempDir(), 1)
 	if !strings.HasPrefix(got, "error:") {
 		t.Errorf("run = %q", got)
 	}
@@ -274,7 +277,7 @@ func TestRunToolDispatch(t *testing.T) {
 		progress("chunk1")
 		return "ok:" + arguments
 	}}
-	got := runTool([]Tool{tool}, ToolCall{Name: "echo", Arguments: "a"}, func(s string) { progressSeen = append(progressSeen, s) })
+	got := runTool(context.Background(), []Tool{tool}, ToolCall{Name: "echo", Arguments: "a"}, func(s string) { progressSeen = append(progressSeen, s) })
 	if got != "ok:a" {
 		t.Errorf("run = %q", got)
 	}
@@ -284,7 +287,7 @@ func TestRunToolDispatch(t *testing.T) {
 }
 
 func TestRunToolUnknown(t *testing.T) {
-	if got := runTool(nil, ToolCall{Name: "nope"}, nil); got != "error: unknown tool: nope" {
+	if got := runTool(context.Background(), nil, ToolCall{Name: "nope"}, nil); got != "error: unknown tool: nope" {
 		t.Errorf("run = %q", got)
 	}
 }
@@ -314,5 +317,120 @@ func TestStatusStringSignal(t *testing.T) {
 	}
 	if got := statusString(err); !strings.HasPrefix(got, "signal:") {
 		t.Errorf("statusString(signal) = %q", got)
+	}
+}
+
+func TestSchemaValidation(t *testing.T) {
+	schema, err := compileSchema(json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"limit":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.validate(`{"path":"a.txt"}`); err != nil {
+		t.Errorf("valid args rejected: %v", err)
+	}
+	if err := schema.validate(`{}`); err == nil || !strings.Contains(err.Error(), "required") {
+		t.Errorf("missing required = %v", err)
+	}
+	if err := schema.validate(`{"path":1}`); err == nil || !strings.Contains(err.Error(), "expected string") {
+		t.Errorf("wrong type = %v", err)
+	}
+	if err := schema.validate(`{"path":"a","limit":0}`); err == nil || !strings.Contains(err.Error(), "below") {
+		t.Errorf("minimum = %v", err)
+	}
+	if err := schema.validate(`{"path":"a","extra":true}`); err == nil || !strings.Contains(err.Error(), "unexpected") {
+		t.Errorf("additionalProperties = %v", err)
+	}
+	if err := schema.validate(`not json`); err == nil {
+		t.Error("invalid JSON accepted")
+	}
+}
+
+func TestRunToolRejectsInvalidArguments(t *testing.T) {
+	schema, err := compileSchema(json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	tool := Tool{Name: "bash", Validate: schema.validate, Run: func(arguments string, progress func(string)) string {
+		called = true
+		return "ran"
+	}}
+	got := runTool(context.Background(), []Tool{tool}, ToolCall{Name: "bash", Arguments: "{}"}, nil)
+	if called {
+		t.Fatal("tool ran with invalid arguments")
+	}
+	if !strings.Contains(got, "invalid arguments") {
+		t.Errorf("run = %q", got)
+	}
+}
+
+func TestRunExternalToolTimeout(t *testing.T) {
+	path := writeMockTool(t, "#!/bin/sh\nsleep 5\necho done\n")
+	start := time.Now()
+	got := runExternalTool(context.Background(), path, "x", "{}", t.TempDir(), 1)
+	if !strings.Contains(got, "timed out") {
+		t.Errorf("run = %q", got)
+	}
+	if time.Since(start) > 4*time.Second {
+		t.Errorf("timeout took %s", time.Since(start))
+	}
+}
+
+func TestRunExternalToolCancellation(t *testing.T) {
+	path := writeMockTool(t, "#!/bin/sh\nsleep 5\necho done\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	got := runExternalTool(ctx, path, "x", "{}", t.TempDir(), 10)
+	if !strings.Contains(got, "cancelled") {
+		t.Errorf("run = %q", got)
+	}
+	if time.Since(start) > 4*time.Second {
+		t.Errorf("cancellation took %s", time.Since(start))
+	}
+}
+
+func TestRunExternalToolBoundsOutput(t *testing.T) {
+	path := writeMockTool(t, "#!/bin/sh\nhead -c 100000 /dev/zero | tr '\\0' x\necho END\n")
+	got := runExternalTool(context.Background(), path, "x", "{}", t.TempDir(), 5)
+	if len(got) > maxOutput {
+		t.Errorf("output length = %d, want <= %d", len(got), maxOutput)
+	}
+	if !strings.HasSuffix(got, "END\n") {
+		t.Errorf("tail missing: %q", got[len(got)-20:])
+	}
+}
+
+const mockSequentialTool = `#!/bin/sh
+if [ "$1" = "describe" ]; then
+  printf '%s\n' '{"name":"mutate","description":"mutates","parameters":{"type":"object"},"sequential":true,"timeout":7,"replay":"safe"}'
+  exit 0
+fi
+if [ "$1" = "run" ]; then
+  cat >/dev/null
+  printf 'ok'
+  exit 0
+fi
+exit 2
+`
+
+func TestTryExternalToolsReadsExecutionHints(t *testing.T) {
+	path := writeMockTool(t, mockSequentialTool)
+	tools, err := tryExternalTools(path, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("tools = %+v", tools)
+	}
+	tool := tools[0]
+	if !tool.Sequential || tool.Timeout != 7 || tool.Replay != "safe" {
+		t.Errorf("tool = %+v", tool)
+	}
+	if got := runTool(context.Background(), tools, ToolCall{Name: "mutate", Arguments: "{}"}, nil); got != "ok" {
+		t.Errorf("run = %q", got)
 	}
 }

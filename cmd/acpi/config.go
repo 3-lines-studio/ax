@@ -16,10 +16,12 @@ type Config struct {
 }
 
 func loadConfig() (*Config, error) {
+	// Model and Base are empty by default: ax applies its own defaults
+	// (DeepSeek) and bot.toml, so acpi does not pin a provider.
 	cfg := &Config{
 		AxPath:     envOr("ACPI_AX_PATH", "ax"),
-		Model:      envOr("ACPI_MODEL", "gpt-4.1-mini"),
-		Base:       envOr("ACPI_BASE_URL", "https://api.openai.com/v1"),
+		Model:      os.Getenv("ACPI_MODEL"),
+		Base:       os.Getenv("ACPI_BASE_URL"),
 		SessionDir: envOr("ACPI_SESSION_DIR", "data/sessions"),
 	}
 	if systemFile := os.Getenv("ACPI_SYSTEM_FILE"); systemFile != "" {
