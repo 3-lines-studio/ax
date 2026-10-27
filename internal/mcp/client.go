@@ -151,6 +151,12 @@ func (c *Client) negotiate(ctx context.Context) error {
 		return nil
 	}
 
+	// A missing login is not something initialize will fix: report it as is.
+	var authErr *AuthRequiredError
+	if errors.As(discoverErr, &authErr) {
+		return discoverErr
+	}
+
 	// Older servers do not know server/discover. Fall back to the initialize
 	// handshake; the error from discover is only reported if initialize also
 	// fails.

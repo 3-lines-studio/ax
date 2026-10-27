@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -113,6 +114,8 @@ type mcpSource struct {
 	tools        []mcp.Tool
 	instructions string
 	stale        bool
+	lastErr      error
+	authRequired bool
 }
 
 type mcpCache struct {
@@ -139,6 +142,20 @@ func newMCPSource(cfg mcp.ServerConfig, cacheDir string, refresh bool) *mcpSourc
 }
 
 func (s *mcpSource) Name() string { return s.cfg.Name }
+
+// RequiresAuth reports whether the last connect failed for lack of a login.
+func (s *mcpSource) RequiresAuth() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.authRequired
+}
+
+// Failure is the connect error behind a stale cache entry, if any.
+func (s *mcpSource) Failure() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastErr
+}
 
 func (s *mcpSource) Description() string {
 	s.mu.Lock()
@@ -167,6 +184,11 @@ func (s *mcpSource) List(ctx context.Context) ([]catalog.Tool, error) {
 		return nil, err
 	}
 	if err := client.Connect(ctx); err != nil {
+		if errors.Is(err, mcp.ErrLoginRequired) {
+			s.authRequired = true
+			s.tools = nil
+		}
+		s.lastErr = err
 		if cached, ok := s.readCache(); ok {
 			s.tools = cached.Tools
 			s.instructions = cached.Instructions
@@ -178,6 +200,7 @@ func (s *mcpSource) List(ctx context.Context) ([]catalog.Tool, error) {
 	tools, err := client.ListTools(ctx)
 	if err != nil {
 		_ = client.Close()
+		s.lastErr = err
 		if cached, ok := s.readCache(); ok {
 			s.tools = cached.Tools
 			s.instructions = cached.Instructions
@@ -189,6 +212,8 @@ func (s *mcpSource) List(ctx context.Context) ([]catalog.Tool, error) {
 	s.client = client
 	s.tools = tools
 	s.instructions = client.Instructions()
+	s.authRequired = false
+	s.lastErr = nil
 	s.writeCache(client.TTL())
 	return s.mapped(), nil
 }
@@ -382,7 +407,7 @@ func buildSources(fc fileConfig, bot *botCtx, refresh bool) ([]catalog.Source, e
 		name := localSourceName(command, used)
 		sources = append(sources, newLocalSource(command, name, bot.Workspace))
 	}
-	configs, err := resolveMCPEntries(fc.mcp, bot.Workspace)
+	configs, err := resolveMCPEntries(fc.mcp, bot.Workspace, mcpAuthDir(bot))
 	if err != nil {
 		for _, source := range sources {
 			_ = source.Close()
@@ -390,17 +415,44 @@ func buildSources(fc fileConfig, bot *botCtx, refresh bool) ([]catalog.Source, e
 		return nil, err
 	}
 	cacheDir := filepath.Join(bot.DataRoot, "state", "ax", "mcp")
-	for _, cfg := range configs {
-		if used[cfg.Name] {
+	for _, resolved := range configs {
+		if used[resolved.name] {
 			for _, source := range sources {
 				_ = source.Close()
 			}
-			return nil, fmt.Errorf("mcp: server name %q collides with another source", cfg.Name)
+			return nil, fmt.Errorf("mcp: server name %q collides with another source", resolved.name)
 		}
-		used[cfg.Name] = true
-		sources = append(sources, newMCPSource(cfg, cacheDir, refresh))
+		used[resolved.name] = true
+		if resolved.err != nil {
+			sources = append(sources, newUnavailableSource(resolved.name, resolved.err))
+			continue
+		}
+		sources = append(sources, newMCPSource(resolved.cfg, cacheDir, refresh))
 	}
 	return sources, nil
+}
+
+// unavailableSource keeps a misconfigured server visible in the menu instead
+// of aborting the whole catalog. It carries the reason in List and Call.
+type unavailableSource struct {
+	name string
+	err  error
+}
+
+func newUnavailableSource(name string, err error) *unavailableSource {
+	return &unavailableSource{name: name, err: err}
+}
+
+func (s *unavailableSource) Name() string        { return s.name }
+func (s *unavailableSource) Description() string { return "Misconfigured MCP server" }
+func (s *unavailableSource) Close() error        { return nil }
+
+func (s *unavailableSource) List(context.Context) ([]catalog.Tool, error) {
+	return nil, s.err
+}
+
+func (s *unavailableSource) Call(context.Context, string, json.RawMessage) (catalog.Result, error) {
+	return catalog.Result{}, s.err
 }
 
 func localCommands(fc fileConfig) []string {

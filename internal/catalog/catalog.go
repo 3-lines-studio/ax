@@ -16,6 +16,7 @@ type Catalog struct {
 	byName   map[string][]int
 	byServer map[string][]int
 	errs     map[string]string
+	auth     map[string]bool
 	loaded   bool
 	mu       sync.Mutex
 }
@@ -28,6 +29,7 @@ func New(sources []Source) *Catalog {
 		byName:   map[string][]int{},
 		byServer: map[string][]int{},
 		errs:     map[string]string{},
+		auth:     map[string]bool{},
 	}
 }
 
@@ -69,6 +71,9 @@ func (c *Catalog) Load(ctx context.Context) {
 				message = "catalog load cancelled: " + ctx.Err().Error()
 			}
 			c.errs[name] = oneLine(message, 160)
+			if status, ok := result.source.(AuthStatus); ok && status.RequiresAuth() {
+				c.auth[name] = true
+			}
 			continue
 		}
 		for _, tool := range result.tools {
@@ -132,10 +137,11 @@ func (c *Catalog) Servers() []ServerSummary {
 	out := make([]ServerSummary, 0, len(c.sources))
 	for _, source := range c.sources {
 		out = append(out, ServerSummary{
-			Name:        source.Name(),
-			Description: source.Description(),
-			Tools:       len(c.byServer[source.Name()]),
-			Error:       c.errs[source.Name()],
+			Name:         source.Name(),
+			Description:  source.Description(),
+			Tools:        len(c.byServer[source.Name()]),
+			Error:        c.errs[source.Name()],
+			AuthRequired: c.auth[source.Name()],
 		})
 	}
 	return out
@@ -143,10 +149,17 @@ func (c *Catalog) Servers() []ServerSummary {
 
 // ServerSummary is the menu view of one source.
 type ServerSummary struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Tools       int    `json:"tools"`
-	Error       string `json:"error,omitempty"`
+	Name         string `json:"name"`
+	Description  string `json:"description,omitempty"`
+	Tools        int    `json:"tools"`
+	Error        string `json:"error,omitempty"`
+	AuthRequired bool   `json:"auth_required,omitempty"`
+}
+
+// AuthStatus is an optional Source interface: a source whose last failure was
+// a missing login reports it so the menu can name the exact command.
+type AuthStatus interface {
+	RequiresAuth() bool
 }
 
 // Lookup finds a tool by exact id, or by a unique bare tool name.

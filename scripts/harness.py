@@ -598,6 +598,42 @@ def oneshot_direct_tools(h, ax):
 
 
 @case
+def mcp_add_from_registry(h, ax):
+    p = h.oneshot(ax, ["mcp", "add", "sentry"])
+    check(p.returncode == 0, "add exit %s: %s" % (p.returncode, p.stderr[-500:]))
+    toml = (h.work / "bot.toml").read_text()
+    check('name = "sentry"' in toml, "bot.toml missing server: %s" % toml)
+    check("mcp.sentry.dev" in toml, "bot.toml missing url: %s" % toml)
+    listed = h.oneshot(ax, ["mcp", "list", "--json"])
+    check(listed.returncode == 0, "list exit %s: %s" % (listed.returncode, listed.stderr[-500:]))
+    servers = json.loads(listed.stdout)
+    check(len(servers) == 1 and servers[0]["name"] == "sentry", "listed: %s" % servers)
+    check(servers[0]["auth"] == "oauth", "auth kind wrong: %s" % servers)
+    check(servers[0]["status"] == "login required", "status wrong: %s" % servers)
+
+
+@case
+def mcp_import_document(h, ax):
+    document = {
+        "mcpServers": {
+            "linear": {"type": "http", "url": "https://mcp.linear.app/mcp"},
+            "files": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-memory"]},
+            "gdocs": {"url": "https://api.cursor.com/rest-mcp/google-docs/mcp"},
+        }
+    }
+    path = h.work / "mcp.json"
+    path.write_text(json.dumps(document))
+    p = h.oneshot(ax, ["mcp", "import", str(path)])
+    check(p.returncode == 0, "import exit %s: %s" % (p.returncode, p.stderr[-500:]))
+    check("Cursor-hosted" in p.stderr, "no skip reason: %s" % p.stderr[-500:])
+    toml = (h.work / "bot.toml").read_text()
+    check('name = "linear"' in toml and 'name = "files"' in toml, "bot.toml: %s" % toml)
+    check("cursor.com" not in toml, "imported a Cursor-only endpoint: %s" % toml)
+    again = h.oneshot(ax, ["mcp", "import", str(path)])
+    check("already configured" in again.stderr, "second import: %s" % again.stderr[-500:])
+
+
+@case
 def oneshot_tool_workdir(h, ax):
     with h.mock(WRITE_FILE_SCENARIO) as srv:
         p = h.oneshot(

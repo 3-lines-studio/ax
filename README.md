@@ -44,8 +44,9 @@ ax catalog                     # what is on the plate
 `ax` defaults to DeepSeek (`deepseek-flash` at `https://api.deepseek.com`) and
 accepts any OpenAI-compatible endpoint with `-base` (OpenAI, OpenRouter, Ollama,
 vLLM). Capabilities come from a catalog: local providers (`AX_TOOLS`) and MCP
-servers (`[[mcp]]` in `bot.toml`). The model sees two tools, `search` and
-`execute`, so adding integrations does not grow the prompt. See
+servers (`[[mcp]]` in `bot.toml`, added with `ax mcp add` or imported from an
+`mcp.json`/Cursor plugin, OAuth included). The model sees two tools, `search`
+and `execute`, so adding integrations does not grow the prompt. See
 [docs/mcp.md](docs/mcp.md).
 
 ## Programs

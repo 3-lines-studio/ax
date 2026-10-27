@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/3-lines-studio/ax/internal/catalog"
+	"github.com/3-lines-studio/ax/internal/mcp"
 )
 
 type testSource struct {
@@ -81,17 +83,19 @@ func TestCatalogSystemPrompt(t *testing.T) {
 func TestResolveMCPEntries(t *testing.T) {
 	t.Setenv("GH_TOKEN", "secret")
 	t.Setenv("LINEAR_TOKEN", "linear-secret")
-	configs, err := resolveMCPEntries([]mcpEntry{
+	authDir := t.TempDir()
+	resolved, err := resolveMCPEntries([]mcpEntry{
 		{Name: "GitHub", Command: "npx", Args: []string{"-y", "server"}, PassEnv: []string{"GH_TOKEN"}, Env: map[string]string{"LOG": "debug"}, Timeout: 12},
 		{Name: "linear", URL: "https://mcp.linear.app/mcp", TokenEnv: "LINEAR_TOKEN"},
-	}, "/work")
+		{Name: "sentry", URL: "https://mcp.sentry.dev/mcp"},
+	}, "/work", authDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(configs) != 2 {
-		t.Fatalf("configs = %+v", configs)
+	if len(resolved) != 3 {
+		t.Fatalf("resolved = %+v", resolved)
 	}
-	github := configs[0]
+	github := resolved[0].cfg
 	if github.Name != "github" || github.Dir != "/work" || github.Timeout != 12*time.Second {
 		t.Errorf("github = %+v", github)
 	}
@@ -99,22 +103,57 @@ func TestResolveMCPEntries(t *testing.T) {
 	if !strings.Contains(env, "GH_TOKEN=secret") || !strings.Contains(env, "LOG=debug") {
 		t.Errorf("env = %v", github.Env)
 	}
-	linear := configs[1]
+	if github.Auth != nil {
+		t.Errorf("stdio server has an auth source")
+	}
+	linear := resolved[1].cfg
 	if linear.Headers["Authorization"] != "Bearer linear-secret" {
 		t.Errorf("headers = %v", linear.Headers)
+	}
+	if linear.Auth != nil {
+		t.Errorf("token server has an oauth source")
+	}
+	sentry := resolved[2].cfg
+	if sentry.Auth == nil {
+		t.Fatalf("oauth server has no token source")
+	}
+	if _, err := sentry.Auth.Token(context.Background(), false); !errors.Is(err, mcp.ErrLoginRequired) {
+		t.Errorf("token before login = %v", err)
+	}
+	if path := oauthTokenPath(authDir, "sentry"); filepath.Dir(path) != authDir {
+		t.Errorf("token path = %q", path)
+	}
+}
+
+func TestResolveMCPEntriesKeepsRuntimeFailuresPerServer(t *testing.T) {
+	t.Setenv("LINEAR_TOKEN", "")
+	resolved, err := resolveMCPEntries([]mcpEntry{
+		{Name: "linear", URL: "https://mcp.linear.app/mcp", TokenEnv: "LINEAR_TOKEN"},
+		{Name: "good", Command: "true"},
+	}, "/w", t.TempDir())
+	if err != nil {
+		t.Fatalf("structural error: %v", err)
+	}
+	if len(resolved) != 2 {
+		t.Fatalf("resolved = %+v", resolved)
+	}
+	if resolved[0].err == nil || !strings.Contains(resolved[0].err.Error(), "LINEAR_TOKEN is not set") {
+		t.Errorf("linear error = %v", resolved[0].err)
+	}
+	if resolved[1].err != nil {
+		t.Errorf("good error = %v", resolved[1].err)
 	}
 }
 
 func TestResolveMCPEntriesRejectsBadConfig(t *testing.T) {
-	t.Setenv("LINEAR_TOKEN", "")
 	cases := [][]mcpEntry{
 		{{Name: "both", Command: "x", URL: "https://x"}},
 		{{Name: "Bad Name", Command: "x"}},
 		{{Name: "dup", Command: "x"}, {Name: "dup", Command: "y"}},
-		{{Name: "linear", URL: "https://x", TokenEnv: "LINEAR_TOKEN"}},
+		{{Name: "bad-auth", URL: "https://x", Auth: "magic"}},
 	}
 	for _, entries := range cases {
-		if _, err := resolveMCPEntries(entries, "/w"); err == nil {
+		if _, err := resolveMCPEntries(entries, "/w", t.TempDir()); err == nil {
 			t.Errorf("resolveMCPEntries(%+v) succeeded", entries)
 		}
 	}
