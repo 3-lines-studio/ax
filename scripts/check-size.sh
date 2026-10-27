@@ -10,10 +10,12 @@ status=0
 
 budget() {
     case $1 in
-    ax) echo 8000000 ;;
+    # Context compaction, the MCP catalog and the OAuth client live in ax;
+    # the extra megabyte keeps room for the transport in cmd/webi.
+    ax) echo 8400000 ;;
     boti) echo 7000000 ;;
+    webi) echo 9500000 ;;
     slaxi) echo 8063000 ;;
-    acpi) echo 3750000 ;;
     fsx) echo 2970000 ;;
     bashx) echo 3200000 ;;
     attachx) echo 8000000 ;;
@@ -23,7 +25,6 @@ budget() {
     slackx) echo 7543000 ;;
     bqx) echo 24789000 ;;
     pgx) echo 10593000 ;;
-    mcpx) echo 6850000 ;;
     *)
         echo "size: no budget for $1; add one to scripts/check-size.sh" >&2
         return 1

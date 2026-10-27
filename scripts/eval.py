@@ -8,9 +8,9 @@ never on model wording. Skips cleanly (exit 0, prints SKIP) when the provider is
 not configured, so CI stays green without credentials.
 
 Configuration (env):
-  OPENAI_API_KEY    provider API key (required to run)
+  DEEPSEEK_API_KEY  provider API key (or OPENAI_API_KEY); required to run
   AX_BASE_URL       OpenAI-compatible base URL, e.g. https://api.deepseek.com/v1
-  AX_MODEL          model name, e.g. deepseek-v4-flash
+  AX_MODEL          model name, e.g. deepseek-flash
 """
 import json
 import os
@@ -72,13 +72,13 @@ class Bot:
 
     def run(self, prompt, bin_dir, session=None, extra_env=None):
         env = os.environ.copy()
-        env["OPENAI_API_KEY"] = os.environ["OPENAI_API_KEY"]
+        env["DEEPSEEK_API_KEY"] = os.environ["DEEPSEEK_API_KEY"]
         env["BOT_ROOT"] = str(self.root)
         env["AX_TOOLS"] = "fsx bashx skillx"
         env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
         for k, v in (extra_env or {}).items():
             env[k] = v
-        cmd = [str(bin_dir / "ax"), "-C", str(self.root), "--events"]
+        cmd = [str(bin_dir / "ax"), "-C", str(self.root), "-tool-mode", "direct", "--events"]
         if session:
             cmd += ["--session", session]
         cmd += [prompt]
@@ -174,9 +174,11 @@ def load_dotenv(path):
 
 def main(argv):
     load_dotenv(ROOT / ".env")
-    if not os.environ.get("OPENAI_API_KEY"):
-        print("SKIP: OPENAI_API_KEY not set — real-provider eval not run")
+    api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("SKIP: DEEPSEEK_API_KEY not set — real-provider eval not run")
         return 0
+    os.environ["DEEPSEEK_API_KEY"] = api_key
     base_url = os.environ.get("AX_BASE_URL")
     model = os.environ.get("AX_MODEL")
     if not base_url or not model:

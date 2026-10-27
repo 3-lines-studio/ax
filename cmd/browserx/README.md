@@ -1,6 +1,6 @@
 # browserx
 
-Read-only visible Chromium tool for AX.
+Visible Chromium browser tool for AX.
 
 ## Install
 

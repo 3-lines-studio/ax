@@ -2,30 +2,60 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/3-lines-studio/ax/internal/axproto"
+	"github.com/3-lines-studio/ax/internal/catalog"
 )
 
+const catalogLoadTimeout = 20 * time.Second
+
 type cliConfig struct {
-	base    string
-	model   string
-	system  string
-	dir     string
-	session string
+	base             string
+	model            string
+	system           string
+	dir              string
+	session          string
+	thinking         string
+	effort           string
+	maxTokens        int
+	images           []string
+	imageDetail      string
+	toolMode         string
+	compactAt        float64
+	compactAtSet     bool
+	contextWindow    int
+	contextWindowSet bool
+	literal          bool
 }
 
 type fileConfig struct {
-	apiKey string
-	model  string
-	base   string
-	tools  string
+	apiKey           string
+	model            string
+	base             string
+	tools            string
+	thinking         string
+	effort           string
+	maxTokens        int
+	imageDetail      string
+	toolMode         string
+	coreTools        []string
+	mcp              []mcpEntry
+	compactAt        float64
+	compactAtSet     bool
+	contextWindow    int
+	contextWindowSet bool
 }
 
 func main() {
@@ -65,17 +95,34 @@ func main() {
 	} else {
 		fc = mergeBotConfig(fc, bc)
 	}
-	cfg.base = firstNonEmpty(cfg.base, fc.base, "https://api.openai.com/v1")
-	cfg.model = firstNonEmpty(cfg.model, fc.model, "gpt-4.1-mini")
+	cfg.base = firstNonEmpty(cfg.base, fc.base, "https://api.deepseek.com")
+	cfg.model = firstNonEmpty(cfg.model, fc.model, "deepseek-flash")
+	if cfg.toolMode == "" {
+		cfg.toolMode = firstNonEmpty(fc.toolMode, "catalog")
+	}
 	bot := resolveBotCtx(botRoot)
 	_ = os.Setenv("BOT_ROOT", bot.Root)
-	if len(prompt) == 0 {
+	promptFromStdin := len(prompt) == 0
+	if promptFromStdin {
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error: read stdin")
 			os.Exit(1)
 		}
 		prompt = []string{string(data)}
+	}
+	if len(prompt) > 0 && !cfg.literal && !promptFromStdin {
+		switch prompt[0] {
+		case "catalog":
+			runCatalogCommand(fc, bot, prompt[1:])
+			return
+		case "compact":
+			runCompactCommand(cfg, fc, bot, prompt[1:])
+			return
+		case "mcp":
+			runMCPCommand(fc, bot, prompt[1:])
+			return
+		}
 	}
 	oneShotEvents(cfg, fc, bot, prompt)
 }
@@ -95,6 +142,7 @@ func parseArgs(args []string) (cliConfig, []string, error) {
 			continue
 		}
 		if a == "--" {
+			cfg.literal = true
 			rest = args[i+1:]
 			break
 		}
@@ -109,7 +157,7 @@ func parseArgs(args []string) (cliConfig, []string, error) {
 			name, inline, hasInline = stripped[:idx], stripped[idx+1:], true
 		}
 		switch name {
-		case "base", "model", "system", "C", "session":
+		case "base", "model", "system", "C", "session", "thinking", "effort", "max-tokens", "image", "image-detail", "tool-mode", "compact-at", "context-window":
 			if !hasInline {
 				i++
 				if i >= len(args) {
@@ -128,6 +176,34 @@ func parseArgs(args []string) (cliConfig, []string, error) {
 				cfg.dir = inline
 			case "session":
 				cfg.session = inline
+			case "thinking":
+				cfg.thinking = inline
+			case "effort":
+				cfg.effort = inline
+			case "max-tokens":
+				n, err := strconv.Atoi(inline)
+				if err != nil || n < 0 {
+					return cfg, nil, fmt.Errorf("invalid -max-tokens: %s", inline)
+				}
+				cfg.maxTokens = n
+			case "image":
+				cfg.images = append(cfg.images, inline)
+			case "image-detail":
+				cfg.imageDetail = inline
+			case "tool-mode":
+				cfg.toolMode = inline
+			case "compact-at":
+				value, err := strconv.ParseFloat(inline, 64)
+				if err != nil || value < 0 || value >= 1 {
+					return cfg, nil, fmt.Errorf("invalid -compact-at: %s (use 0 to disable, or a fraction between 0 and 1)", inline)
+				}
+				cfg.compactAt, cfg.compactAtSet = value, true
+			case "context-window":
+				value, err := strconv.Atoi(inline)
+				if err != nil || value < 0 {
+					return cfg, nil, fmt.Errorf("invalid -context-window: %s", inline)
+				}
+				cfg.contextWindow, cfg.contextWindowSet = value, true
 			}
 		default:
 			return cfg, nil, fmt.Errorf("flag provided but not defined: %s", a)
@@ -138,57 +214,169 @@ func parseArgs(args []string) (cliConfig, []string, error) {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, "Usage: ax [flags] [prompt]\n\nFlags:\n  -base URL    OpenAI-compatible API base URL (default \"https://api.openai.com/v1\")\n  -model NAME  model name (default \"gpt-4.1-mini\")\n  -system TEXT  system prompt override (default: built-in + bot.md)\n  -C DIR       bot directory root (default: current directory)\n  --session FILE  use an explicit session file\n  --events      emit JSONL events on stdout\n\nWith no prompt, reads the prompt from stdin.\nA prompt of the form /name [args] expands a user command from\n~/.config/ax/commands/<name>.md.\n")
+	fmt.Fprint(os.Stderr, "Usage: ax [flags] [prompt]\n\nFlags:\n  -base URL    OpenAI-compatible API base URL (default \"https://api.deepseek.com\")\n  -model NAME  model name (default \"deepseek-flash\")\n  -system TEXT  system prompt override (default: built-in + bot.md)\n  -C DIR       bot directory root (default: current directory)\n  --session FILE  append-only durable session log\n  --events      emit JSONL events on stdout\n  -thinking X  thinking mode: auto, on, off (default auto)\n  -effort X    reasoning effort: low, high, max (default max for DeepSeek)\n  -max-tokens N  maximum output tokens (default: provider default)\n  -image PATH|URL  attach an image to the prompt (repeatable)\n  -image-detail X  image detail: low, high, original, auto (default auto)\n  -tool-mode X  tool surface: catalog or direct (default catalog)\n  -compact-at X  compact when the prompt reaches this fraction of the window\n  -context-window N  context window in tokens (default 1000000)\n\nCommands:\n  ax catalog [--json] [--refresh]   print the tool catalog\n  ax compact --session FILE         summarize a session into a shorter prompt\n  ax mcp serve [--stdio]            expose the catalog to MCP hosts\n  ax mcp add|import|list            connect servers (registry, mcp.json)\n  ax mcp login|logout|doctor        OAuth sessions and diagnostics\n\nWith no prompt, reads the prompt from stdin.\nA prompt of the form /name [args] expands a user command from\n~/.config/ax/commands/<name>.md.\n")
 }
 
 func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
+	if err := validateModelOptions(cfg, fc); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(2)
+	}
+	if err := validateToolMode(cfg, fc); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(2)
+	}
+	if compactAt, window := resolveCompact(cfg, fc); compactAt >= 1 || compactAt < 0 || window < 0 {
+		fmt.Fprintf(os.Stderr, "error: invalid compaction: compact_at=%g context_window=%d (compact_at is a fraction of the window, 0 disables)\n", compactAt, window)
+		os.Exit(2)
+	}
 	printJSON(map[string]any{"type": axproto.TypeProtocol, "version": axproto.Version})
-	var history []Message
+
+	var entries []sessionEntry
 	if cfg.session != "" {
-		entries, err := loadPath(cfg.session)
+		var err error
+		entries, err = loadPath(cfg.session)
 		if err != nil {
 			eventFailure(err.Error())
 		}
-		history = contextMessages(entries)
 	}
-	history = append(history, Message{Role: "user", Content: expandPromptCommand(strings.Join(prompt, " "), axRoot())})
-	oldLen := len(history) - 1
+	state := deriveSession(entries)
+	if state.OpenRun {
+		fmt.Fprintf(os.Stderr, "warning: previous run did not finish; repaired %d interrupted tool call(s)\n", state.Repaired)
+	}
+
+	detail := firstNonEmpty(cfg.imageDetail, fc.imageDetail, "auto")
+	images, err := loadImages(cfg.images, detail, cfg.session)
+	if err != nil {
+		eventFailure(err.Error())
+	}
+
+	var (
+		cat   *catalog.Catalog
+		tools []Tool
+	)
+	if strings.EqualFold(firstNonEmpty(cfg.toolMode, fc.toolMode), "direct") {
+		tools = toolsOrExit(fc, bot.Workspace)
+	} else {
+		sources, err := buildSources(fc, bot, false)
+		if err != nil {
+			eventFailure(err.Error())
+		}
+		cat = catalog.New(sources)
+		loadCtx, cancelLoad := context.WithTimeout(context.Background(), catalogLoadTimeout)
+		cat.Load(loadCtx)
+		cancelLoad()
+		tools = catalogTools(cat)
+	}
+	closeCatalog := func() {
+		if cat != nil {
+			_ = cat.Close()
+			cat = nil
+		}
+	}
+	defer closeCatalog()
+	system := resolveSystem(cfg, tools, bot, cat, coreTools(fc))
+	baseSystem := system
+	if state.Summary != "" {
+		system += summarySection(state.Summary)
+	}
+	base := cfg.base
+	model := cfg.model
+	userMessage := buildUserMessage(expandPromptCommand(strings.Join(prompt, " "), axRoot()), images)
+	history := append(append([]Message(nil), state.Messages...), userMessage)
+
+	var log *sessionLog
+	runID := newRunID()
+	if cfg.session != "" {
+		log, err = openSessionLog(cfg.session)
+		if err != nil {
+			eventFailure(err.Error())
+		}
+		if err := log.append(sessionEntry{
+			Type: entryRunStart, RunID: runID, Prompt: userMessage.Text(),
+			Model: model, BaseURL: base, Tools: toolNames(tools),
+		}); err != nil {
+			_ = log.close()
+			closeCatalog()
+			eventFailure(err.Error())
+		}
+		if err := log.append(sessionEntry{Type: entryMessage, RunID: runID, Message: &userMessage}); err != nil {
+			_ = log.close()
+			closeCatalog()
+			eventFailure(err.Error())
+		}
+	}
 
 	var cancel atomic.Bool
 	if !stdinIsTerminal() {
 		go readControls(&cancel)
 	}
 
-	tools := toolsOrExit(fc, bot.Workspace)
-	system := resolveSystem(cfg, tools, bot)
-	provider := NewOpenAI(cfg.base, apiKey(fc, bot))
-	sink := &eventSink{
-		session: cfg.session,
-		seen:    []Message{},
-		flushed: 0,
-		model:   cfg.model,
+	provider := NewOpenAI(base, apiKey(fc, bot))
+	provider.SessionPath = cfg.session
+	provider.Thinking = thinkingOption(cfg, fc)
+	provider.Effort = firstNonEmpty(cfg.effort, fc.effort)
+	provider.MaxTokens = cfg.maxTokens
+	if provider.MaxTokens == 0 {
+		provider.MaxTokens = fc.maxTokens
 	}
-	sink.record(history[oldLen])
-	end := runStream(provider, &runOptions{
-		model:    cfg.model,
-		system:   system,
-		tools:    tools,
-		maxTurns: int(^uint(0) >> 1),
-	}, history, &cancel, sink)
-	sink.finalize(end.messages, oldLen)
 
-	finalUsage := end.usage
-	if sink.lastUsage != nil {
-		finalUsage = *sink.lastUsage
+	sink := &eventSink{
+		log: log, runID: runID, model: model,
+		calls: map[string]ToolCall{},
 	}
-	if cfg.session != "" {
-		if err := appendUsage(cfg.session, finalUsage.Input, finalUsage.Output, finalUsage.CachedInput, nil, cfg.model); err != nil {
+	compactAt, contextWindow := resolveCompact(cfg, fc)
+	var compact func(context.Context, []Message, bool) ([]Message, string, error)
+	if compactAt > 0 && contextWindow > 0 {
+		summarizer := NewOpenAI(base, apiKey(fc, bot))
+		summarizer.SessionPath = cfg.session
+		thinking := false
+		summarizer.Thinking = &thinking
+		summarizer.Effort = "none"
+		summarizer.MaxTokens = compactSummaryTokens
+		engine := &compactor{
+			provider: summarizer,
+			model:    model,
+			base:     baseSystem,
+			summary:  state.Summary,
+			log:      log,
+			runID:    runID,
+			cancel:   &cancel,
+			emit:     printJSON,
+		}
+		compact = engine.compact
+	}
+	end := runStream(context.Background(), provider, &runOptions{
+		model:         model,
+		system:        system,
+		tools:         tools,
+		maxTurns:      int(^uint(0) >> 1),
+		compactAt:     compactAt,
+		contextWindow: contextWindow,
+		compact:       compact,
+	}, history, &cancel, sink)
+
+	outcomeName := outcomeString(end.outcome)
+	closeLog := func() {
+		if log != nil {
+			_ = log.close()
+			log = nil
+		}
+	}
+	if log != nil {
+		if err := log.append(sessionEntry{
+			Type: entryRunEnd, RunID: runID, Outcome: outcomeName, Usage: usageEntry(end.usage, model),
+		}); err != nil {
+			closeLog()
+			closeCatalog()
 			eventFailure(err.Error())
 		}
 	}
+	closeLog()
+
+	finalUsage := end.usage
 	printJSON(map[string]any{"type": axproto.TypeResult, "messages": end.messages, "usage": finalUsage})
 
-	outcomeName := ""
 	failed := false
 	switch end.outcome {
 	case outcomeCancelled:
@@ -205,8 +393,110 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 	}
 	printJSON(map[string]any{"type": axproto.TypeDone, "outcome": outcomeName})
 	if failed {
+		closeCatalog()
 		os.Exit(1)
 	}
+}
+
+// resolveCompact merges the compaction settings: flags, then bot.toml, then
+// the defaults copied from pixi (half of a one-million-token window).
+func resolveCompact(cfg cliConfig, fc fileConfig) (float64, int) {
+	compactAt, window := defaultCompactAt, defaultContextWindow
+	if fc.compactAtSet {
+		compactAt = fc.compactAt
+	}
+	if fc.contextWindowSet {
+		window = fc.contextWindow
+	}
+	if cfg.compactAtSet {
+		compactAt = cfg.compactAt
+	}
+	if cfg.contextWindowSet {
+		window = cfg.contextWindow
+	}
+	return compactAt, window
+}
+
+func outcomeString(out outcome) string {
+	switch out {
+	case outcomeCancelled:
+		return axproto.OutcomeCancelled
+	case outcomeCompact:
+		return axproto.OutcomeCompact
+	case outcomeMaxTurns:
+		return axproto.OutcomeMaxTurns
+	case outcomeFailed:
+		return axproto.OutcomeFailed
+	default:
+		return axproto.OutcomeDone
+	}
+}
+
+func usageEntry(usage Usage, model string) *usageInfo {
+	return &usageInfo{
+		Input: usage.Input, Output: usage.Output, CachedInput: usage.CachedInput,
+		Reasoning: usage.Reasoning, ContextInput: usage.Input, ContextOutput: usage.Output,
+		Model: model,
+	}
+}
+
+func toolNames(tools []Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name)
+	}
+	return names
+}
+
+func newRunID() string {
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return fmt.Sprintf("%d-%d", time.Now().UnixNano(), os.Getpid())
+	}
+	return fmt.Sprintf("%d-%s", time.Now().UnixNano(), hex.EncodeToString(buf[:]))
+}
+
+func thinkingOption(cfg cliConfig, fc fileConfig) *bool {
+	if strings.EqualFold(firstNonEmpty(cfg.effort, fc.effort), "none") {
+		value := false
+		return &value
+	}
+	switch strings.ToLower(firstNonEmpty(cfg.thinking, fc.thinking, "auto")) {
+	case "on", "true", "enabled":
+		value := true
+		return &value
+	case "off", "false", "disabled":
+		value := false
+		return &value
+	default:
+		return nil
+	}
+}
+
+func validateModelOptions(cfg cliConfig, fc fileConfig) error {
+	switch strings.ToLower(firstNonEmpty(cfg.thinking, fc.thinking, "auto")) {
+	case "auto", "on", "off", "true", "false", "enabled", "disabled":
+	default:
+		return fmt.Errorf("invalid -thinking: %s (use auto, on or off)", firstNonEmpty(cfg.thinking, fc.thinking))
+	}
+	switch strings.ToLower(firstNonEmpty(cfg.effort, fc.effort)) {
+	case "", "low", "high", "max", "none":
+	default:
+		return fmt.Errorf("invalid -effort: %s (use low, high or max)", firstNonEmpty(cfg.effort, fc.effort))
+	}
+	switch strings.ToLower(firstNonEmpty(cfg.imageDetail, fc.imageDetail, "auto")) {
+	case "low", "high", "original", "auto":
+	default:
+		return fmt.Errorf("invalid -image-detail: %s (use low, high, original or auto)", firstNonEmpty(cfg.imageDetail, fc.imageDetail))
+	}
+	maxTokens := cfg.maxTokens
+	if maxTokens == 0 {
+		maxTokens = fc.maxTokens
+	}
+	if maxTokens > 393216 {
+		return fmt.Errorf("-max-tokens %d exceeds DeepSeek's 393216 limit", maxTokens)
+	}
+	return nil
 }
 
 func eventFailure(message string) {
@@ -259,6 +549,9 @@ func toolsOrExit(config fileConfig, workdir string) []Tool {
 }
 
 func apiKey(fc fileConfig, bot *botCtx) string {
+	if key := os.Getenv("DEEPSEEK_API_KEY"); key != "" {
+		return key
+	}
 	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
 		return key
 	}
@@ -268,11 +561,42 @@ func apiKey(fc fileConfig, bot *botCtx) string {
 	return fc.apiKey
 }
 
-func resolveSystem(cfg cliConfig, tools []Tool, bot *botCtx) string {
+func resolveSystem(cfg cliConfig, tools []Tool, bot *botCtx, cat *catalog.Catalog, core []string) string {
 	if cfg.system != "" {
 		return cfg.system
 	}
+	if cat != nil {
+		return buildCatalogSystemPrompt(tools, bot.Workspace, bot, cat, core)
+	}
 	return buildSystemPrompt(tools, bot.Workspace, bot)
+}
+
+func buildCatalogSystemPrompt(tools []Tool, dir string, bot *botCtx, cat *catalog.Catalog, core []string) string {
+	var out strings.Builder
+	out.WriteString("You are an expert assistant operating inside ax.\n\n")
+	out.WriteString("You have two tools:\n")
+	for _, tool := range tools {
+		fmt.Fprintf(&out, "- %s: %s\n", tool.Name, tool.Snippet)
+	}
+	out.WriteString("\n")
+	out.WriteString(cat.Brief(core))
+	out.WriteString("\nGuidelines:\n")
+	out.WriteString("- Call search before using a tool whose id you do not know. An empty search returns the whole catalog.\n")
+	out.WriteString("- execute takes the exact tool id and a JSON object of arguments; never invent an id.\n")
+	out.WriteString("- If a tool returns an error, read it, fix the arguments and retry.\n")
+	out.WriteString("- Be concise in your responses.\n")
+	out.WriteString("- Show file paths clearly when working with files.\n")
+	if _, ok := cat.Lookup("fsx.edit"); ok {
+		out.WriteString("- Use fsx.edit for precise file changes; every edits[].oldText must match one unique region.\n")
+	}
+	fmt.Fprintf(&out, "\nCurrent working directory: %s", dir)
+	if bot != nil && bot.Prompt != "" {
+		out.WriteString("\n\n" + bot.Prompt)
+	}
+	if up := userSystemPrompt(); up != "" {
+		out.WriteString("\n\n" + up)
+	}
+	return out.String()
 }
 
 func buildSystemPrompt(tools []Tool, dir string, bot *botCtx) string {
@@ -374,6 +698,28 @@ func loadConfig() fileConfig {
 			c.base = val
 		case "tools":
 			c.tools = val
+		case "thinking":
+			c.thinking = val
+		case "effort", "reasoning_effort":
+			c.effort = val
+		case "max_tokens":
+			if n, err := strconv.Atoi(val); err == nil && n >= 0 {
+				c.maxTokens = n
+			}
+		case "image_detail":
+			c.imageDetail = val
+		case "tool_mode":
+			c.toolMode = val
+		case "core_tools":
+			c.coreTools = strings.Fields(strings.ReplaceAll(val, ",", " "))
+		case "compact_at":
+			if value, err := strconv.ParseFloat(val, 64); err == nil && value >= 0 && value < 1 {
+				c.compactAt, c.compactAtSet = value, true
+			}
+		case "context_window":
+			if n, err := strconv.Atoi(val); err == nil && n >= 0 {
+				c.contextWindow, c.contextWindowSet = n, true
+			}
 		}
 	}
 	return c
@@ -412,75 +758,68 @@ func firstNonEmpty(values ...string) string {
 }
 
 type eventSink struct {
-	session      string
-	seen         []Message
-	flushed      int
-	pendingCalls *int
-	results      int
-	lastUsage    *Usage
-	model        string
+	log              *sessionLog
+	runID            string
+	model            string
+	turn             int
+	calls            map[string]ToolCall
+	targets          map[string]string
+	partialContent   strings.Builder
+	partialReasoning strings.Builder
+	partialLen       int
+	partialAt        time.Time
+	lastUsage        *Usage
 }
 
 func (s *eventSink) emit(value any) { printJSON(value) }
 
-func (s *eventSink) record(message Message) {
-	holding := s.pendingCalls != nil
-	s.seen = append(s.seen, message)
-	last := s.seen[len(s.seen)-1]
-	if last.Role == "assistant" && len(last.ToolCalls) > 0 {
-		n := len(last.ToolCalls)
-		s.pendingCalls = &n
-		s.results = 0
+func (s *eventSink) append(entry sessionEntry) {
+	if s.log == nil {
 		return
 	}
-	if holding {
-		if last.Role == "tool" {
-			s.results++
-			if s.results >= *s.pendingCalls {
-				s.pendingCalls = nil
-				s.flush()
-			}
-		}
-		return
-	}
-	s.flush()
-}
-
-func (s *eventSink) flush() {
-	if s.session == "" {
-		return
-	}
-	if s.flushed >= len(s.seen) {
-		return
-	}
-	if err := appendMessages(s.session, s.seen[s.flushed:]); err != nil {
+	entry.RunID = s.runID
+	if err := s.log.append(entry); err != nil {
 		eventFailure(err.Error())
 	}
-	s.flushed = len(s.seen)
 }
 
-func (s *eventSink) finalize(messages []Message, base int) {
-	if s.session == "" {
+// maybeFlushPartial writes the in-progress assistant turn at most once per
+// second or per 4 KiB. A crash keeps the partial for audit; recovery never
+// sends an incomplete assistant turn to the model.
+func (s *eventSink) maybeFlushPartial() {
+	if s.log == nil {
 		return
 	}
-	held := s.seen[s.flushed:]
-	var rest []Message
-	if base+len(s.seen) < len(messages) {
-		rest = messages[base+len(s.seen):]
-	}
-	if len(held) == 0 && len(rest) == 0 {
+	total := s.partialContent.Len() + s.partialReasoning.Len()
+	if total == s.partialLen {
 		return
 	}
-	tail := append([]Message(nil), held...)
-	tail = append(tail, rest...)
-	if err := appendMessages(s.session, tail); err != nil {
-		eventFailure(err.Error())
+	if s.partialLen == 0 {
+		s.partialAt = time.Now()
 	}
-	s.flushed = len(s.seen)
+	if total-s.partialLen < 4096 && time.Since(s.partialAt) < time.Second {
+		return
+	}
+	message := Message{
+		Role:             "assistant",
+		Content:          s.partialContent.String(),
+		ReasoningContent: s.partialReasoning.String(),
+	}
+	s.append(sessionEntry{Type: entryAssistantPartial, Turn: s.turn, Message: &message})
+	s.partialLen = total
+	s.partialAt = time.Now()
 }
 
 func (s *eventSink) assistantDelta(text string) {
+	s.partialContent.WriteString(text)
 	s.emit(map[string]any{"type": axproto.TypeAssistantDelta, "text": text})
+	s.maybeFlushPartial()
+}
+
+func (s *eventSink) reasoningDelta(text string) {
+	s.partialReasoning.WriteString(text)
+	s.emit(map[string]any{"type": axproto.TypeReasoningDelta, "text": text})
+	s.maybeFlushPartial()
 }
 
 func (s *eventSink) assistantDone() {
@@ -488,7 +827,36 @@ func (s *eventSink) assistantDone() {
 }
 
 func (s *eventSink) toolStart(call ToolCall) {
-	s.emit(map[string]any{"type": axproto.TypeToolStart, "id": call.ID, "name": call.Name, "arguments": call.Arguments})
+	if s.calls == nil {
+		s.calls = map[string]ToolCall{}
+	}
+	target := toolTarget(call)
+	if target != "" {
+		if s.targets == nil {
+			s.targets = map[string]string{}
+		}
+		s.targets[call.ID] = target
+	}
+	s.calls[call.ID] = call
+	s.append(sessionEntry{Type: entryToolIntent, Turn: s.turn, Call: &call, Target: target})
+	event := map[string]any{"type": axproto.TypeToolStart, "id": call.ID, "name": call.Name, "arguments": call.Arguments}
+	if target != "" {
+		event["target"] = target
+	}
+	s.emit(event)
+}
+
+func toolTarget(call ToolCall) string {
+	if call.Name != "execute" {
+		return ""
+	}
+	var request struct {
+		Tool string `json:"tool"`
+	}
+	if err := json.Unmarshal([]byte(call.Arguments), &request); err != nil {
+		return ""
+	}
+	return request.Tool
 }
 
 func (s *eventSink) toolDelta(call ToolCall, text string) {
@@ -505,15 +873,24 @@ func (s *eventSink) tokens(input, output, cached int) {
 	s.emit(map[string]any{"type": axproto.TypeUsage, "input": input, "output": output, "cached_input": cached, "model": s.model})
 }
 
-func (s *eventSink) shouldCompact(input, output int) bool { return false }
-
 func (s *eventSink) assistant(turn int, msg Message, usage Usage) {
+	s.turn = turn
+	message := msg
+	s.append(sessionEntry{Type: entryMessage, Turn: turn, Message: &message})
+	s.append(sessionEntry{Type: entryUsage, Turn: turn, Usage: usageEntry(usage, s.model)})
+	s.partialContent.Reset()
+	s.partialReasoning.Reset()
+	s.partialLen = 0
 	s.emit(map[string]any{"type": axproto.TypeMessage, "message": msg})
-	s.record(msg)
 }
 
 func (s *eventSink) tool(turn int, msg Message) {
+	call, ok := s.calls[msg.ToolCallID]
+	if !ok {
+		call = ToolCall{ID: msg.ToolCallID}
+	}
+	result := msg
+	s.append(sessionEntry{Type: entryToolResult, Turn: turn, Call: &call, Target: s.targets[msg.ToolCallID], Output: result.Content})
 	s.emit(map[string]any{"type": axproto.TypeToolResult, "id": msg.ToolCallID, "output": msg.Content})
 	s.emit(map[string]any{"type": axproto.TypeMessage, "message": msg})
-	s.record(msg)
 }

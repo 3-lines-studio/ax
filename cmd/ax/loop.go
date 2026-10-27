@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -9,12 +11,26 @@ import (
 
 const maxRetries = 2
 
-func runStream(provider Provider, opts *runOptions, msgs []Message, cancel *atomic.Bool, sink runSink) runEnd {
+func runStream(ctx context.Context, provider Provider, opts *runOptions, msgs []Message, cancel *atomic.Bool, sink runSink) runEnd {
 	history := append([]Message(nil), msgs...)
 	usage := Usage{}
+	lastPrompt := 0
+	compactedAt := -1
 	for turn := 0; turn < opts.maxTurns; turn++ {
 		if cancel.Load() {
 			return runEnd{messages: history, usage: usage, outcome: outcomeCancelled}
+		}
+		if opts.compact != nil && len(history) > compactedAt {
+			if threshold := compactThreshold(opts.compactAt, opts.contextWindow); threshold > 0 &&
+				(lastPrompt > threshold || estimateTokens(opts.system, history) > threshold) {
+				next, system, err := opts.compact(ctx, history, turn > 0)
+				if err != nil {
+					return runEnd{messages: history, usage: usage, outcome: outcomeFailed, failMsg: err.Error()}
+				}
+				history, opts.system = next, system
+				lastPrompt = 0
+				compactedAt = len(history)
+			}
 		}
 		resp, calls, err := requestStream(provider, opts, history, cancel, sink)
 		if err != nil {
@@ -23,6 +39,7 @@ func runStream(provider Provider, opts *runOptions, msgs []Message, cancel *atom
 			}
 			return runEnd{messages: history, usage: usage, outcome: outcomeFailed, failMsg: err.Error()}
 		}
+		lastPrompt = resp.Usage.Input + resp.Usage.Output
 		usage = Usage{
 			Input:       usage.Input + resp.Usage.Input,
 			Output:      usage.Output + resp.Usage.Output,
@@ -32,14 +49,20 @@ func runStream(provider Provider, opts *runOptions, msgs []Message, cancel *atom
 		sink.assistant(turn, history[len(history)-1], resp.Usage)
 		sink.assistantDone()
 		if len(calls) == 0 {
-			return runEnd{messages: history, usage: usage, outcome: outcomeDone}
+			switch resp.StopReason {
+			case "length":
+				return runEnd{messages: history, usage: usage, outcome: outcomeFailed, failMsg: "the model hit the output token limit before finishing; raise -max-tokens or continue the prompt"}
+			case "content_filter":
+				return runEnd{messages: history, usage: usage, outcome: outcomeFailed, failMsg: "the provider stopped the response with finish_reason content_filter"}
+			case "insufficient_system_resource", "aborted":
+				return runEnd{messages: history, usage: usage, outcome: outcomeFailed, failMsg: "the provider interrupted the response with finish_reason " + resp.StopReason}
+			default:
+				return runEnd{messages: history, usage: usage, outcome: outcomeDone}
+			}
 		}
-		truncated := resp.StopReason == "length"
+		truncated := resp.StopReason == "length" || resp.StopReason == "insufficient_system_resource"
 		if !runToolBatch(opts.tools, calls, truncated, turn, cancel, sink, &history) {
 			return runEnd{messages: history, usage: usage, outcome: outcomeCancelled}
-		}
-		if sink.shouldCompact(resp.Usage.Input, resp.Usage.Output) {
-			return runEnd{messages: history, usage: usage, outcome: outcomeCompact}
 		}
 	}
 	return runEnd{messages: history, usage: usage, outcome: outcomeMaxTurns}
@@ -57,6 +80,9 @@ func requestStream(provider Provider, opts *runOptions, history []Message, cance
 			case eventContent:
 				forwarded++
 				sink.assistantDelta(ev.Text)
+			case eventReasoning:
+				forwarded++
+				sink.reasoningDelta(ev.Reasoning)
 			case eventToolCall:
 				forwarded++
 				if ev.Call != nil {
@@ -69,13 +95,29 @@ func requestStream(provider Provider, opts *runOptions, history []Message, cance
 		}
 		resp, err := handle.Join()
 		if err == nil {
-			return resp, calls, nil
+			switch resp.StopReason {
+			case "insufficient_system_resource", "aborted":
+				err = newProvider("the provider interrupted the response with finish_reason " + resp.StopReason)
+			case "content_filter":
+				return Response{}, calls, newProvider("the provider stopped the response with finish_reason content_filter")
+			default:
+				return resp, calls, nil
+			}
 		}
-		if attempt >= maxRetries || forwarded > 0 || !retryable(err) {
+		retryableErr := retryable(err)
+		if resp.StopReason == "insufficient_system_resource" || resp.StopReason == "aborted" {
+			retryableErr = true
+		}
+		if attempt >= maxRetries || forwarded > 0 || !retryableErr {
 			return Response{}, calls, err
 		}
 		attempt++
-		if err := sleepWithCancel(backoff(attempt), cancel); err != nil {
+		delay := backoff(attempt)
+		var axErr *axError
+		if errors.As(err, &axErr) && axErr.retryAfter > 0 {
+			delay = int(axErr.retryAfter / time.Millisecond)
+		}
+		if err := sleepWithCancel(delay, cancel); err != nil {
 			return Response{}, calls, err
 		}
 	}
@@ -85,17 +127,55 @@ func pushToolResult(h *[]Message, call ToolCall, content string) {
 	*h = append(*h, Message{Role: "tool", Content: content, ToolCallID: call.ID})
 }
 
-func runTool(tools []Tool, call ToolCall, progress func(string)) string {
+func runTool(ctx context.Context, tools []Tool, call ToolCall, progress func(string)) string {
 	for _, t := range tools {
-		if t.Name == call.Name {
+		if t.Name != call.Name {
+			continue
+		}
+		if err := validateToolArguments(t, call.Arguments); err != nil {
+			return "error: " + err.Error()
+		}
+		timeout := t.Timeout
+		if timeout <= 0 {
+			timeout = defaultToolTimeout
+		}
+		runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+		defer cancel()
+		if t.RunContext != nil {
+			return t.RunContext(runCtx, call.Arguments, progress)
+		}
+		if t.Run != nil {
 			return t.Run(call.Arguments, progress)
 		}
+		return fmt.Sprintf("error: tool %s has no implementation", call.Name)
 	}
 	return fmt.Sprintf("error: unknown tool: %s", call.Name)
 }
 
-func execTool(tools []Tool, call ToolCall, sink runSink) string {
-	return runTool(tools, call, func(text string) { sink.toolDelta(call, text) })
+func execTool(ctx context.Context, tools []Tool, call ToolCall, sink runSink) string {
+	return runTool(ctx, tools, call, func(text string) { sink.toolDelta(call, text) })
+}
+
+// toolRunContext turns the engine's cancel flag into a context so running
+// tool processes are signalled instead of being left behind.
+func toolRunContext(cancel *atomic.Bool) (context.Context, context.CancelFunc) {
+	ctx, cancelFn := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if cancel.Load() {
+					cancelFn()
+					return
+				}
+			}
+		}
+	}()
+	return ctx, cancelFn
 }
 
 func runToolBatch(tools []Tool, calls []ToolCall, truncated bool, turn int, cancel *atomic.Bool, sink runSink, h *[]Message) bool {
@@ -107,6 +187,8 @@ func runToolBatch(tools []Tool, calls []ToolCall, truncated bool, turn int, canc
 			}
 		}
 	}
+	ctx, cancelTools := toolRunContext(cancel)
+	defer cancelTools()
 	if truncated || anySequential || len(calls) <= 1 {
 		interrupted := false
 		for _, call := range calls {
@@ -119,7 +201,7 @@ func runToolBatch(tools []Tool, calls []ToolCall, truncated bool, turn int, canc
 			case truncated:
 				output = "error: tool call not executed: the response hit the output token limit, so its arguments may be truncated. Re-issue the tool call with complete arguments."
 			default:
-				output = execTool(tools, call, sink)
+				output = execTool(ctx, tools, call, sink)
 			}
 			sink.toolResult(call)
 			pushToolResult(h, call, output)
@@ -127,7 +209,7 @@ func runToolBatch(tools []Tool, calls []ToolCall, truncated bool, turn int, canc
 		}
 		return !cancel.Load()
 	}
-	return runParallel(tools, calls, turn, cancel, sink, h)
+	return runParallel(ctx, tools, calls, turn, cancel, sink, h)
 }
 
 type parallelMsg struct {
@@ -137,7 +219,7 @@ type parallelMsg struct {
 	output string
 }
 
-func runParallel(tools []Tool, calls []ToolCall, turn int, cancel *atomic.Bool, sink runSink, h *[]Message) bool {
+func runParallel(ctx context.Context, tools []Tool, calls []ToolCall, turn int, cancel *atomic.Bool, sink runSink, h *[]Message) bool {
 	for _, call := range calls {
 		sink.toolStart(call)
 	}
@@ -152,7 +234,7 @@ func runParallel(tools []Tool, calls []ToolCall, turn int, cancel *atomic.Bool, 
 				ch <- parallelMsg{kind: 1, idx: idx, output: "error: tool call not executed: the run was interrupted."}
 				return
 			}
-			output := runTool(tools, call, func(text string) {
+			output := runTool(ctx, tools, call, func(text string) {
 				ch <- parallelMsg{kind: 0, idx: idx, text: text}
 			})
 			ch <- parallelMsg{kind: 1, idx: idx, output: output}

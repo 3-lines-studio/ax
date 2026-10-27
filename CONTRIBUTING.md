@@ -41,8 +41,12 @@ go test ./...
   descriptors). Bridges and transports compile against it.
 - `internal/botdir` — Botdir path, config and secret helpers. Consumers and
   providers share it instead of copying `BOT_ROOT`/`BOT_DATA` logic.
-- `docs/` — protocol, tool convention and the Botdir specification. Change the
-  document and the code together.
+- `internal/catalog` — the index behind `search`/`execute`: ranking, Markdown
+  rendering, source errors.
+- `internal/mcp` — the minimal MCP client. It is stdlib on purpose; the
+  official SDK is a test-only dependency used by `internal/mcp/testdata`.
+- `docs/` — protocol, tool convention, session log and the Botdir
+  specification. Change the document and the code together.
 - `scripts/` — installer, packaging, harnesses. One script serves every
   program; take the program name as an argument instead of copying it.
 - `catalog.json` — the machine-readable list of programs. `scripts/render-catalog.py`
@@ -66,11 +70,23 @@ or packaging script is needed.
 - Extensibility is files-over-code: skills, user commands, `bot.md`. No plugin
   system in the engine.
 - Config lives at `~/.config/ax/`; skills at `~/.agents/skills/`.
-- The public UX runs through the event protocol ([docs/protocol.md](docs/protocol.md))
-  and the Unix tool convention ([docs/tools.md](docs/tools.md)); keep both
-  stable, as every transport, bridge and provider depends on them.
-- Tool calls in one batch run in parallel; file-mutating tools stay
-  `sequential` so they never race on the same file.
+- The public UX runs through the event protocol ([docs/protocol.md](docs/protocol.md)),
+  the Unix tool convention ([docs/tools.md](docs/tools.md)) and the MCP
+  catalog contract ([docs/mcp.md](docs/mcp.md)); keep all three stable.
+- Keep the model-facing surface at `search` + `execute`. New tools go into the
+  catalog (MCP server or local provider), never directly into the tool list.
+- `internal/mcp` is deliberately small and dependency-free in the binary;
+  adding a transitive dependency to it is a design decision, not a detail.
+- Catalog `execute` is sequential. In direct mode tool calls in one batch run
+  in parallel; file-mutating tools stay `sequential` so they never race on the
+  same file. A tool with unknown side effects (MCP, browser) is `sequential`
+  too.
+- Session logs are append-only ([docs/session.md](docs/session.md)). Append and
+  fsync before acting on an event, never rewrite a line, and never re-run a
+  tool call whose result was not recorded: report it as interrupted.
+- DeepSeek requires `reasoning_content` on assistant history when tools are
+  present. Keep `Message.ReasoningContent` when touching the request builder,
+  and keep thinking/max-token options in one place in `cmd/ax/openai.go`.
 - Keep the Botdir conventions in one place: use `internal/botdir` instead of
   reading `BOT_ROOT`, `BOT_DATA` and `secrets/` by hand.
 
