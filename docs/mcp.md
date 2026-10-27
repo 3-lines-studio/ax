@@ -198,7 +198,7 @@ missing, usually an environment variable or `ax mcp login <server>`.
 | `ax mcp import <path\|url\|dir>` | Import `mcp.json`, `plugin.json` or a Cursor plugin. |
 | `ax mcp login <server>` | OAuth login (`--manual` pastes a callback URL instead of using a loopback port). |
 | `ax mcp logout <server>` | Delete the stored token. |
-| `ax mcp doctor [--refresh]` | Connect to every server, list tool counts and failures. |
+| `ax mcp doctor [--server NAME]` | Connect to every server, list tool counts and failures (always bypasses the cache). |
 | `ax mcp serve` | Expose `search`/`execute` over MCP stdio. |
 
 ### Cache and lifetime
@@ -211,8 +211,8 @@ cache does not spawn anything. `execute` starts the owning server and keeps
 the connection for the rest of the run. A server that cannot be reached and
 has a cache is served stale; without a cache it is reported as unavailable.
 
-`ax catalog --refresh` bypasses the cache (`ax mcp doctor --refresh` does the
-same per server). The same information is available to scripts with
+`ax catalog --refresh` bypasses the cache, and `ax mcp doctor` always talks to
+the server. The same information is available to scripts with
 `ax catalog --json` and `ax mcp list --json`.
 
 ## `ax mcp serve`
