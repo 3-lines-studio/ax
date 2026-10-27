@@ -1,0 +1,54 @@
+name: quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push to the same branch supersedes the previous run. PRs use
+# refs/pull/<n>/merge, so each PR gets its own group.
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Markdown-only changes do not need the build, race and harness steps,
+      # but the catalog check still runs so the README table cannot drift.
+      - name: Detect code changes
+        id: changes
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "$BASE_REF"
+            changed=$(git diff --name-only FETCH_HEAD HEAD)
+          else
+            changed=code
+          fi
+          if printf '%s\n' "$changed" | grep -qvE '\.md$|^docs/|^\.github/ax\.svg$'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check code
+        if: steps.changes.outputs.code == 'true'
+        run: ./scripts/check.sh
+
+      - name: Check docs
+        if: steps.changes.outputs.code == 'false'
+        run: ./scripts/check.sh --fast
