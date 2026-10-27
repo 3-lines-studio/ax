@@ -37,7 +37,7 @@ model = "deepseek-flash"
 base_url = "https://api.deepseek.com"
 tools = ["fsx", "bashx", "skillx"]
 thinking = true
-reasoning_effort = "high"
+reasoning_effort = "max"
 max_tokens = 65536
 ```
 
@@ -55,7 +55,8 @@ has `workspace/`, the model and tools run there.
 
 DeepSeek runs in thinking mode by default. `ax` mirrors that: with a DeepSeek
 base URL or model it sends `"thinking":{"type":"enabled"}` and
-`"reasoning_effort":"high"`.
+`"reasoning_effort":"max"`. That is the highest thinking budget; choose `-effort
+low` or `high` when latency matters more than depth.
 
 ```sh
 ax -thinking off "summarize this changelog"   # auto, on, off

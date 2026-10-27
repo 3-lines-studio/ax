@@ -73,7 +73,8 @@ The ax engine kept moving while the repositories were merged:
   read from `DEEPSEEK_API_KEY` before `OPENAI_API_KEY`. Existing bots that set
   `base_url`/`model` in `bot.toml` or flags are unaffected. Set
   `OPENAI_API_KEY`/`-base`/`-model` as before for other providers.
-- **Thinking is on by default for DeepSeek.** `-thinking auto|on|off`,
+- **Thinking is on by default for DeepSeek, at `reasoning_effort: max`.**
+  `-thinking auto|on|off`,
   `-effort low|high|max` (`none` disables) and `-max-tokens` control it;
   `bot.toml` gained `thinking`, `reasoning_effort` and `max_tokens`.
 - **Images.** `-image PATH|URL` (repeatable) and `-image-detail` add vision
@@ -95,10 +96,8 @@ The ax engine kept moving while the repositories were merged:
 - Old release URLs keep working while the old repositories and their tags
   exist. They are frozen at the versions listed above.
 - `go install` paths gain a `/cmd/<program>` segment:
-  `go install github.com/3-lines-studio/ax/cmd/ax@vX.Y.Z`.
-  `go install github.com/3-lines-studio/pgx@v0.2.1` (used by `megingjord`'s
-  image) keeps resolving from the old repository; new versions use
-  `go install github.com/3-lines-studio/ax/cmd/pgx@vX.Y.Z`.
+  `go install github.com/3-lines-studio/ax/cmd/ax@vX.Y.Z`; old module paths
+  keep resolving from the frozen repositories.
 - The old `ax-ecosystem` README is superseded by the root README; links to
   `ax-ecosystem/blob/main/BOTDIR.md` in downstream docs should point at
   `ax/docs/botdir/BOTDIR.md`.

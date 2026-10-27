@@ -86,6 +86,21 @@ func TestDeepSeekLegacyAssistantGetsEmptyReasoning(t *testing.T) {
 	}
 }
 
+func TestDeepSeekDefaultEffortIsMax(t *testing.T) {
+	o := NewOpenAI("https://api.deepseek.com", "k")
+	built, err := o.buildRequest(&Request{Model: "deepseek-flash", Messages: []Message{{Role: "user", Content: "hi"}}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := decodeRequestBody(t, built.body)
+	if body["thinking"].(map[string]any)["type"] != "enabled" {
+		t.Errorf("thinking = %v", body["thinking"])
+	}
+	if body["reasoning_effort"] != "max" {
+		t.Errorf("default reasoning_effort = %v, want max", body["reasoning_effort"])
+	}
+}
+
 func TestDeepSeekThinkingDisabled(t *testing.T) {
 	disabled := false
 	o := NewOpenAI("https://api.deepseek.com", "k")
