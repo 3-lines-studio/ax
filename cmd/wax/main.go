@@ -415,7 +415,7 @@ func runSearch() {
 		os.Exit(2)
 	}
 	if deepseekKey() == "" {
-		fmt.Fprintln(os.Stderr, "error: web_search needs DEEPSEEK_API_KEY")
+		fmt.Fprintln(os.Stderr, "error: web_search needs a DeepSeek key: "+keyHint)
 		os.Exit(1)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -459,7 +459,7 @@ func searchCLI(args []string) {
 		os.Exit(2)
 	}
 	if deepseekKey() == "" {
-		fmt.Fprintln(os.Stderr, "error: web search needs DEEPSEEK_API_KEY")
+		fmt.Fprintln(os.Stderr, "error: web search needs a DeepSeek key: "+keyHint)
 		os.Exit(1)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)

@@ -29,18 +29,28 @@ Enable it through `ax` tool discovery: `AX_TOOLS="wax" ax`.
 
 ## Search
 
-`web_search` exists only when `DEEPSEEK_API_KEY` is set: DeepSeek bills the
-Search API per request ($0.75 per 1,000), so wax does not advertise a tool that
-cannot run.
+Search uses the same key as the model, so a bot that already talks to DeepSeek
+needs nothing new. `wax` resolves it like `ax` does, first hit wins:
+
+1. `DEEPSEEK_API_KEY`
+2. `OPENAI_API_KEY`
+3. `secrets/api-key` in the bot root (`BOT_ROOT`, else the current directory)
+4. `api_key` in `~/.config/ax/config`
+
+`web_search` is advertised by `describe` only when one of those resolves:
+DeepSeek bills the Search API per request ($0.75 per 1,000), so wax does not
+offer a tool that cannot run.
 
 ```sh
-export DEEPSEEK_API_KEY=sk-...
 wax search "deepseek v4 release" -count 5      # Markdown, for humans
 wax search "rust async" -content               # include page text
 wax search "site:github.com tokio" -json       # structured results
 printf '%s' '{"query":"deepseek","count":3}' | wax run web_search
 wax describe                                    # now lists web_search too
 ```
+
+With `AX_TOOLS="wax"` the model sees `wax.web_search` and `wax.web_fetch`; no
+extra environment variable is needed beyond the key the bot already uses.
 
 The query supports DeepSeek's operators (`site:`, `-site:`, `lang:`, `after:`,
 `before:`, `"exact phrase"`, `-term`). `DEEPSEEK_BASE_URL` overrides the

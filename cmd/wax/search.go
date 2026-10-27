@@ -43,10 +43,9 @@ type searchRequest struct {
 	OriQuestion string `json:"ori_question,omitempty"`
 }
 
-// deepseekKey is deliberately narrower than ax's key lookup: sending an
-// OpenAI key to DeepSeek's search endpoint would just fail, so only a
-// DeepSeek key enables the tool.
-func deepseekKey() string { return strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")) }
+// deepseekKey is the key ax would use for the model, resolved once here so a
+// bot does not have to configure the same secret twice.
+func deepseekKey() string { return resolveDeepSeekKey() }
 
 func deepseekBase() string {
 	base := strings.TrimSpace(os.Getenv("DEEPSEEK_BASE_URL"))
