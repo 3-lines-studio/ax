@@ -44,7 +44,7 @@ Never add a `go.mod` under `cmd/`.
 
 ## Releases
 
-`git tag vX.Y.Z && git push origin vX.Y.Z`. The workflow builds all programs
-for Linux x86-64/ARM64 and macOS ARM64 into one GitHub release and attaches
-`install.sh`. The installer downloads `<program>-<os>-<arch>` from that
+`git tag vX.Y.Z && git push origin vX.Y.Z`. The workflow cross-compiles all
+programs for Linux x86-64/ARM64 and macOS ARM64 on one Linux runner, publishes
+one GitHub release and attaches `install.sh`. The installer downloads `<program>-<os>-<arch>` from that
 release; `INSTALL_BASE_URL` overrides the location for local testing.

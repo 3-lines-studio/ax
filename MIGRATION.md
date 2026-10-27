@@ -44,8 +44,9 @@ because all programs now share one version.
   under `cmd/<program>`. There are no nested `go.mod` files and
   `go.work` is not needed.
 - **One version.** All programs are released together from one `vX.Y.Z` tag.
-  The release contains `<program>-<os>-<arch>` artifacts for every program and
-  a single `install.sh`.
+  One Linux runner cross-compiles `<program>-<os>-<arch>` for every program
+  and target, and the release attaches a single `install.sh`; no Actions
+  artifacts are stored.
 - **One installer.** The release attaches `install.sh` and every program's
   artifacts to `github.com/3-lines-studio/ax/releases`; the README, boti and
   the catalog point there. The old `ax.3lines.studio` mirror is optional and no
@@ -81,7 +82,6 @@ because all programs now share one version.
 
 ## Retiring the old repositories
 
-Once the first monorepo release is published and `install.sh` has been
-redeployed, the sixteen imported repositories can be archived on GitHub with a
-note pointing here. Archiving keeps their tags and release assets readable, so
-old installs keep working.
+Once the first monorepo release is published, the sixteen imported
+repositories can be archived on GitHub with a note pointing here. Archiving
+keeps their tags and release assets readable, so old installs keep working.

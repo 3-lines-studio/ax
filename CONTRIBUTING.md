@@ -17,6 +17,13 @@ Cheaper daily loop:
 gofmt -w . && go vet ./... && go test ./...
 ```
 
+For Markdown-only changes there is a fast gate that skips build, tests and
+harness but still validates formatting, `go.mod` and the catalog:
+
+```sh
+./scripts/check.sh --fast
+```
+
 The harness needs python3 (already a dev dependency for `scripts/mock-server.py`
 and `scripts/eval.py`). Per-program tests run the same way everywhere:
 
@@ -77,7 +84,24 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-The release workflow builds every program on Linux x86-64/ARM64 and macOS
-ARM64, uploads `<program>-<os>-<arch>` plus checksums to a single GitHub
-release, and attaches `install.sh`. Never tag a single program separately:
-there are no per-program versions.
+The release workflow cross-compiles every program for Linux x86-64/ARM64 and
+macOS ARM64 from one Linux runner, publishes `<program>-<os>-<arch>` plus
+checksums to a single GitHub release, and attaches `install.sh`. Never tag a
+single program separately: there are no per-program versions.
+
+## CI cost
+
+The repository is public, so standard GitHub-hosted runners do not consume
+paid minutes (the API reports `billable.UBUNTU.total_ms: 0`). The workflow is
+still kept small:
+
+- one Linux job per run, no OS matrix;
+- Markdown-only changes run `--fast`; everything else runs the full gate;
+- `concurrency` cancels superseded runs on the same ref;
+- `timeout-minutes` caps runaway jobs;
+- releases cross-compile all targets on one runner and upload no Actions
+  artifacts: assets go straight to the GitHub release;
+- `actions/setup-go` caches modules and build output, keyed by `go.sum`.
+
+Measured on this repository: ~3.5 min cold, ~1 min warm, and the docs-only
+path only runs formatting, tidy and the catalog check.

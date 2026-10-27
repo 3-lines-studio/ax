@@ -1,8 +1,22 @@
 #!/bin/sh
-# Full quality gate. Same steps as `make check`, without requiring make.
+# Quality gate. Same steps as `make check`, without requiring make.
+#
+#   scripts/check.sh          full gate (CI on code changes)
+#   scripts/check.sh --fast   formatting, module and catalog only (docs-only
+#                             changes, quick local loop)
 set -eu
 
 cd "$(dirname "$0")/.."
+
+mode=full
+case "${1:-}" in
+"") ;;
+--fast) mode=fast ;;
+*)
+    echo "usage: check.sh [--fast]" >&2
+    exit 2
+    ;;
+esac
 
 bin=bin
 programs=$(ls cmd)
@@ -22,11 +36,17 @@ fi
 step "go mod tidy"
 go mod tidy -diff
 
-step "go vet"
-go vet ./...
-
 step "catalog"
 python3 scripts/render-catalog.py --check
+
+if [ "$mode" = fast ]; then
+    echo
+    echo "fast checks passed"
+    exit 0
+fi
+
+step "go vet"
+go vet ./...
 
 step "build"
 mkdir -p "$bin"
