@@ -10,8 +10,11 @@ status=0
 
 budget() {
     case $1 in
-    ax) echo 8000000 ;;
+    # Context compaction, the MCP catalog and the OAuth client live in ax;
+    # the extra megabyte keeps room for the transport in cmd/webi.
+    ax) echo 8400000 ;;
     boti) echo 7000000 ;;
+    webi) echo 9500000 ;;
     slaxi) echo 8063000 ;;
     fsx) echo 2970000 ;;
     bashx) echo 3200000 ;;

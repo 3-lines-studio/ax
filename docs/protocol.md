@@ -33,18 +33,24 @@ While AX runs, stdin accepts JSONL controls:
 {"type":"tool_result","id":"call_1","output":"result"}
 {"type":"tool_done","id":"call_1"}
 {"type":"usage","input":100,"output":20,"cached_input":0}
+{"type":"compaction","upto":42,"summary":"Goal: ... Decisions: ..."}
 {"type":"message","message":{"Role":"assistant","Content":"done"}}
 {"type":"result","messages":[],"usage":{"input":100,"output":20,"cached_input":0}}
 {"type":"error","message":"provider error"}
 {"type":"done","outcome":"done"}
 ```
 
+`compaction` is emitted when the engine summarized older messages to stay under
+`compact_at` of `context_window`. `upto` is how many messages the summary
+replaces, and the summary also goes into the system prompt of every later
+request. A host can render a divider and keep going; no action is required.
+
 In catalog mode `tool_start` names the model-facing tool (`search` or
 `execute`). For `execute`, the optional `target` field carries the resolved
 catalog id, which is what hosts should display and audit. In direct mode the
 event names the provider tool itself and `target` is absent.
 
-AX emits exactly one final `done` event. Outcomes are `done`, `cancelled`, `compact`, `max_turns`, or `failed`. Failed runs exit non-zero.
+AX emits exactly one final `done` event. Outcomes are `done`, `cancelled`, `compact`, `max_turns`, or `failed`. Failed runs exit non-zero. `compact` is the outcome of `ax compact`, which summarizes a session on demand instead of running a turn.
 
 `reasoning_delta` carries the model's thinking text. It arrives before and
 separately from `assistant_delta`; clients that only render the answer can

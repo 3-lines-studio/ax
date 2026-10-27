@@ -633,6 +633,56 @@ def mcp_import_document(h, ax):
     check("already configured" in again.stderr, "second import: %s" % again.stderr[-500:])
 
 
+COMPACT_SCENARIO = [
+    # First turn: a tool call and a prompt that is already over half the window.
+    {
+        "stream": [
+            tool_chunk("execute", {"tool": "bashprovider.bash", "arguments": {"command": "echo busy"}}),
+            usage_chunk(8000, 5),
+        ]
+    },
+    # The summarizer's own request.
+    {"stream": [content_chunk("SUMMARY: the user asked for work; a tool ran.", "stop"), usage_chunk(50, 12)]},
+    # The run continues with the summary in the system prompt.
+    {"stream": [content_chunk("# Done\n\nCompacted and finished.\n", "stop"), usage_chunk(60, 8)]},
+]
+
+
+@case
+def oneshot_auto_compaction(h, ax):
+    session = h.root / "compact.jsonl"
+    h.write_config("compact_at = 0.5\ncontext_window = 10000\n")
+    with h.mock(COMPACT_SCENARIO) as srv:
+        p = h.oneshot(
+            ax,
+            ["--events", "--session", str(session), "keep working"],
+            base=srv.base_url,
+            extra_env={"AX_TOOLS": str(bash_provider(h))},
+        )
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        events = read_events(p)
+        check(
+            any(e.get("type") == "compaction" and e.get("summary") for e in events),
+            "no compaction event: %s" % events[:5],
+        )
+        check(events[-1] == {"type": "done", "outcome": "done"}, "bad final event")
+        systems = [
+            m["content"]
+            for m in srv.requests[-1]["json"]["messages"]
+            if m["role"] == "system"
+        ]
+        check(
+            any("Summary of the earlier conversation" in s for s in systems),
+            "summary missing from the system prompt",
+        )
+        check(len(srv.requests) == 3, "expected 3 requests, got %d" % len(srv.requests))
+    entries = [json.loads(line) for line in session.read_text().splitlines() if line.strip()]
+    check(
+        any(e.get("type") == "compaction" and e.get("upto") for e in entries),
+        "session log has no compaction entry",
+    )
+
+
 @case
 def oneshot_tool_workdir(h, ax):
     with h.mock(WRITE_FILE_SCENARIO) as srv:

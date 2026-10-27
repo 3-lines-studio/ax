@@ -70,6 +70,7 @@ and `execute`, so adding integrations does not grow the prompt. See
 | Program | Role | Description |
 | --- | --- | --- |
 | [slaxi](cmd/slaxi/README.md) | Slack transport | Connects the ax engine to Slack: listens for mentions, runs the bot and posts replies back. |
+| [webi](cmd/webi/README.md) | Browser UI | Serves the ax engine as a web app: channels are bot directories, threads are ax sessions. |
 
 ### Tool providers
 

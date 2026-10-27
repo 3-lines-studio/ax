@@ -35,10 +35,22 @@ Every line is a JSON object with a `type` and, once a run starts, `run_id`.
 | `tool_intent` | `call`, `target`, `turn` | The engine is about to execute a tool call. Written before the process starts. `target` is the resolved catalog id for `execute` (e.g. `fsx.write`). |
 | `tool_result` | `call`, `target`, `output`, `turn` | The tool finished. Written after the output is known. |
 | `usage` | `usage`, `turn` | Token accounting for an assistant turn. |
+| `compaction` | `upto`, `summary` | Older messages were summarized. `upto` counts projected messages from the start of the current history; readers drop that prefix and put `summary` in the system prompt. |
 | `run_end` | `outcome`, `usage` | The run finished with an outcome from the [event protocol](protocol.md). |
 
 The legacy bare-message shape (a line that is just a `Message` object) is still
 read as a `message` entry.
+
+### Compaction
+
+When the projected prompt reaches `compact_at` of `context_window` (defaults
+`0.5` and `1000000`), the engine summarizes the older messages and appends one
+`compaction` entry instead of rewriting anything. Projecting the log applies
+every compaction in order: the messages before `upto` are dropped, the summary
+becomes the *Summary of the earlier conversation* section of the system prompt,
+and a mid-run compaction also appends the `Continue the task...` user turn so
+the model keeps something to act on. `ax compact --session FILE` writes the
+same entry on demand.
 
 ## Recovery
 
