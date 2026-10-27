@@ -41,6 +41,8 @@ core_tools = ["fsx.read", "fsx.write", "fsx.edit", "bashx.bash"]
 thinking = true
 reasoning_effort = "max"
 max_tokens = 65536
+compact_at = 0.5
+context_window = 1000000
 
 [[mcp]]
 name = "github"
@@ -57,7 +59,29 @@ has `workspace/`, the model and tools run there.
 
 `~/.config/ax/config` is a plain `key=value` file with the same keys as the
 `bot.toml` fields above (`api_key`, `model`, `base`, `tools`, `thinking`,
-`effort`, `max_tokens`, `image_detail`, `tool_mode`, `core_tools`).
+`effort`, `max_tokens`, `image_detail`, `tool_mode`, `core_tools`, `compact_at`,
+`context_window`).
+
+## Context compaction
+
+Long sessions compact themselves. When the projected prompt reaches
+`compact_at` of the context window (defaults `0.5` and `1000000`, the same
+numbers pixi used), AX summarizes the older messages with the model, appends one
+`compaction` entry to the session log and puts the summary at the top of the
+system prompt. The log stays append-only, so resuming works exactly as before.
+
+```sh
+ax -compact-at 0.7 "keep going"       # later threshold
+ax -compact-at 0 "keep going"         # disable
+ax -context-window 128000 "..."       # smaller window, earlier compaction
+ax compact --session thread.jsonl     # the "Compact context" button
+```
+
+A compaction is visible in the event stream as
+`{"type":"compaction","upto":N,"summary":"..."}`. A mid-run compaction also adds
+a `Continue the task...` user turn, so the model keeps something to act on; a
+compaction that cannot run (provider error) fails the run instead of silently
+growing the prompt.
 
 ## Thinking and output budget
 
