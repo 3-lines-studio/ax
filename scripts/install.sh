@@ -90,11 +90,11 @@ for package in "$@"; do
     esac
     version=$(version_for "$package")
     if [ -n "${INSTALL_BASE_URL:-}" ]; then
-        base="$INSTALL_BASE_URL/$package"
+        base="${INSTALL_BASE_URL%/}"
     elif [ -n "$version" ]; then
-        base="https://github.com/3-lines-studio/$package/releases/download/$version"
+        base="https://github.com/3-lines-studio/ax/releases/download/$version"
     else
-        base="https://github.com/3-lines-studio/$package/releases/latest/download"
+        base="https://github.com/3-lines-studio/ax/releases/latest/download"
     fi
     artifact="$package-$os-$arch"
     download "$base/$artifact.sha256" "$tmp/$package.sha256" || {

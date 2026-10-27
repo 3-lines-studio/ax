@@ -18,34 +18,49 @@ jobs:
           - os: ubuntu-24.04-arm
             target: linux-aarch64
           - os: macos-14
-            target: darwin-arm64
+            target: darwin-aarch64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version: "1.27.0"
+          cache: true
+
       - run: go test ./...
-      - run: scripts/package.sh
+      - run: scripts/package.sh all
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: ax-*
+          path: dist/*
 
   release:
     needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      - run: |
+
+      - name: Checksums
+        run: |
           cd dist
-          sha256sum ax-linux-x86_64 ax-linux-aarch64 ax-darwin-aarch64 > SHA256SUMS
-          cp "$GITHUB_WORKSPACE/scripts/install.sh" install.sh
-          gh release create "$GITHUB_REF_NAME" ax-* SHA256SUMS install.sh \
-            --repo "$GITHUB_REPOSITORY" --generate-notes
+          for artifact in *-linux-* *-darwin-*; do
+            case $artifact in *.sha256) continue ;; esac
+            sha256sum "$artifact"
+          done > SHA256SUMS
+
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          cp "$GITHUB_WORKSPACE/scripts/install.sh" install.sh
+          gh release create "$GITHUB_REF_NAME" \
+            *-linux-* *-darwin-* SHA256SUMS install.sh \
+            --repo "$GITHUB_REPOSITORY" --generate-notes

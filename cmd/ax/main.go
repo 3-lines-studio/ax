@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+
+	"github.com/3-lines-studio/ax/internal/axproto"
 )
 
 type cliConfig struct {
@@ -140,7 +142,7 @@ func usage() {
 }
 
 func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
-	printJSON(map[string]any{"type": "protocol", "version": 1})
+	printJSON(map[string]any{"type": axproto.TypeProtocol, "version": axproto.Version})
 	var history []Message
 	if cfg.session != "" {
 		entries, err := loadPath(cfg.session)
@@ -184,32 +186,32 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 			eventFailure(err.Error())
 		}
 	}
-	printJSON(map[string]any{"type": "result", "messages": end.messages, "usage": finalUsage})
+	printJSON(map[string]any{"type": axproto.TypeResult, "messages": end.messages, "usage": finalUsage})
 
 	outcomeName := ""
 	failed := false
 	switch end.outcome {
 	case outcomeCancelled:
-		outcomeName = "cancelled"
+		outcomeName = axproto.OutcomeCancelled
 	case outcomeCompact:
-		outcomeName = "compact"
+		outcomeName = axproto.OutcomeCompact
 	case outcomeMaxTurns:
-		outcomeName, failed = "max_turns", true
+		outcomeName, failed = axproto.OutcomeMaxTurns, true
 	case outcomeFailed:
-		outcomeName, failed = "failed", true
-		printJSON(map[string]any{"type": "error", "message": end.failMsg})
+		outcomeName, failed = axproto.OutcomeFailed, true
+		printJSON(map[string]any{"type": axproto.TypeError, "message": end.failMsg})
 	default:
-		outcomeName = "done"
+		outcomeName = axproto.OutcomeDone
 	}
-	printJSON(map[string]any{"type": "done", "outcome": outcomeName})
+	printJSON(map[string]any{"type": axproto.TypeDone, "outcome": outcomeName})
 	if failed {
 		os.Exit(1)
 	}
 }
 
 func eventFailure(message string) {
-	printJSON(map[string]any{"type": "error", "message": message})
-	printJSON(map[string]any{"type": "done", "outcome": "failed"})
+	printJSON(map[string]any{"type": axproto.TypeError, "message": message})
+	printJSON(map[string]any{"type": axproto.TypeDone, "outcome": axproto.OutcomeFailed})
 	os.Exit(1)
 }
 
@@ -478,40 +480,40 @@ func (s *eventSink) finalize(messages []Message, base int) {
 }
 
 func (s *eventSink) assistantDelta(text string) {
-	s.emit(map[string]any{"type": "assistant_delta", "text": text})
+	s.emit(map[string]any{"type": axproto.TypeAssistantDelta, "text": text})
 }
 
 func (s *eventSink) assistantDone() {
-	s.emit(map[string]any{"type": "assistant_done"})
+	s.emit(map[string]any{"type": axproto.TypeAssistantDone})
 }
 
 func (s *eventSink) toolStart(call ToolCall) {
-	s.emit(map[string]any{"type": "tool_start", "id": call.ID, "name": call.Name, "arguments": call.Arguments})
+	s.emit(map[string]any{"type": axproto.TypeToolStart, "id": call.ID, "name": call.Name, "arguments": call.Arguments})
 }
 
 func (s *eventSink) toolDelta(call ToolCall, text string) {
-	s.emit(map[string]any{"type": "tool_delta", "id": call.ID, "text": text})
+	s.emit(map[string]any{"type": axproto.TypeToolDelta, "id": call.ID, "text": text})
 }
 
 func (s *eventSink) toolResult(call ToolCall) {
-	s.emit(map[string]any{"type": "tool_done", "id": call.ID})
+	s.emit(map[string]any{"type": axproto.TypeToolDone, "id": call.ID})
 }
 
 func (s *eventSink) tokens(input, output, cached int) {
 	u := Usage{Input: input, Output: output, CachedInput: cached}
 	s.lastUsage = &u
-	s.emit(map[string]any{"type": "usage", "input": input, "output": output, "cached_input": cached, "model": s.model})
+	s.emit(map[string]any{"type": axproto.TypeUsage, "input": input, "output": output, "cached_input": cached, "model": s.model})
 }
 
 func (s *eventSink) shouldCompact(input, output int) bool { return false }
 
 func (s *eventSink) assistant(turn int, msg Message, usage Usage) {
-	s.emit(map[string]any{"type": "message", "message": msg})
+	s.emit(map[string]any{"type": axproto.TypeMessage, "message": msg})
 	s.record(msg)
 }
 
 func (s *eventSink) tool(turn int, msg Message) {
-	s.emit(map[string]any{"type": "tool_result", "id": msg.ToolCallID, "output": msg.Content})
-	s.emit(map[string]any{"type": "message", "message": msg})
+	s.emit(map[string]any{"type": axproto.TypeToolResult, "id": msg.ToolCallID, "output": msg.Content})
+	s.emit(map[string]any{"type": axproto.TypeMessage, "message": msg})
 	s.record(msg)
 }

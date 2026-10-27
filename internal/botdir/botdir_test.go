@@ -1,4 +1,4 @@
-package main
+package botdir
 
 import (
 	"os"
@@ -7,11 +7,17 @@ import (
 	"testing"
 )
 
-func TestLoadBotConfigReadsKeys(t *testing.T) {
+type testConfig struct {
+	Model   string   `toml:"model"`
+	BaseURL string   `toml:"base_url"`
+	Tools   []string `toml:"tools"`
+}
+
+func TestLoadTOMLReadsKeys(t *testing.T) {
 	root := t.TempDir()
 	_ = os.WriteFile(filepath.Join(root, "bot.toml"), []byte("model = \"gpt-4\"\nbase_url = \"http://bot\"\ntools = [\"read\", \"edit\"]\n"), 0o644)
-	bc, err := loadBotConfig(root)
-	if err != nil {
+	var bc testConfig
+	if err := LoadTOML(root, &bc); err != nil {
 		t.Fatal(err)
 	}
 	if bc.Model != "gpt-4" || bc.BaseURL != "http://bot" {
@@ -22,10 +28,9 @@ func TestLoadBotConfigReadsKeys(t *testing.T) {
 	}
 }
 
-func TestLoadBotConfigMissingFile(t *testing.T) {
-	root := t.TempDir()
-	bc, err := loadBotConfig(root)
-	if err != nil {
+func TestLoadTOMLMissingFile(t *testing.T) {
+	var bc testConfig
+	if err := LoadTOML(t.TempDir(), &bc); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if bc.Model != "" || bc.BaseURL != "" || len(bc.Tools) != 0 {
@@ -33,35 +38,28 @@ func TestLoadBotConfigMissingFile(t *testing.T) {
 	}
 }
 
-func TestLoadBotConfigMalformed(t *testing.T) {
+func TestLoadTOMLMalformed(t *testing.T) {
 	root := t.TempDir()
 	_ = os.WriteFile(filepath.Join(root, "bot.toml"), []byte("model ==\n"), 0o644)
-	_, err := loadBotConfig(root)
-	if err == nil {
+	var bc testConfig
+	if err := LoadTOML(root, &bc); err == nil {
 		t.Fatal("expected parse error")
 	}
 }
 
-func TestMergeBotConfigOverrides(t *testing.T) {
-	fc := fileConfig{model: "old", base: "old-base", tools: "old-tools"}
-	bc := botConfig{Model: "new", BaseURL: "new-base", Tools: []string{"a", "b"}}
-	merged := mergeBotConfig(fc, bc)
-	if merged.model != "new" || merged.base != "new-base" || merged.tools != "a b" {
-		t.Errorf("merged = %+v", merged)
-	}
-}
-
-func TestMergeBotConfigEmptyKeepsFileConfig(t *testing.T) {
-	fc := fileConfig{model: "keep", base: "keep-base", tools: "keep-tools"}
-	merged := mergeBotConfig(fc, botConfig{})
-	if merged.model != "keep" || merged.base != "keep-base" || merged.tools != "keep-tools" {
-		t.Errorf("merged = %+v", merged)
-	}
-}
-
-func TestResolveBotCtxNoBot(t *testing.T) {
+func TestLoadTOMLErrorWrapped(t *testing.T) {
 	root := t.TempDir()
-	ctx := resolveBotCtx(root)
+	_ = os.MkdirAll(filepath.Join(root, "bot.toml"), 0o755)
+	var bc testConfig
+	err := LoadTOML(root, &bc)
+	if err == nil || !strings.Contains(err.Error(), "read bot.toml") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestResolveNoBot(t *testing.T) {
+	root := t.TempDir()
+	ctx := Resolve(root)
 	if ctx.IsBot {
 		t.Error("IsBot should be false")
 	}
@@ -70,11 +68,11 @@ func TestResolveBotCtxNoBot(t *testing.T) {
 	}
 }
 
-func TestResolveBotCtxWithWorkspaceDir(t *testing.T) {
+func TestResolveWithWorkspaceDir(t *testing.T) {
 	root := t.TempDir()
 	_ = os.WriteFile(filepath.Join(root, "bot.toml"), []byte(""), 0o644)
 	_ = os.MkdirAll(filepath.Join(root, "workspace"), 0o755)
-	ctx := resolveBotCtx(root)
+	ctx := Resolve(root)
 	if !ctx.IsBot {
 		t.Error("IsBot should be true")
 	}
@@ -83,10 +81,10 @@ func TestResolveBotCtxWithWorkspaceDir(t *testing.T) {
 	}
 }
 
-func TestResolveBotCtxCreatesWorkspace(t *testing.T) {
+func TestResolveCreatesWorkspace(t *testing.T) {
 	root := t.TempDir()
 	_ = os.WriteFile(filepath.Join(root, "bot.toml"), []byte(""), 0o644)
-	ctx := resolveBotCtx(root)
+	ctx := Resolve(root)
 	want := filepath.Join(root, "workspace")
 	if ctx.Workspace != want {
 		t.Errorf("Workspace = %q, want %q", ctx.Workspace, want)
@@ -96,11 +94,11 @@ func TestResolveBotCtxCreatesWorkspace(t *testing.T) {
 	}
 }
 
-func TestResolveBotCtxSkillsAndPrompt(t *testing.T) {
+func TestResolveSkillsAndPrompt(t *testing.T) {
 	root := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(root, "skills"), 0o755)
 	_ = os.WriteFile(filepath.Join(root, "bot.md"), []byte("  extra context  \n"), 0o644)
-	ctx := resolveBotCtx(root)
+	ctx := Resolve(root)
 	if ctx.Skills != filepath.Join(root, "skills") {
 		t.Errorf("Skills = %q", ctx.Skills)
 	}
@@ -109,33 +107,33 @@ func TestResolveBotCtxSkillsAndPrompt(t *testing.T) {
 	}
 }
 
-func TestResolveBotCtxAPIKey(t *testing.T) {
+func TestResolveAPIKey(t *testing.T) {
 	root := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(root, "secrets"), 0o755)
 	_ = os.WriteFile(filepath.Join(root, "secrets", "api-key"), []byte("sk-secret\n"), 0o644)
-	ctx := resolveBotCtx(root)
+	ctx := Resolve(root)
 	if !ctx.HasAPIKey || ctx.APIKey != "sk-secret" {
 		t.Errorf("HasAPIKey=%v APIKey=%q", ctx.HasAPIKey, ctx.APIKey)
 	}
 }
 
-func TestResolveBotCtxFileWorkspaceAssigned(t *testing.T) {
+func TestResolveWorkspacePathOccupiedByFile(t *testing.T) {
 	root := t.TempDir()
 	_ = os.WriteFile(filepath.Join(root, "bot.toml"), []byte(""), 0o644)
 	_ = os.WriteFile(filepath.Join(root, "workspace"), []byte("not a dir"), 0o644)
-	ctx := resolveBotCtx(root)
+	ctx := Resolve(root)
 	if ctx.Workspace != filepath.Join(root, "workspace") {
 		t.Errorf("Workspace = %q", ctx.Workspace)
 	}
 }
 
-func TestResolveBotCtxUsesBotDataRoot(t *testing.T) {
+func TestResolveUsesBotDataRoot(t *testing.T) {
 	root := t.TempDir()
 	data := t.TempDir()
 	_ = os.WriteFile(filepath.Join(root, "bot.toml"), []byte(""), 0o644)
 	t.Setenv("BOT_DATA", data)
 
-	ctx := resolveBotCtx(root)
+	ctx := Resolve(root)
 	wantWorkspace := filepath.Join(data, "workspace")
 	if ctx.Workspace != wantWorkspace {
 		t.Errorf("Workspace = %q, want %q", ctx.Workspace, wantWorkspace)
@@ -146,85 +144,93 @@ func TestResolveBotCtxUsesBotDataRoot(t *testing.T) {
 
 	// Definition paths stay on the bot root even when BOT_DATA is set.
 	_ = os.MkdirAll(filepath.Join(root, "skills"), 0o755)
-	ctx = resolveBotCtx(root)
+	_ = os.WriteFile(filepath.Join(root, "bot.md"), []byte("hi"), 0o644)
+	ctx = Resolve(root)
 	if ctx.Skills != filepath.Join(root, "skills") {
 		t.Errorf("Skills = %q, want bot-root skills", ctx.Skills)
-	}
-	if ctx.Prompt == "" {
-		_ = os.WriteFile(filepath.Join(root, "bot.md"), []byte("hi"), 0o644)
-		ctx = resolveBotCtx(root)
 	}
 	if ctx.Prompt != "hi" {
 		t.Errorf("Prompt = %q, want bot-root prompt", ctx.Prompt)
 	}
 }
 
-func TestConfigDirPrecedence(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "/x/cfg")
-	t.Setenv("HOME", "/home/u")
-	if got := configDir(); got != "/x/cfg" {
-		t.Errorf("XDG_CONFIG_HOME wins: got %q", got)
+func TestWorkspace(t *testing.T) {
+	root := t.TempDir()
+	data := t.TempDir()
+	t.Setenv("BOT_ROOT", "")
+	t.Setenv("BOT_DATA", "")
+	t.Chdir(root)
+
+	if got := Workspace(); got != "." {
+		t.Errorf("standalone = %q, want .", got)
 	}
 
-	t.Setenv("XDG_CONFIG_HOME", "")
-	if got := configDir(); got != filepath.Join("/home/u", ".config") {
-		t.Errorf("HOME fallback: got %q", got)
+	_ = os.MkdirAll(filepath.Join(root, "workspace"), 0o755)
+	if got := Workspace(); got != filepath.Join(".", "workspace") {
+		t.Errorf("standalone workspace = %q", got)
 	}
 
-	t.Setenv("HOME", "")
-	if got := configDir(); got != "" {
-		t.Errorf("nothing set: got %q", got)
+	botRoot := t.TempDir()
+	t.Setenv("BOT_ROOT", botRoot)
+	if got := Workspace(); got != botRoot {
+		t.Errorf("BOT_ROOT without workspace = %q, want %q", got, botRoot)
 	}
-}
-
-func TestAxRootFallsBackToWorkdir(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("HOME", "")
-	dir := t.TempDir()
-	t.Chdir(dir)
-	if got := axRoot(); got != filepath.Join(dir, ".ax") {
-		t.Errorf("axRoot = %q", got)
+	_ = os.MkdirAll(filepath.Join(botRoot, "workspace"), 0o755)
+	if got := Workspace(); got != filepath.Join(botRoot, "workspace") {
+		t.Errorf("BOT_ROOT workspace = %q", got)
 	}
-}
 
-func TestAxRootUsesConfigDir(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "/settled")
-	if got := axRoot(); got != filepath.Join("/settled", "ax") {
-		t.Errorf("axRoot = %q", got)
+	t.Setenv("BOT_DATA", data)
+	if got := Workspace(); got != data {
+		t.Errorf("BOT_DATA wins = %q, want %q", got, data)
 	}
-}
-
-func TestWorkDirAbs(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-	if got := workDirAbs(); got != filepath.Join(dir, ".ax") {
-		t.Errorf("workDirAbs = %q", got)
+	_ = os.MkdirAll(filepath.Join(data, "workspace"), 0o755)
+	if got := Workspace(); got != filepath.Join(data, "workspace") {
+		t.Errorf("BOT_DATA workspace = %q", got)
 	}
 }
 
-func TestPathExistsAndIsDir(t *testing.T) {
+func TestReadSecret(t *testing.T) {
+	root := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(root, "secrets"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "secrets", "token"), []byte("from-file\n"), 0o600)
+
+	got, err := ReadSecret(root, "AX_TEST_SECRET", "token")
+	if err != nil || got != "from-file" {
+		t.Errorf("file = %q, %v", got, err)
+	}
+
+	t.Setenv("AX_TEST_SECRET", "from-env")
+	got, err = ReadSecret(root, "AX_TEST_SECRET", "token")
+	if err != nil || got != "from-env" {
+		t.Errorf("env = %q, %v", got, err)
+	}
+
+	got, err = ReadSecret(root, "AX_TEST_MISSING", "missing")
+	if err != nil || got != "" {
+		t.Errorf("missing = %q, %v", got, err)
+	}
+
+	_ = os.MkdirAll(filepath.Join(root, "secrets", "dir"), 0o755)
+	if _, err := ReadSecret(root, "AX_TEST_MISSING", "dir"); err == nil {
+		t.Error("expected read error for a directory")
+	}
+}
+
+func TestExistsAndIsDir(t *testing.T) {
 	root := t.TempDir()
 	file := filepath.Join(root, "f.txt")
 	_ = os.WriteFile(file, []byte("x"), 0o644)
-	if !pathExists(file) {
-		t.Error("pathExists should be true")
+	if !Exists(file) {
+		t.Error("Exists should be true")
 	}
-	if pathExists(filepath.Join(root, "missing")) {
-		t.Error("pathExists should be false")
+	if Exists(filepath.Join(root, "missing")) {
+		t.Error("Exists should be false")
 	}
-	if pathIsDir(file) {
+	if IsDir(file) {
 		t.Error("file is not dir")
 	}
-	if !pathIsDir(root) {
+	if !IsDir(root) {
 		t.Error("root is dir")
-	}
-}
-
-func TestLoadBotConfigErrorWrapped(t *testing.T) {
-	root := t.TempDir()
-	_ = os.MkdirAll(filepath.Join(root, "bot.toml"), 0o755)
-	_, err := loadBotConfig(root)
-	if err == nil || !strings.Contains(err.Error(), "read bot.toml") {
-		t.Errorf("err = %v", err)
 	}
 }
