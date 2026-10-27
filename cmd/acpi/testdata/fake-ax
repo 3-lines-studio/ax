@@ -1,0 +1,21 @@
+#!/bin/sh
+# Stand-in for `ax --events`: emits the exact event sequence ax's real
+# EventSink produces, so acpi's translation logic can be exercised without
+# hitting a real model or needing an API key. Also proves acpi wires -C,
+# -system, -model, -base, --session, --events, and the trailing prompt
+# through correctly (dumped to stderr for the test to inspect).
+echo "fake-ax invoked with: $*" >&2
+printf '{"type":"protocol","version":1}\n'
+printf '{"type":"assistant_delta","text":"Hola, "}\n'
+printf '{"type":"assistant_delta","text":"soy Alfred."}\n'
+printf '{"type":"assistant_done"}\n'
+printf '{"type":"tool_start","id":"call_1","name":"bashx","arguments":{"command":"echo hi"}}\n'
+printf '{"type":"tool_delta","id":"call_1","text":"hi\\n"}\n'
+printf '{"type":"tool_done","id":"call_1"}\n'
+printf '{"type":"tool_result","id":"call_1","output":"hi\\n"}\n'
+printf '{"type":"usage","input":42,"output":7,"cached_input":0,"window":128000,"model":"deepseek-v4-flash"}\n'
+printf '{"type":"result","messages":[],"usage":{"input":42,"output":7,"cached_input":0}}\n'
+printf '{"type":"done","outcome":"done"}\n'
+# Drain stdin (the cancel/steer control channel) so acpi's stdin.Close() has
+# something to close cleanly.
+cat >/dev/null &

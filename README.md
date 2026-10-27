@@ -1,57 +1,151 @@
-# ax
+# AX ecosystem
 
-A minimal headless LLM coding-agent harness for scripts and Unix-style clients. ~7 MB single binary; stdlib HTTP, no libcurl.
+<p align="center"><img src=".github/ax.svg" width="96" height="96" alt="AX ecosystem"></p>
+
+Small Unix programs that compose through process boundaries: a headless agent
+engine, tool providers, a transport, a host loader, and protocol bridges,
+wired together by the [Botdir](docs/botdir/BOTDIR.md) portable directory
+interface.
+
+Everything lives in this repository: one Go module, one build, one test
+suite, one release. Every program is still a single static binary.
 
 ## Install
 
-```sh
-curl -fsSL https://ax.3lines.studio/install.sh | sh
-```
-
-Installs to `~/.local/bin` (override with `AX_PREFIX`). Linux x86-64/ARM64 and macOS ARM64, all SHA-256 verified.
-
-## Run
+One installer serves every program in the ecosystem:
 
 ```sh
-OPENAI_API_KEY=... ax "explain main.go"
+curl -fsSL https://github.com/3-lines-studio/ax/releases/latest/download/install.sh | sh
 ```
 
-`ax` is a [Botdir](https://github.com/3-lines-studio/ax-ecosystem) consumer. The bot root is the current directory (or `-C DIR`); it reads `bot.toml` there:
-
-```toml
-model = "gpt-4.1-mini"
-base_url = "https://api.openai.com/v1"
-tools = ["fsx", "bashx", "skillx"]
-```
-
-Any OpenAI-compatible endpoint works (`-base https://...`: OpenRouter, DeepSeek, Ollama, vLLM). The model key comes from `OPENAI_API_KEY` or `secrets/api-key`. Precedence is **flags > `bot.toml` > `~/.config/ax/config` > defaults**; `OPENAI_API_KEY` and `AX_TOOLS` come from the environment. When the bot root has `workspace/`, the model and tools run there.
-
-## Tools
-
-`ax` has no built-in tools — register every capability explicitly:
+Install specific programs by name:
 
 ```sh
+curl -fsSL https://github.com/3-lines-studio/ax/releases/latest/download/install.sh | sh -s -- fsx bashx skillx
+```
+
+From a checkout:
+
+```sh
+make build          # bin/<program> for all programs
+make install        # ~/.local/bin, override with PREFIX=/usr/local
+```
+
+Linux x86-64/ARM64 and macOS ARM64, all SHA-256 verified.
+
+## Quick start
+
+```sh
+OPENAI_API_KEY=... ax "explain this repository"
 AX_TOOLS="fsx bashx skillx" ax
 ```
 
-At startup `ax` runs `<command> describe` (one JSON spec per line: name, description, JSON-Schema parameters). For a call it runs `<command> run <name>`, writes the JSON arguments to stdin, reads the result from stdout, and treats a non-zero exit as a tool error. See the [tool contract](docs/tools.md).
+Any OpenAI-compatible endpoint works (`-base https://…`: OpenRouter, DeepSeek,
+Ollama, vLLM). `ax` has no built-in tools: every capability is an explicit
+external provider.
 
-## Session
+## Programs
 
-`ax` emits a JSONL event stream on stdout: assistant deltas, tool events, usage, errors, and one final `done`. Send `{"type":"cancel"}` on stdin to stop. Persist a run with `--session FILE` (JSONL, append-only; a Botdir host routes them under `state/ax/`).
+<!-- programs:begin -->
 
-## Build and test
+### Engine
 
-```sh
-go build -trimpath -ldflags='-s -w' -o ax .
-go test ./...
-make harness     # black-box end-to-end harness (scripts/harness.py)
+| Program | Role | Description |
+| --- | --- | --- |
+| [ax](cmd/ax/README.md) | Headless agent engine | A minimal headless LLM coding-agent harness for scripts and Unix-style clients. |
 
-# real-provider botdir eval (scripts/eval.py):
-#   set OPENAI_API_KEY, AX_BASE_URL, and AX_MODEL, then:
-make eval
+### Host loader
+
+| Program | Role | Description |
+| --- | --- | --- |
+| [boti](cmd/boti/README.md) | Botdir host loader | Reads bot.toml, installs the declared binaries, wires the Botdir environment, runs the hooks and starts the consumer from the bot root. |
+
+### Transport
+
+| Program | Role | Description |
+| --- | --- | --- |
+| [slaxi](cmd/slaxi/README.md) | Slack transport | Connects the ax engine to Slack: listens for mentions, runs the bot and posts replies back. |
+
+### Tool providers
+
+| Program | Role | Description |
+| --- | --- | --- |
+| [wax](cmd/wax/README.md) | Web-fetch tool | Fetches a web page as Markdown for ax and other LLM tools. |
+| [bqx](cmd/bqx/README.md) | BigQuery tool | Read-only BigQuery queries for ax. |
+| [pgx](cmd/pgx/README.md) | PostgreSQL tool | Read-only PostgreSQL queries for ax. |
+| [slackx](cmd/slackx/README.md) | Slack file-upload tool | Uploads files to Slack for ax. |
+| [browserx](cmd/browserx/README.md) | Chromium tool | Read-only visible Chromium tool for ax. |
+| [bashx](cmd/bashx/README.md) | Bash tool | Runs non-interactive shell commands for ax. |
+| [fsx](cmd/fsx/README.md) | Filesystem tools | Reads, writes and edits files inside the workspace. |
+| [skillx](cmd/skillx/README.md) | Agent Skills provider | Exposes Agent Skills to ax. |
+| [attachx](cmd/attachx/README.md) | Conversation attachment tool | Copies workspace files into the bot's artifact directory so a transport can deliver them to the user. |
+
+### Protocol bridges
+
+| Program | Role | Description |
+| --- | --- | --- |
+| [acpi](cmd/acpi/README.md) | ACP ↔ ax bridge | Speaks Agent Client Protocol over stdio and runs ax as a subprocess per turn, so any ACP host can drive the engine. |
+| [mcpx](cmd/mcpx/README.md) | MCP ↔ ax bridge | Connects MCP servers and exposes their tools in ax's describe/run convention. |
+
+### Specification
+
+| Program | Role | Description |
+| --- | --- | --- |
+| [botdir](docs/botdir/BOTDIR.md) | Botdir specification | The portable directory interface for bots. Not a binary: every other piece conforms to it. |
+
+<!-- programs:end -->
+
+## How it fits together
+
+```text
+ACP host ── acpi ──┐
+Slack    ─ slaxi ──┼──▶ ax ──▶ provider describe / provider run
+MCP      ── mcpx ──┘          (fsx, bashx, wax, bqx, pgx, …)
 ```
 
-`eval` drives the real `ax` binary against a real provider through a real Botdir bot root and the real tool providers, asserting on observable artifacts. It skips cleanly until `OPENAI_API_KEY`/`AX_BASE_URL`/`AX_MODEL` are set. Put those in a gitignored `.env` file next to this README (or export them) to run it.
+- The **engine** (`ax`) runs one prompt, emits JSONL events on stdout and has
+  no built-in tools. The contract is [docs/protocol.md](docs/protocol.md).
+- **Providers** implement the Unix tool convention: `<command> describe`
+  prints tool descriptors, `<command> run <name>` executes one call. The
+  contract is [docs/tools.md](docs/tools.md).
+- **Bridges and transports** speak a foreign protocol on one side and ax's
+  process protocol on the other.
+- **boti** is the host loader: a bot is a directory with `bot.toml`, and `boti`
+  installs what it declares, wires the environment and execs the consumer.
+  Consumers, hosts and providers derive `workspace/`, `skills/`, `state/`,
+  `run/` and `secrets/` from the bot root by convention.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for internals.
+## Repository layout
+
+```text
+cmd/<program>/      one binary per directory, with its README and tests
+internal/axproto/   event stream and tool descriptor types shared by the programs
+internal/botdir/    Botdir path, config and secret helpers shared by consumers
+docs/               protocol, tool convention, Botdir specification
+scripts/            installer, packaging, black-box harnesses
+catalog.json        machine-readable program registry (renders the table above)
+```
+
+## Build, test, release
+
+```sh
+make build          # all binaries into bin/
+make bin/fsx        # one binary
+make test           # go test ./...
+make check          # gofmt, tidy, vet, tests, race, builds, size budgets, harness
+make dist           # release artifacts for the current platform into dist/
+```
+
+Releases are one tag for the whole ecosystem. Pushing `vX.Y.Z` builds every
+program for Linux x86-64/ARM64 and macOS ARM64, uploads the artifacts to a
+single GitHub release and attaches `install.sh`. All programs share that
+version: there are no per-program tags.
+
+## Docs
+
+- [docs/protocol.md](docs/protocol.md) — ax's JSONL event stream.
+- [docs/tools.md](docs/tools.md) — the provider describe/run convention.
+- [docs/botdir/](docs/botdir/README.md) — the Botdir specification and guide.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — development workflow and conventions.
+- [MIGRATION.md](MIGRATION.md) — where each program came from, and what changed
+  when the ecosystem was consolidated into this repository.

@@ -1,6 +1,8 @@
 # AX process protocol
 
-AX protocol version 1 uses one JSON object per line on stdout. Start AX with `--events`.
+AX protocol version 1 uses one JSON object per line on stdout. Start AX with
+`--events`. The Go constants for this contract live in `internal/axproto`;
+change the document and the constants together.
 
 The first event is always:
 
@@ -25,7 +27,7 @@ While AX runs, stdin accepts JSONL controls:
 ```json
 {"type":"assistant_delta","text":"partial text"}
 {"type":"assistant_done"}
-{"type":"tool_start","id":"call_1","name":"read","arguments":"{\"path\":\"main.rs\"}"}
+{"type":"tool_start","id":"call_1","name":"read","arguments":"{\"path\":\"main.go\"}"}
 {"type":"tool_delta","id":"call_1","text":"partial output"}
 {"type":"tool_result","id":"call_1","output":"result"}
 {"type":"tool_done","id":"call_1"}

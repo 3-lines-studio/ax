@@ -1,0 +1,142 @@
+{
+  "registry": "AX ecosystem",
+  "repository": "https://github.com/3-lines-studio/ax",
+  "installer": "curl -fsSL https://github.com/3-lines-studio/ax/releases/latest/download/install.sh | sh",
+  "programs": [
+    {
+      "name": "ax",
+      "kind": "engine",
+      "role": "Headless agent engine",
+      "description": "A minimal headless LLM coding-agent harness for scripts and Unix-style clients.",
+      "protocol": "--events JSONL",
+      "depends_on": [],
+      "doc": "cmd/ax/README.md"
+    },
+    {
+      "name": "boti",
+      "kind": "host",
+      "role": "Botdir host loader",
+      "description": "Reads bot.toml, installs the declared binaries, wires the Botdir environment, runs the hooks and starts the consumer from the bot root.",
+      "protocol": "",
+      "depends_on": ["ax", "slaxi"],
+      "doc": "cmd/boti/README.md"
+    },
+    {
+      "name": "slaxi",
+      "kind": "transport",
+      "role": "Slack transport",
+      "description": "Connects the ax engine to Slack: listens for mentions, runs the bot and posts replies back.",
+      "protocol": "Slack Events API",
+      "depends_on": ["ax"],
+      "doc": "cmd/slaxi/README.md"
+    },
+    {
+      "name": "wax",
+      "kind": "provider",
+      "role": "Web-fetch tool",
+      "description": "Fetches a web page as Markdown for ax and other LLM tools.",
+      "protocol": "describe/run",
+      "depends_on": [],
+      "doc": "cmd/wax/README.md"
+    },
+    {
+      "name": "bqx",
+      "kind": "provider",
+      "role": "BigQuery tool",
+      "description": "Read-only BigQuery queries for ax.",
+      "protocol": "describe/run",
+      "depends_on": [],
+      "doc": "cmd/bqx/README.md"
+    },
+    {
+      "name": "pgx",
+      "kind": "provider",
+      "role": "PostgreSQL tool",
+      "description": "Read-only PostgreSQL queries for ax.",
+      "protocol": "describe/run",
+      "depends_on": [],
+      "doc": "cmd/pgx/README.md"
+    },
+    {
+      "name": "slackx",
+      "kind": "provider",
+      "role": "Slack file-upload tool",
+      "description": "Uploads files to Slack for ax.",
+      "protocol": "describe/run",
+      "depends_on": [],
+      "doc": "cmd/slackx/README.md"
+    },
+    {
+      "name": "browserx",
+      "kind": "provider",
+      "role": "Chromium tool",
+      "description": "Read-only visible Chromium tool for ax.",
+      "protocol": "describe/run",
+      "depends_on": [],
+      "doc": "cmd/browserx/README.md"
+    },
+    {
+      "name": "bashx",
+      "kind": "provider",
+      "role": "Bash tool",
+      "description": "Runs non-interactive shell commands for ax.",
+      "protocol": "describe/run",
+      "depends_on": [],
+      "doc": "cmd/bashx/README.md"
+    },
+    {
+      "name": "fsx",
+      "kind": "provider",
+      "role": "Filesystem tools",
+      "description": "Reads, writes and edits files inside the workspace.",
+      "protocol": "describe/run",
+      "depends_on": [],
+      "doc": "cmd/fsx/README.md"
+    },
+    {
+      "name": "skillx",
+      "kind": "provider",
+      "role": "Agent Skills provider",
+      "description": "Exposes Agent Skills to ax.",
+      "protocol": "describe/run",
+      "depends_on": [],
+      "doc": "cmd/skillx/README.md"
+    },
+    {
+      "name": "attachx",
+      "kind": "provider",
+      "role": "Conversation attachment tool",
+      "description": "Copies workspace files into the bot's artifact directory so a transport can deliver them to the user.",
+      "protocol": "describe/run",
+      "depends_on": [],
+      "doc": "cmd/attachx/README.md"
+    },
+    {
+      "name": "acpi",
+      "kind": "bridge",
+      "role": "ACP ↔ ax bridge",
+      "description": "Speaks Agent Client Protocol over stdio and runs ax as a subprocess per turn, so any ACP host can drive the engine.",
+      "protocol": "ACP JSON-RPC",
+      "depends_on": ["ax", "mcpx"],
+      "doc": "cmd/acpi/README.md"
+    },
+    {
+      "name": "mcpx",
+      "kind": "bridge",
+      "role": "MCP ↔ ax bridge",
+      "description": "Connects MCP servers and exposes their tools in ax's describe/run convention.",
+      "protocol": "MCP client",
+      "depends_on": [],
+      "doc": "cmd/mcpx/README.md"
+    },
+    {
+      "name": "botdir",
+      "kind": "spec",
+      "role": "Botdir specification",
+      "description": "The portable directory interface for bots. Not a binary: every other piece conforms to it.",
+      "protocol": "",
+      "depends_on": [],
+      "doc": "docs/botdir/BOTDIR.md"
+    }
+  ]
+}

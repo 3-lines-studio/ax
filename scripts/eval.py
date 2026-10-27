@@ -19,8 +19,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent          # ax repo root
-ECOSYSTEM = ROOT.parent                                  # ax-ecosystem root
+ROOT = Path(__file__).resolve().parent.parent  # repository root
 TOOLS = ("ax", "fsx", "bashx", "skillx")
 
 
@@ -42,8 +41,8 @@ def build_tools(dest):
         out = dest / tool
         print("building", tool)
         subprocess.run(
-            ["go", "build", "-trimpath", "-o", str(out), "./..."],
-            cwd=ECOSYSTEM / tool,
+            ["go", "build", "-trimpath", "-o", str(out), "./cmd/" + tool],
+            cwd=ROOT,
             check=True,
         )
 

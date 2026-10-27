@@ -12,17 +12,14 @@ import (
 	"sync"
 	"syscall"
 	"unicode/utf8"
+
+	"github.com/3-lines-studio/ax/internal/axproto"
 )
 
 const maxOutput = 16 * 1024
 const maxDescribeOutput = 64 * 1024
 
-type externalToolSpec struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
-	Snippet     string          `json:"snippet"`
-}
+type externalToolSpec = axproto.ToolSpec
 
 var (
 	childGroups sync.Map

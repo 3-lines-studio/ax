@@ -6,7 +6,7 @@ XDG_CONFIG_HOME, a scripted mock OpenAI-compatible endpoint, one-shot CLI
 runs, and a PTY session for the interactive TUI. Stdlib only.
 
 Usage:
-    python3 scripts/harness.py [--bin path/to/ax] [--filter name] [--list]
+    python3 scripts/harness.py [--bin bin/ax] [--filter name] [--list]
 
 Every case gets a fresh temp HOME. Failures keep their temp dir and print
 its path. The mock server answers /chat/completions from a scenario: the
@@ -716,7 +716,7 @@ def oneshot_bot_workspace_split(h, ax):
 
 
 def main(argv):
-    ax = "target/release/ax"
+    ax = "bin/ax"
     filt = None
     i = 0
     while i < len(argv):
@@ -742,7 +742,7 @@ def main(argv):
         i += 1
     ax = os.path.abspath(ax)
     if not os.path.exists(ax):
-        print("binary not found: %s (build first: make harness or cargo build --release)" % ax)
+        print("binary not found: %s (build first: make harness)" % ax)
         return 2
 
     failed = []
