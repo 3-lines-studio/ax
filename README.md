@@ -3,7 +3,7 @@
 <p align="center"><img src=".github/ax.svg" width="96" height="96" alt="AX ecosystem"></p>
 
 Small Unix programs that compose through process boundaries: a headless agent
-engine, tool providers, a transport, a host loader, and protocol bridges,
+engine, tool providers, a transport, a host loader, and an MCP gateway,
 wired together by the [Botdir](docs/botdir/BOTDIR.md) portable directory
 interface.
 
@@ -38,12 +38,16 @@ Linux x86-64/ARM64 and macOS ARM64, all SHA-256 verified.
 ```sh
 DEEPSEEK_API_KEY=... ax "explain this repository"
 AX_TOOLS="fsx bashx skillx" ax
+ax catalog                     # what is on the plate
 ```
 
 `ax` defaults to DeepSeek (`deepseek-flash` at `https://api.deepseek.com`) and
 accepts any OpenAI-compatible endpoint with `-base` (OpenAI, OpenRouter, Ollama,
-vLLM). `ax` has no built-in tools: every capability is an explicit external
-provider.
+vLLM). Capabilities come from a catalog: local providers (`AX_TOOLS`) and MCP
+servers (`[[mcp]]` in `bot.toml`, added with `ax mcp add` or imported from an
+`mcp.json`/Cursor plugin, OAuth included). The model sees two tools, `search`
+and `execute`, so adding integrations does not grow the prompt. See
+[docs/mcp.md](docs/mcp.md).
 
 ## Programs
 
@@ -66,6 +70,7 @@ provider.
 | Program | Role | Description |
 | --- | --- | --- |
 | [slaxi](cmd/slaxi/README.md) | Slack transport | Connects the ax engine to Slack: listens for mentions, runs the bot and posts replies back. |
+| [webi](cmd/webi/README.md) | Browser UI | Serves the ax engine as a web app: channels are bot directories, threads are ax sessions. |
 
 ### Tool providers
 
@@ -75,18 +80,11 @@ provider.
 | [bqx](cmd/bqx/README.md) | BigQuery tool | Read-only BigQuery queries for ax. |
 | [pgx](cmd/pgx/README.md) | PostgreSQL tool | Read-only PostgreSQL queries for ax. |
 | [slackx](cmd/slackx/README.md) | Slack file-upload tool | Uploads files to Slack for ax. |
-| [browserx](cmd/browserx/README.md) | Chromium tool | Read-only visible Chromium tool for ax. |
+| [browserx](cmd/browserx/README.md) | Chromium tool | Visible Chromium browser tool for ax. |
 | [bashx](cmd/bashx/README.md) | Bash tool | Runs non-interactive shell commands for ax. |
 | [fsx](cmd/fsx/README.md) | Filesystem tools | Reads, writes and edits files inside the workspace. |
 | [skillx](cmd/skillx/README.md) | Agent Skills provider | Exposes Agent Skills to ax. |
 | [attachx](cmd/attachx/README.md) | Conversation attachment tool | Copies workspace files into the bot's artifact directory so a transport can deliver them to the user. |
-
-### Protocol bridges
-
-| Program | Role | Description |
-| --- | --- | --- |
-| [acpi](cmd/acpi/README.md) | ACP ↔ ax bridge | Speaks Agent Client Protocol over stdio and runs ax as a subprocess per turn, so any ACP host can drive the engine. |
-| [mcpx](cmd/mcpx/README.md) | MCP ↔ ax bridge | Connects MCP servers and exposes their tools in ax's describe/run convention. |
 
 ### Specification
 
@@ -99,9 +97,8 @@ provider.
 ## How it fits together
 
 ```text
-ACP host ── acpi ──┐
-Slack    ─ slaxi ──┼──▶ ax ──▶ provider describe / provider run
-MCP      ── mcpx ──┘          (fsx, bashx, wax, bqx, pgx, …)
+LLM host ──▶ ax ──┬──▶ provider describe / provider run (fsx, bashx, wax, …)
+                  └──▶ MCP servers (stdio, Streamable HTTP)
 ```
 
 - The **engine** (`ax`) runs one prompt, emits JSONL events on stdout and has
@@ -109,8 +106,12 @@ MCP      ── mcpx ──┘          (fsx, bashx, wax, bqx, pgx, …)
 - **Providers** implement the Unix tool convention: `<command> describe`
   prints tool descriptors, `<command> run <name>` executes one call. The
   contract is [docs/tools.md](docs/tools.md).
-- **Bridges and transports** speak a foreign protocol on one side and ax's
-  process protocol on the other.
+- **MCP** is the integration path: `ax` indexes configured MCP servers and
+  exposes two tools, `search` and `execute`, instead of a tool list. Providers
+  in the local describe/run convention are indexed the same way, so existing
+  integrations keep working.
+- **`ax mcp serve`** exposes that same catalog to any MCP host; `slaxi` speaks
+  Slack on one side and ax's process protocol on the other.
 - **boti** is the host loader: a bot is a directory with `bot.toml`, and `boti`
   installs what it declares, wires the environment and execs the consumer.
   Consumers, hosts and providers derive `workspace/`, `skills/`, `state/`,
@@ -122,7 +123,9 @@ MCP      ── mcpx ──┘          (fsx, bashx, wax, bqx, pgx, …)
 cmd/<program>/      one binary per directory, with its README and tests
 internal/axproto/   event stream and tool descriptor types shared by the programs
 internal/botdir/    Botdir path, config and secret helpers shared by consumers
-docs/               protocol, tool convention, Botdir specification
+internal/catalog/   tool index, ranking and Markdown rendering for search/execute
+internal/mcp/       stdlib MCP client (stdio and Streamable HTTP)
+docs/               protocol, tool convention, MCP catalog, Botdir specification
 scripts/            installer, packaging, black-box harnesses
 catalog.json        machine-readable program registry (renders the table above)
 ```
@@ -146,6 +149,8 @@ version: there are no per-program tags.
 
 - [docs/protocol.md](docs/protocol.md) — ax's JSONL event stream.
 - [docs/tools.md](docs/tools.md) — the provider describe/run convention.
+- [docs/mcp.md](docs/mcp.md) — the MCP-first catalog, search/execute and config.
+- [docs/session.md](docs/session.md) — the durable session log contract.
 - [docs/botdir/](docs/botdir/README.md) — the Botdir specification and guide.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — development workflow and conventions.
 - [MIGRATION.md](MIGRATION.md) — where each program came from, and what changed

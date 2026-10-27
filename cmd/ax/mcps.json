@@ -1,0 +1,256 @@
+{
+  "version": 1,
+  "note": "Curated MCP servers. `ax mcp add <name>` appends the entry to bot.toml; remote servers default to OAuth and never store secrets.",
+  "servers": [
+    {
+      "name": "github",
+      "description": "Repos, issues, pull requests, Actions and code search.",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": { "Authorization": "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}" },
+      "needs": "set GITHUB_PERSONAL_ACCESS_TOKEN; edit bot.toml to auth = \"oauth\" to log in with a browser instead",
+      "docs": "https://github.com/github/github-mcp-server"
+    },
+    {
+      "name": "gitlab",
+      "description": "Projects, merge requests, issues and pipelines.",
+      "url": "https://gitlab.com/api/v4/mcp",
+      "docs": "https://docs.gitlab.com/user/gitlab_duo/model_context_protocol/mcp_server/"
+    },
+    {
+      "name": "sentry",
+      "description": "Issues, events, traces and projects.",
+      "url": "https://mcp.sentry.dev/mcp"
+    },
+    {
+      "name": "linear",
+      "description": "Issues, projects, cycles and comments.",
+      "url": "https://mcp.linear.app/mcp"
+    },
+    {
+      "name": "notion",
+      "description": "Search and edit pages and databases.",
+      "url": "https://mcp.notion.com/mcp"
+    },
+    {
+      "name": "atlassian",
+      "description": "Jira issues and Confluence pages.",
+      "url": "https://mcp.atlassian.com/v1/mcp"
+    },
+    {
+      "name": "stripe",
+      "description": "Customers, payments, invoices and documentation.",
+      "url": "https://mcp.stripe.com"
+    },
+    {
+      "name": "vercel",
+      "description": "Projects, deployments and logs.",
+      "url": "https://mcp.vercel.com"
+    },
+    {
+      "name": "figma",
+      "description": "Read design files and export assets.",
+      "url": "https://mcp.figma.com/mcp"
+    },
+    {
+      "name": "supabase",
+      "description": "Query projects, tables and edge functions.",
+      "url": "https://mcp.supabase.com/mcp"
+    },
+    {
+      "name": "slack",
+      "description": "Search channels, read threads and post messages.",
+      "url": "https://mcp.slack.com/mcp"
+    },
+    {
+      "name": "neon",
+      "description": "Postgres branches, SQL and project management.",
+      "url": "https://mcp.neon.tech/mcp"
+    },
+    {
+      "name": "cloudflare-docs",
+      "description": "Search Cloudflare's documentation.",
+      "url": "https://docs.mcp.cloudflare.com/mcp",
+      "auth": "none"
+    },
+    {
+      "name": "posthog",
+      "description": "Product analytics, SQL, feature flags and experiments.",
+      "url": "https://mcp.posthog.com/mcp"
+    },
+    {
+      "name": "todoist",
+      "description": "Tasks, projects and reminders.",
+      "url": "https://ai.todoist.net/mcp"
+    },
+    {
+      "name": "intercom",
+      "description": "Support conversations, contacts and help center.",
+      "url": "https://mcp.intercom.com/mcp"
+    },
+    {
+      "name": "hubspot",
+      "description": "CRM contacts, companies, deals and tickets.",
+      "url": "https://mcp.hubspot.com"
+    },
+    {
+      "name": "attio",
+      "description": "CRM records, lists, notes and tasks.",
+      "url": "https://mcp.attio.com/mcp"
+    },
+    {
+      "name": "calendly",
+      "description": "Availability, booking and rescheduling.",
+      "url": "https://mcp.calendly.com/"
+    },
+    {
+      "name": "gamma",
+      "description": "Generate presentations, documents and web pages.",
+      "url": "https://mcp.gamma.app/mcp"
+    },
+    {
+      "name": "framer",
+      "description": "Edit Framer sites, pages and CMS content.",
+      "url": "https://mcp.framer.com/mcp"
+    },
+    {
+      "name": "docusign",
+      "description": "Envelopes, templates and agreement workflows.",
+      "url": "https://mcp.docusign.com/mcp"
+    },
+    {
+      "name": "zoom",
+      "description": "Meetings, recordings and transcripts.",
+      "url": "https://mcp.zoom.us/mcp/zoom/streamable",
+      "client_id_env": "ZOOM_CLIENT_ID",
+      "client_secret_env": "ZOOM_CLIENT_SECRET",
+      "needs": "create a Zoom app and set ZOOM_CLIENT_ID (and ZOOM_CLIENT_SECRET unless it is a public client)"
+    },
+    {
+      "name": "greenhouse",
+      "description": "Candidates, jobs and scorecards.",
+      "url": "https://mcp.us.greenhouse.io/mcp"
+    },
+    {
+      "name": "gusto",
+      "description": "Payroll, employees, contractors and time off.",
+      "url": "https://mcp.api.gusto.com/"
+    },
+    {
+      "name": "square",
+      "description": "Payments, orders, catalog and invoices.",
+      "url": "https://mcp.squareup.com/mcp"
+    },
+    {
+      "name": "readwise",
+      "description": "Highlights and Reader documents.",
+      "url": "https://mcp2.readwise.io/mcp"
+    },
+    {
+      "name": "mem",
+      "description": "Notes and collections.",
+      "url": "https://mcp.mem.ai/mcp"
+    },
+    {
+      "name": "hunter",
+      "description": "Find and verify emails, discover companies.",
+      "url": "https://mcp.hunter.io/mcp",
+      "headers": { "X-API-Key": "${HUNTER_API_KEY}" },
+      "needs": "set HUNTER_API_KEY"
+    },
+    {
+      "name": "klaviyo",
+      "description": "Profiles, segments, campaigns and flows.",
+      "url": "https://mcp.klaviyo.com/mcp"
+    },
+    {
+      "name": "typeform",
+      "description": "Forms, responses and contacts.",
+      "url": "https://api.typeform.com/mcp"
+    },
+    {
+      "name": "trello",
+      "description": "Boards, lists and cards.",
+      "url": "https://mcp.trello.com/v1"
+    },
+    {
+      "name": "wrike",
+      "description": "Projects, tasks and comments.",
+      "url": "https://mcp.wrike.com/v2",
+      "headers": { "Authorization": "Bearer ${WRIKE_API_TOKEN}" },
+      "needs": "set WRIKE_API_TOKEN"
+    },
+    {
+      "name": "statsig",
+      "description": "Feature gates, experiments and metrics.",
+      "url": "https://api.statsig.com/v3/mcp"
+    },
+    {
+      "name": "shopify",
+      "description": "Products, orders and store setup.",
+      "url": "https://setup.shopify.com/mcp"
+    },
+    {
+      "name": "coda",
+      "description": "Docs, pages and tables.",
+      "url": "https://docs.superhuman.com/apis/mcp"
+    },
+    {
+      "name": "playwright",
+      "description": "Drive a real browser: navigate, click, screenshot, test.",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    },
+    {
+      "name": "filesystem",
+      "description": "Read and write files under one directory.",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "needs": "pass the workspace directory: ax mcp add filesystem --arg /path/to/workspace"
+    },
+    {
+      "name": "memory",
+      "description": "Persistent knowledge graph memory.",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
+    },
+    {
+      "name": "sequential-thinking",
+      "description": "Structured step-by-step reasoning.",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    },
+    {
+      "name": "fetch",
+      "description": "Fetch a URL and turn it into readable text.",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    },
+    {
+      "name": "time",
+      "description": "Current time and timezone conversion.",
+      "command": "uvx",
+      "args": ["mcp-server-time"]
+    },
+    {
+      "name": "git",
+      "description": "Inspect and search a local git repository.",
+      "command": "uvx",
+      "args": ["mcp-server-git"],
+      "needs": "pass the repository: ax mcp add git --arg --repository=/path/to/repo"
+    },
+    {
+      "name": "sqlite",
+      "description": "Query and inspect a SQLite database.",
+      "command": "uvx",
+      "args": ["mcp-server-sqlite"],
+      "needs": "pass the database: ax mcp add sqlite --arg --db-path=/path/to/db.sqlite"
+    },
+    {
+      "name": "postgres",
+      "description": "Read-only SQL over a Postgres database.",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "needs": "pass the connection string: ax mcp add postgres --arg postgres://user:pass@host/db"
+    }
+  ]
+}

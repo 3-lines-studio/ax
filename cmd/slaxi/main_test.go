@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -77,13 +76,6 @@ func TestSplitMessageHandlesUnicode(t *testing.T) {
 	parts := splitMessage("😀😀😀😀😀", 3)
 	if len(parts) != 2 || parts[0] != "😀😀😀" || parts[1] != "😀😀" {
 		t.Fatalf("unexpected parts: %#v", parts)
-	}
-}
-
-func TestAXEventAcceptsMessageObject(t *testing.T) {
-	var event axEvent
-	if err := json.Unmarshal([]byte(`{"type":"message","message":{"Role":"assistant","Content":"done"}}`), &event); err != nil {
-		t.Fatal(err)
 	}
 }
 

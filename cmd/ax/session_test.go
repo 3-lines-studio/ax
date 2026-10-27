@@ -160,14 +160,14 @@ func TestDeriveRepairsInterruptedTool(t *testing.T) {
 		{Type: entryRunStart, RunID: "r1"},
 		{Type: entryMessage, Message: &user},
 		{Type: entryMessage, Message: &assistant},
-		{Type: entryToolIntent, Call: &assistant.ToolCalls[0]},
+		{Type: entryToolIntent, Call: &assistant.ToolCalls[0], Target: "fsx.write"},
 		{Type: entryToolResult, Call: &assistant.ToolCalls[1], Output: "second"},
 	}
 	state := deriveSession(entries)
 	if len(state.Messages) != 4 {
 		t.Fatalf("messages = %+v", state.Messages)
 	}
-	if state.Messages[2].Role != "tool" || state.Messages[2].ToolCallID != "a" || !strings.Contains(state.Messages[2].Content, "interrupted") {
+	if state.Messages[2].Role != "tool" || state.Messages[2].ToolCallID != "a" || !strings.Contains(state.Messages[2].Content, "interrupted") || !strings.Contains(state.Messages[2].Content, "fsx.write") {
 		t.Errorf("repaired first result = %+v", state.Messages[2])
 	}
 	if state.Messages[3].ToolCallID != "b" || state.Messages[3].Content != "second" {

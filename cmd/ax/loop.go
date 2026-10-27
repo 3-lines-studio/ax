@@ -11,12 +11,26 @@ import (
 
 const maxRetries = 2
 
-func runStream(provider Provider, opts *runOptions, msgs []Message, cancel *atomic.Bool, sink runSink) runEnd {
+func runStream(ctx context.Context, provider Provider, opts *runOptions, msgs []Message, cancel *atomic.Bool, sink runSink) runEnd {
 	history := append([]Message(nil), msgs...)
 	usage := Usage{}
+	lastPrompt := 0
+	compactedAt := -1
 	for turn := 0; turn < opts.maxTurns; turn++ {
 		if cancel.Load() {
 			return runEnd{messages: history, usage: usage, outcome: outcomeCancelled}
+		}
+		if opts.compact != nil && len(history) > compactedAt {
+			if threshold := compactThreshold(opts.compactAt, opts.contextWindow); threshold > 0 &&
+				(lastPrompt > threshold || estimateTokens(opts.system, history) > threshold) {
+				next, system, err := opts.compact(ctx, history, turn > 0)
+				if err != nil {
+					return runEnd{messages: history, usage: usage, outcome: outcomeFailed, failMsg: err.Error()}
+				}
+				history, opts.system = next, system
+				lastPrompt = 0
+				compactedAt = len(history)
+			}
 		}
 		resp, calls, err := requestStream(provider, opts, history, cancel, sink)
 		if err != nil {
@@ -25,6 +39,7 @@ func runStream(provider Provider, opts *runOptions, msgs []Message, cancel *atom
 			}
 			return runEnd{messages: history, usage: usage, outcome: outcomeFailed, failMsg: err.Error()}
 		}
+		lastPrompt = resp.Usage.Input + resp.Usage.Output
 		usage = Usage{
 			Input:       usage.Input + resp.Usage.Input,
 			Output:      usage.Output + resp.Usage.Output,
@@ -48,9 +63,6 @@ func runStream(provider Provider, opts *runOptions, msgs []Message, cancel *atom
 		truncated := resp.StopReason == "length" || resp.StopReason == "insufficient_system_resource"
 		if !runToolBatch(opts.tools, calls, truncated, turn, cancel, sink, &history) {
 			return runEnd{messages: history, usage: usage, outcome: outcomeCancelled}
-		}
-		if sink.shouldCompact(resp.Usage.Input, resp.Usage.Output) {
-			return runEnd{messages: history, usage: usage, outcome: outcomeCompact}
 		}
 	}
 	return runEnd{messages: history, usage: usage, outcome: outcomeMaxTurns}

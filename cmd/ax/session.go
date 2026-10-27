@@ -21,6 +21,7 @@ const (
 	entryAssistantPartial = "assistant_partial"
 	entryToolIntent       = "tool_intent"
 	entryToolResult       = "tool_result"
+	entryCompaction       = "compaction"
 )
 
 // interruptedToolOutput is what the model sees for a tool call whose outcome
@@ -41,14 +42,20 @@ type sessionEntry struct {
 	Turn        int       `json:"turn,omitempty"`
 	At          int64     `json:"at,omitempty"` // unix milliseconds
 	Call        *ToolCall `json:"call,omitempty"`
+	Target      string    `json:"target,omitempty"`
 	Output      string    `json:"output,omitempty"`
 	IsError     bool      `json:"is_error,omitempty"`
 	Interrupted bool      `json:"interrupted,omitempty"`
 	Outcome     string    `json:"outcome,omitempty"`
 	Prompt      string    `json:"prompt,omitempty"`
-	Model       string    `json:"model,omitempty"`
-	BaseURL     string    `json:"base_url,omitempty"`
-	Tools       []string  `json:"tools,omitempty"`
+
+	// compaction: how many projected messages the summary replaces, and the
+	// summary itself. Older entries stay in the log; readers drop the prefix.
+	Upto    int      `json:"upto,omitempty"`
+	Summary string   `json:"summary,omitempty"`
+	Model   string   `json:"model,omitempty"`
+	BaseURL string   `json:"base_url,omitempty"`
+	Tools   []string `json:"tools,omitempty"`
 }
 
 type usageInfo struct {
@@ -67,6 +74,7 @@ type usageInfo struct {
 // ended, and how many interrupted tool calls had to be repaired.
 type sessionState struct {
 	Messages    []Message
+	Summary     string
 	OpenRun     bool
 	LastRunID   string
 	LastPartial *Message
@@ -85,6 +93,7 @@ func deriveSession(entries []sessionEntry) sessionState {
 	var state sessionState
 	var pending []ToolCall
 	held := map[string]string{}
+	targets := map[string]string{}
 
 	resolve := func(callID, output string) bool {
 		if held == nil {
@@ -109,6 +118,9 @@ func deriveSession(entries []sessionEntry) sessionState {
 					break
 				}
 				output = interruptedToolOutput
+				if target := targets[call.ID]; target != "" {
+					output = fmt.Sprintf("error: tool call interrupted before its result was recorded (target: %s): its side effects are unknown.", target)
+				}
 				state.Repaired++
 			}
 			state.Messages = append(state.Messages, Message{Role: "tool", Content: output, ToolCallID: call.ID})
@@ -153,6 +165,21 @@ func deriveSession(entries []sessionEntry) sessionState {
 
 	for _, entry := range entries {
 		switch entry.Type {
+		case entryCompaction:
+			drain(true)
+			switch {
+			case entry.Upto <= 0:
+			case entry.Upto >= len(state.Messages):
+				state.Messages = nil
+			default:
+				state.Messages = append([]Message(nil), state.Messages[entry.Upto:]...)
+			}
+			// A tool result whose call was summarized away is not a valid
+			// message for the provider; drop the orphaned prefix.
+			for len(state.Messages) > 0 && state.Messages[0].Role == "tool" {
+				state.Messages = state.Messages[1:]
+			}
+			state.Summary = entry.Summary
 		case entryRunStart:
 			state.OpenRun = true
 			state.LastRunID = entry.RunID
@@ -161,6 +188,10 @@ func deriveSession(entries []sessionEntry) sessionState {
 		case entryMessage:
 			if entry.Message != nil {
 				appendMessage(*entry.Message)
+			}
+		case entryToolIntent:
+			if entry.Call != nil && entry.Target != "" {
+				targets[entry.Call.ID] = entry.Target
 			}
 		case entryToolResult:
 			if entry.Call == nil {

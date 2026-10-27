@@ -12,7 +12,10 @@ AX_TOOLS="wax browserx bqx"
 
 Names and paths in `AX_TOOLS` cannot contain whitespace. AX does not scan `PATH` for providers.
 
-AX has no built-in tools. When `AX_TOOLS` is unset, AX starts without tools.
+AX has no built-in tools. When `AX_TOOLS` is unset, AX starts without local
+providers. Providers are indexed into ax's tool catalog alongside MCP servers;
+the model sees `search` and `execute`, not each provider tool. See
+[mcp.md](mcp.md). `-tool-mode direct` restores the old per-tool surface.
 
 ## Discovery
 
@@ -39,7 +42,9 @@ Each descriptor contains:
 - `timeout`: optional per-call limit in seconds; `0` uses the engine default
   (300 s);
 - `replay`: optional `"safe"` when re-running an interrupted call has no side
-  effects.
+  effects;
+- `read_only`, `destructive`, `open_world`: optional catalog hints used for
+  search tags and batching.
 
 Tool names must be unique across all providers. Unknown descriptor fields are ignored. A provider with no available tools prints nothing and exits successfully.
 
