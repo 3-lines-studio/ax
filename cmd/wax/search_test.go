@@ -114,7 +114,7 @@ func TestFormatEmptyResults(t *testing.T) {
 }
 
 func TestDescribeNeedsTheKey(t *testing.T) {
-	t.Setenv("DEEPSEEK_API_KEY", "")
+	isolate(t)
 	var without bytes.Buffer
 	describe(&without)
 	if strings.Contains(without.String(), "web_search") {
