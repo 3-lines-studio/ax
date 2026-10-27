@@ -34,6 +34,11 @@ only place development continues.
 | Botdir spec | `3-lines-studio/botdir` | `7975f10` | — |
 | Catalog | `3-lines-studio/ax-ecosystem` | `aef67c0` | — |
 
+`acpi` and `mcpx` were imported and then removed: the ACP path is retired,
+and MCP is native to `ax` now (servers are configured under `[[mcp]]` in
+`bot.toml`; there is no bridge binary). Bots that still list `mcpx` in
+`AX_TOOLS` or `tools` can drop it.
+
 The catalog repository was folded into `catalog.json` plus
 `scripts/render-catalog.py`; the scheduled version-refresh workflow is gone
 because all programs now share one version.
@@ -54,9 +59,17 @@ because all programs now share one version.
   at a local mirror, now flat (all artifacts in one directory) instead of one
   directory per program.
 - **Shared contracts.** `internal/axproto` holds the event names, outcomes and
-  tool descriptor used by the engine, bridges and transport.
-  `internal/botdir` holds the `BOT_ROOT`/`BOT_DATA` path, `bot.toml` and secret
-  helpers used by ax, boti, slaxi, fsx and bashx.
+  tool descriptor used by the engine and transport. `internal/botdir` holds
+  the `BOT_ROOT`/`BOT_DATA` path, `bot.toml` and secret helpers used by ax,
+  boti, slaxi, fsx and bashx.
+- **MCP-first catalog.** `ax` now indexes MCP servers and local providers and
+  exposes two tools, `search` and `execute`; `mcpx` and `acpi` were removed.
+  `bot.toml` gained `[[mcp]]`, `tool_mode` and `core_tools`. The old
+  per-provider surface is available for one release with
+  `-tool-mode direct`. Remote servers authenticate with a token header or with
+  `ax mcp login` (OAuth, PKCE, tokens in `state/ax/mcp/auth/`);
+  `ax mcp add`/`ax mcp import` connect registry servers or an existing
+  `mcp.json`/Cursor plugin. See `docs/mcp.md`.
 - **One quality gate.** `scripts/check.sh` (also `make check`) runs gofmt, tidy,
   vet, tests, race, builds, per-binary size budgets, the catalog check, the
   provider contract check and the ax harness. The per-program workflows,
@@ -64,18 +77,46 @@ because all programs now share one version.
 - **The botdir spec moved** to `docs/botdir/`, next to the code that implements
   it.
 
+## Engine changes after the import
+
+The ax engine kept moving while the repositories were merged:
+
+- **DeepSeek is the default provider.** `base_url` defaults to
+  `https://api.deepseek.com` and `model` to `deepseek-flash`; the API key is
+  read from `DEEPSEEK_API_KEY` before `OPENAI_API_KEY`. Existing bots that set
+  `base_url`/`model` in `bot.toml` or flags are unaffected. Set
+  `OPENAI_API_KEY`/`-base`/`-model` as before for other providers.
+- **Thinking is on by default for DeepSeek, at `reasoning_effort: max`.**
+  `-thinking auto|on|off`,
+  `-effort low|high|max` (`none` disables) and `-max-tokens` control it;
+  `bot.toml` gained `thinking`, `reasoning_effort` and `max_tokens`.
+- **Images.** `-image PATH|URL` (repeatable) and `-image-detail` add vision
+  input; images are content-addressed blobs next to the session log.
+- **Durable sessions.** `--session FILE` is now an append-only, fsynced JSONL
+  log that resumes and repairs interrupted runs instead of a convenience dump.
+  See `docs/session.md`.
+- **New event and descriptor fields.** `reasoning_delta` was added to the
+  event stream and `sequential`, `timeout` and `replay` are accepted in tool
+  descriptors. All are additive; protocol version stays 1, and clients may
+  ignore unknown events and fields.
+
 ## Compatibility
 
-- Binary names, flags, environment variables and wire protocols are unchanged.
-  The only code-level moves are the shared helpers; behavior is covered by the
-  imported tests.
+- Binary names, existing flags, environment variables and wire protocols keep
+  their meaning. Changes to defaults and new fields are listed above; the
+  protocol stays at version 1 and the added event and descriptor fields are
+  optional.
+- Bots that list `mcpx` in `tools`/`AX_TOOLS` should drop it and move those
+  servers to `[[mcp]]`; `acpi` users should point their MCP host at
+  `ax mcp serve` instead.
+- Sessions written in direct mode contain provider tool calls. Resume them
+  with `-tool-mode direct`, or start a new session; catalog sessions use
+  `search` and `execute`.
 - Old release URLs keep working while the old repositories and their tags
   exist. They are frozen at the versions listed above.
 - `go install` paths gain a `/cmd/<program>` segment:
-  `go install github.com/3-lines-studio/ax/cmd/ax@vX.Y.Z`.
-  `go install github.com/3-lines-studio/pgx@v0.2.1` (used by `megingjord`'s
-  image) keeps resolving from the old repository; new versions use
-  `go install github.com/3-lines-studio/ax/cmd/pgx@vX.Y.Z`.
+  `go install github.com/3-lines-studio/ax/cmd/ax@vX.Y.Z`; old module paths
+  keep resolving from the frozen repositories.
 - The old `ax-ecosystem` README is superseded by the root README; links to
   `ax-ecosystem/blob/main/BOTDIR.md` in downstream docs should point at
   `ax/docs/botdir/BOTDIR.md`.

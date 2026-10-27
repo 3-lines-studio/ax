@@ -157,7 +157,7 @@ func TestOpenAIStreamContent(t *testing.T) {
 	if resp.Usage.Input != 10 || resp.Usage.Output != 3 || resp.Usage.CachedInput != 2 {
 		t.Errorf("usage = %+v", resp.Usage)
 	}
-	if lastTokens != (Usage{10, 3, 2}) {
+	if lastTokens != (Usage{Input: 10, Output: 3, CachedInput: 2}) {
 		t.Errorf("last tokens = %+v", lastTokens)
 	}
 }

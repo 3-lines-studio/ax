@@ -7,9 +7,17 @@ import (
 )
 
 type botConfig struct {
-	Model   string   `toml:"model"`
-	BaseURL string   `toml:"base_url"`
-	Tools   []string `toml:"tools"`
+	Model           string     `toml:"model"`
+	BaseURL         string     `toml:"base_url"`
+	Tools           []string   `toml:"tools"`
+	Thinking        *bool      `toml:"thinking"`
+	ReasoningEffort string     `toml:"reasoning_effort"`
+	MaxTokens       int        `toml:"max_tokens"`
+	ToolMode        string     `toml:"tool_mode"`
+	CoreTools       []string   `toml:"core_tools"`
+	MCP             []mcpEntry `toml:"mcp"`
+	CompactAt       *float64   `toml:"compact_at"`
+	ContextWindow   *int       `toml:"context_window"`
 }
 
 // botCtx is what the engine needs from the Botdir conventions.
@@ -36,6 +44,34 @@ func mergeBotConfig(fc fileConfig, bc botConfig) fileConfig {
 	if len(bc.Tools) > 0 {
 		fc.tools = strings.Join(bc.Tools, " ")
 	}
+	if bc.Thinking != nil {
+		if *bc.Thinking {
+			fc.thinking = "on"
+		} else {
+			fc.thinking = "off"
+		}
+	}
+	if bc.ReasoningEffort != "" {
+		fc.effort = bc.ReasoningEffort
+	}
+	if bc.MaxTokens > 0 {
+		fc.maxTokens = bc.MaxTokens
+	}
+	if bc.ToolMode != "" {
+		fc.toolMode = bc.ToolMode
+	}
+	if len(bc.CoreTools) > 0 {
+		fc.coreTools = append([]string(nil), bc.CoreTools...)
+	}
+	if len(bc.MCP) > 0 {
+		fc.mcp = append([]mcpEntry(nil), bc.MCP...)
+	}
+	if bc.CompactAt != nil {
+		fc.compactAt, fc.compactAtSet = *bc.CompactAt, true
+	}
+	if bc.ContextWindow != nil {
+		fc.contextWindow, fc.contextWindowSet = *bc.ContextWindow, true
+	}
 	return fc
 }
 
@@ -61,7 +97,7 @@ func botRootArg(args []string) string {
 			return ""
 		}
 		switch name {
-		case "base", "model", "system", "session":
+		case "base", "model", "system", "session", "thinking", "effort", "max-tokens", "image", "image-detail", "tool-mode":
 			if !hasInline {
 				i++
 			}

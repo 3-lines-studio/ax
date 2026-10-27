@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -98,7 +99,7 @@ func TestParseArgsNoArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg != (cliConfig{}) || len(rest) != 0 {
+	if !reflect.DeepEqual(cfg, cliConfig{}) || len(rest) != 0 {
 		t.Errorf("cfg = %+v rest = %v", cfg, rest)
 	}
 }
@@ -152,6 +153,7 @@ func TestFirstNonEmpty(t *testing.T) {
 }
 
 func TestAPIKeyPrecedence(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
 	bot := &botCtx{APIKey: "bot-key", HasAPIKey: true}
 	fc := fileConfig{apiKey: "fc-key"}
@@ -166,6 +168,12 @@ func TestAPIKeyPrecedence(t *testing.T) {
 		t.Errorf("env set -> %q", got)
 	}
 
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-key")
+	if got := apiKey(fc, bot); got != "deepseek-key" {
+		t.Errorf("deepseek env wins -> %q", got)
+	}
+
+	t.Setenv("DEEPSEEK_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
 	if got := apiKey(fc, nil); got != "fc-key" {
 		t.Errorf("no bot -> %q", got)
@@ -176,13 +184,16 @@ func TestLoadConfigParsesLegacyConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgDir := filepath.Join(dir, "ax")
 	_ = os.MkdirAll(cfgDir, 0o755)
-	content := "# comment\n\napi_key = \"sk-123\"\nmodel = \"gpt-4\"\nbase = \"http://len\"\ntools = \"bash edit\"\n"
+	content := "# comment\n\napi_key = \"sk-123\"\nmodel = \"gpt-4\"\nbase = \"http://len\"\ntools = \"bash edit\"\ntool_mode = \"direct\"\ncore_tools = \"fsx.read, bashx.bash\"\n"
 	_ = os.WriteFile(filepath.Join(cfgDir, "config"), []byte(content), 0o644)
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
 	c := loadConfig()
 	if c.apiKey != "sk-123" || c.model != "gpt-4" || c.base != "http://len" || c.tools != "bash edit" {
 		t.Errorf("loadConfig = %+v", c)
+	}
+	if c.toolMode != "direct" || len(c.coreTools) != 2 || c.coreTools[0] != "fsx.read" {
+		t.Errorf("tool config = %+v", c)
 	}
 }
 
@@ -200,7 +211,7 @@ func TestLoadConfigMissingReturnsZero(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	c := loadConfig()
-	if c != (fileConfig{}) {
+	if !reflect.DeepEqual(c, fileConfig{}) {
 		t.Errorf("loadConfig = %+v", c)
 	}
 }
@@ -244,10 +255,10 @@ func TestConfigPrecedenceDefaultsWhenNothingSet(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	fc := mergeBotConfig(loadConfig(), botConfig{})
 	cfg, _, _ := parseArgs(nil)
-	if got := firstNonEmpty(cfg.base, fc.base, "https://api.openai.com/v1"); got != "https://api.openai.com/v1" {
+	if got := firstNonEmpty(cfg.base, fc.base, "https://api.deepseek.com"); got != "https://api.deepseek.com" {
 		t.Errorf("base default = %q", got)
 	}
-	if got := firstNonEmpty(cfg.model, fc.model, "gpt-4.1-mini"); got != "gpt-4.1-mini" {
+	if got := firstNonEmpty(cfg.model, fc.model, "deepseek-flash"); got != "deepseek-flash" {
 		t.Errorf("model default = %q", got)
 	}
 }
@@ -263,5 +274,63 @@ func TestLoadConfigSkipsMalformedLines(t *testing.T) {
 	}
 	if c.apiKey != "" || c.base != "" || c.tools != "" {
 		t.Errorf("unexpected fields = %+v", c)
+	}
+}
+
+func TestParseArgsModelAndImageOptions(t *testing.T) {
+	cfg, rest, err := parseArgs([]string{
+		"-thinking", "off", "-effort=max", "-max-tokens", "4096",
+		"-image", "a.png", "-image=b.jpg", "-image-detail", "low", "prompt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.thinking != "off" || cfg.effort != "max" || cfg.maxTokens != 4096 {
+		t.Errorf("cfg = %+v", cfg)
+	}
+	if len(cfg.images) != 2 || cfg.images[0] != "a.png" || cfg.images[1] != "b.jpg" {
+		t.Errorf("images = %v", cfg.images)
+	}
+	if cfg.imageDetail != "low" || len(rest) != 1 || rest[0] != "prompt" {
+		t.Errorf("cfg=%+v rest=%v", cfg, rest)
+	}
+}
+
+func TestParseArgsRejectsBadMaxTokens(t *testing.T) {
+	if _, _, err := parseArgs([]string{"-max-tokens", "nope"}); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestValidateModelOptions(t *testing.T) {
+	if err := validateModelOptions(cliConfig{thinking: "on", effort: "max", imageDetail: "low"}, fileConfig{}); err != nil {
+		t.Errorf("valid options rejected: %v", err)
+	}
+	if err := validateModelOptions(cliConfig{thinking: "maybe"}, fileConfig{}); err == nil {
+		t.Error("invalid thinking accepted")
+	}
+	if err := validateModelOptions(cliConfig{effort: "ultra"}, fileConfig{}); err == nil {
+		t.Error("invalid effort accepted")
+	}
+}
+
+func TestLoadConfigParsesModelOptions(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(dir, "ax"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "ax", "config"), []byte("thinking = \"off\"\neffort = \"max\"\nmax_tokens = 9000\nimage_detail = \"low\"\n"), 0o644)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	cfg := loadConfig()
+	if cfg.thinking != "off" || cfg.effort != "max" || cfg.maxTokens != 9000 || cfg.imageDetail != "low" {
+		t.Errorf("cfg = %+v", cfg)
+	}
+}
+
+func TestParseArgsDoubleDashForcesPrompt(t *testing.T) {
+	cfg, rest, err := parseArgs([]string{"--", "catalog"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.literal || len(rest) != 1 || rest[0] != "catalog" {
+		t.Errorf("cfg=%+v rest=%v", cfg, rest)
 	}
 }
