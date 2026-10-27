@@ -150,7 +150,7 @@ func TestPostMessage(t *testing.T) {
 		captured = r.Clone(context.Background())
 		return jsonResponse(`{"ok":true,"ts":"1.99"}`), nil
 	})
-	ts, err := postMessage(config{botToken: "bot-token"}, job{channel: "C1", threadTS: "1.0"}, "hello world")
+	ts, err := postMessage(config{botToken: "bot-token"}, job{channel: "C1", threadTS: "1.0", prompt: "hi"}, "hello world")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestWorkPostsAndUpdates(t *testing.T) {
 		return jsonResponse(`{"ok":true,"ts":"1.0"}`), nil
 	})
 	jobs := make(chan job, 1)
-	jobs <- job{channel: "C1", threadTS: "1.0"}
+	jobs <- job{channel: "C1", threadTS: "1.0", prompt: "hi"}
 	close(jobs)
 	work(cfg, jobs)
 	if len(calls) != 2 {
@@ -322,7 +322,7 @@ func TestWorkPostsWithoutUpdateWhenNoProgressTS(t *testing.T) {
 		return jsonResponse(`{"ok":true,"ts":""}`), nil
 	})
 	jobs := make(chan job, 1)
-	jobs <- job{channel: "C1", threadTS: "1.0"}
+	jobs <- job{channel: "C1", threadTS: "1.0", prompt: "hi"}
 	close(jobs)
 	work(cfg, jobs)
 	if len(calls) != 2 {
@@ -353,7 +353,7 @@ func TestWorkPostsAXFailureReply(t *testing.T) {
 		return jsonResponse(`{"ok":true,"ts":"1.0"}`), nil
 	})
 	jobs := make(chan job, 1)
-	jobs <- job{channel: "C1", threadTS: "1.0"}
+	jobs <- job{channel: "C1", threadTS: "1.0", prompt: "hi"}
 	close(jobs)
 	work(cfg, jobs)
 	if len(calls) != 2 {
