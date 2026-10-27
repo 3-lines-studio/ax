@@ -31,7 +31,7 @@ func main() {
 		args = args[1:]
 	}
 	if len(args) == 1 && args[0] == "describe" {
-		fmt.Println(`{"name":"web_fetch","description":"Fetch a URL as Markdown with automatic Chromium rendering","parameters":{"type":"object","properties":{"url":{"type":"string","description":"HTTP or HTTPS URL"}},"required":["url"]},"snippet":"Fetch URL as Markdown with Wax"}`)
+		fmt.Println(`{"name":"web_fetch","description":"Fetch a URL as Markdown with automatic Chromium rendering","parameters":{"type":"object","properties":{"url":{"type":"string","description":"HTTP or HTTPS URL"}},"required":["url"]},"read_only":true,"open_world":true,"snippet":"Fetch URL as Markdown with Wax"}`)
 		return
 	}
 	if len(args) == 2 && args[0] == "run" && args[1] == "web_fetch" {

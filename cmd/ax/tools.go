@@ -162,71 +162,94 @@ func boundedDescribe(command *exec.Cmd) (int, []byte, []byte, bool, error) {
 func tryExternalTools(commands string, workdir string) ([]Tool, error) {
 	var tools []Tool
 	for _, command := range strings.Fields(commands) {
-		describe := exec.Command(command, "describe")
-		describe.Dir = workdir
-		code, stdout, stderr, exceeded, err := boundedDescribe(describe)
+		discovered, err := discoverProvider(context.Background(), command, workdir)
 		if err != nil {
-			return nil, fmt.Errorf("discover tools from %s: %w", command, err)
+			return nil, err
 		}
-		if exceeded {
-			return nil, fmt.Errorf("discover tools from %s: output exceeds %d bytes", command, maxDescribeOutput)
-		}
-		if code != 0 {
-			message := sanitize(string(stderr))
-			message = strings.TrimSpace(tail(message))
-			if message == "" {
-				return nil, fmt.Errorf("discover tools from %s: %s", command, statusCodeString(code))
-			}
-			return nil, fmt.Errorf("discover tools from %s: %s", command, message)
-		}
-		for _, line := range strings.Split(string(stdout), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			var spec externalToolSpec
-			if err := json.Unmarshal([]byte(line), &spec); err != nil {
-				return nil, fmt.Errorf("invalid tool from %s: %s", command, err)
-			}
-			if !validToolName(spec.Name) {
-				return nil, fmt.Errorf("invalid tool name from %s: %s", command, spec.Name)
-			}
-			if strings.TrimSpace(spec.Description) == "" {
-				return nil, fmt.Errorf("empty tool description from %s: %s", command, spec.Name)
-			}
-			schema, err := compileSchema(spec.Parameters)
-			if err != nil {
-				return nil, fmt.Errorf("invalid tool parameters from %s: %s", command, spec.Name+": "+err.Error())
-			}
+		for _, tool := range discovered {
 			for _, existing := range tools {
-				if existing.Name == spec.Name {
-					return nil, fmt.Errorf("duplicate tool name: %s", spec.Name)
+				if existing.Name == tool.Name {
+					return nil, fmt.Errorf("duplicate tool name: %s", tool.Name)
 				}
-			}
-			executable := command
-			toolName := spec.Name
-			description := spec.Description
-			parameters := append(json.RawMessage(nil), spec.Parameters...)
-			snippet := spec.Snippet
-			timeout := spec.Timeout
-			tool := Tool{
-				Name:        toolName,
-				Description: description,
-				Parameters:  parameters,
-				Snippet:     snippet,
-				Sequential:  spec.Sequential,
-				Replay:      spec.Replay,
-				Timeout:     timeout,
-				Validate:    schema.validate,
-				RunContext: func(ctx context.Context, arguments string, _ func(string)) string {
-					return runExternalTool(ctx, executable, toolName, arguments, workdir, timeout)
-				},
-			}
-			if tool.Snippet == "" {
-				tool.Snippet = tool.Description
 			}
 			tools = append(tools, tool)
 		}
+	}
+	return tools, nil
+}
+
+func discoverProvider(ctx context.Context, command, workdir string) ([]Tool, error) {
+	describe := exec.CommandContext(ctx, command, "describe")
+	describe.Dir = workdir
+	code, stdout, stderr, exceeded, err := boundedDescribe(describe)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("discover tools from %s: %w", command, ctx.Err())
+		}
+		return nil, fmt.Errorf("discover tools from %s: %w", command, err)
+	}
+	if exceeded {
+		return nil, fmt.Errorf("discover tools from %s: output exceeds %d bytes", command, maxDescribeOutput)
+	}
+	if code != 0 {
+		message := sanitize(string(stderr))
+		message = strings.TrimSpace(tail(message))
+		if message == "" {
+			return nil, fmt.Errorf("discover tools from %s: %s", command, statusCodeString(code))
+		}
+		return nil, fmt.Errorf("discover tools from %s: %s", command, message)
+	}
+	var tools []Tool
+	for _, line := range strings.Split(string(stdout), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var spec externalToolSpec
+		if err := json.Unmarshal([]byte(line), &spec); err != nil {
+			return nil, fmt.Errorf("invalid tool from %s: %s", command, err)
+		}
+		if !validToolName(spec.Name) {
+			return nil, fmt.Errorf("invalid tool name from %s: %s", command, spec.Name)
+		}
+		if strings.TrimSpace(spec.Description) == "" {
+			return nil, fmt.Errorf("empty tool description from %s: %s", command, spec.Name)
+		}
+		schema, err := compileSchema(spec.Parameters)
+		if err != nil {
+			return nil, fmt.Errorf("invalid tool parameters from %s: %s", command, spec.Name+": "+err.Error())
+		}
+		for _, existing := range tools {
+			if existing.Name == spec.Name {
+				return nil, fmt.Errorf("duplicate tool name from %s: %s", command, spec.Name)
+			}
+		}
+		executable := command
+		toolName := spec.Name
+		description := spec.Description
+		parameters := append(json.RawMessage(nil), spec.Parameters...)
+		snippet := spec.Snippet
+		timeout := spec.Timeout
+		tool := Tool{
+			Name:        toolName,
+			Description: description,
+			Parameters:  parameters,
+			Snippet:     snippet,
+			Sequential:  spec.Sequential,
+			Replay:      spec.Replay,
+			ReadOnly:    spec.ReadOnly,
+			Destructive: spec.Destructive,
+			OpenWorld:   spec.OpenWorld,
+			Timeout:     timeout,
+			Validate:    schema.validate,
+			RunContext: func(ctx context.Context, arguments string, _ func(string)) string {
+				return runExternalTool(ctx, executable, toolName, arguments, workdir, timeout)
+			},
+		}
+		if tool.Snippet == "" {
+			tool.Snippet = tool.Description
+		}
+		tools = append(tools, tool)
 	}
 	return tools, nil
 }

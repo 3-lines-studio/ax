@@ -32,8 +32,8 @@ Every line is a JSON object with a `type` and, once a run starts, `run_id`.
 | `run_start` | `prompt`, `model`, `base_url`, `tools` | A run began. Written before the user message. |
 | `message` | `message`, `turn` | A complete message: user, assistant (with `ToolCalls`) or tool result. |
 | `assistant_partial` | `message`, `turn` | Throttled copy of the assistant text and reasoning streamed so far (at most once a second or per 4 KiB). Audit only; never sent back to the model. |
-| `tool_intent` | `call`, `turn` | The engine is about to execute a tool call. Written before the process starts. |
-| `tool_result` | `call`, `output`, `turn` | The tool finished. Written after the output is known. |
+| `tool_intent` | `call`, `target`, `turn` | The engine is about to execute a tool call. Written before the process starts. `target` is the resolved catalog id for `execute` (e.g. `fsx.write`). |
+| `tool_result` | `call`, `target`, `output`, `turn` | The tool finished. Written after the output is known. |
 | `usage` | `usage`, `turn` | Token accounting for an assistant turn. |
 | `run_end` | `outcome`, `usage` | The run finished with an outcome from the [event protocol](protocol.md). |
 
@@ -48,10 +48,11 @@ provider accepts:
 
 - assistant turns that never finished (leftovers from a crash mid-stream) are
   dropped; `assistant_partial` is kept in the log for audit only;
-- every tool call in a pending batch gets the result
-  `error: tool call interrupted: the result was never recorded and its side
-  effects are unknown.` — in call order, including calls whose intent was
-  written but whose process never started;
+- every tool call in a pending batch gets an interrupted result — in call
+  order, including calls whose intent was written but whose process never
+  started. When the intent carried a `target`, the message names it:
+  `error: tool call interrupted before its result was recorded (target:
+  fsx.write): its side effects are unknown.`
 - tool results without a matching call are dropped, so a duplicated or
   orphaned result cannot corrupt the history.
 

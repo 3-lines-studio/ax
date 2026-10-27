@@ -41,6 +41,7 @@ type sessionEntry struct {
 	Turn        int       `json:"turn,omitempty"`
 	At          int64     `json:"at,omitempty"` // unix milliseconds
 	Call        *ToolCall `json:"call,omitempty"`
+	Target      string    `json:"target,omitempty"`
 	Output      string    `json:"output,omitempty"`
 	IsError     bool      `json:"is_error,omitempty"`
 	Interrupted bool      `json:"interrupted,omitempty"`
@@ -85,6 +86,7 @@ func deriveSession(entries []sessionEntry) sessionState {
 	var state sessionState
 	var pending []ToolCall
 	held := map[string]string{}
+	targets := map[string]string{}
 
 	resolve := func(callID, output string) bool {
 		if held == nil {
@@ -109,6 +111,9 @@ func deriveSession(entries []sessionEntry) sessionState {
 					break
 				}
 				output = interruptedToolOutput
+				if target := targets[call.ID]; target != "" {
+					output = fmt.Sprintf("error: tool call interrupted before its result was recorded (target: %s): its side effects are unknown.", target)
+				}
 				state.Repaired++
 			}
 			state.Messages = append(state.Messages, Message{Role: "tool", Content: output, ToolCallID: call.ID})
@@ -161,6 +166,10 @@ func deriveSession(entries []sessionEntry) sessionState {
 		case entryMessage:
 			if entry.Message != nil {
 				appendMessage(*entry.Message)
+			}
+		case entryToolIntent:
+			if entry.Call != nil && entry.Target != "" {
+				targets[entry.Call.ID] = entry.Target
 			}
 		case entryToolResult:
 			if entry.Call == nil {

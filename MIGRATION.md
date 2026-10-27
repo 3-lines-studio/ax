@@ -34,6 +34,11 @@ only place development continues.
 | Botdir spec | `3-lines-studio/botdir` | `7975f10` | — |
 | Catalog | `3-lines-studio/ax-ecosystem` | `aef67c0` | — |
 
+`acpi` and `mcpx` were imported and then removed: the ACP path is retired,
+and MCP is native to `ax` now (servers are configured under `[[mcp]]` in
+`bot.toml`; there is no bridge binary). Bots that still list `mcpx` in
+`AX_TOOLS` or `tools` can drop it.
+
 The catalog repository was folded into `catalog.json` plus
 `scripts/render-catalog.py`; the scheduled version-refresh workflow is gone
 because all programs now share one version.
@@ -54,9 +59,14 @@ because all programs now share one version.
   at a local mirror, now flat (all artifacts in one directory) instead of one
   directory per program.
 - **Shared contracts.** `internal/axproto` holds the event names, outcomes and
-  tool descriptor used by the engine, bridges and transport.
-  `internal/botdir` holds the `BOT_ROOT`/`BOT_DATA` path, `bot.toml` and secret
-  helpers used by ax, boti, slaxi, fsx and bashx.
+  tool descriptor used by the engine and transport. `internal/botdir` holds
+  the `BOT_ROOT`/`BOT_DATA` path, `bot.toml` and secret helpers used by ax,
+  boti, slaxi, fsx and bashx.
+- **MCP-first catalog.** `ax` now indexes MCP servers and local providers and
+  exposes two tools, `search` and `execute`; `mcpx` and `acpi` were removed.
+  `bot.toml` gained `[[mcp]]`, `tool_mode` and `core_tools`. The old
+  per-provider surface is available for one release with
+  `-tool-mode direct`. See `docs/mcp.md`.
 - **One quality gate.** `scripts/check.sh` (also `make check`) runs gofmt, tidy,
   vet, tests, race, builds, per-binary size budgets, the catalog check, the
   provider contract check and the ax harness. The per-program workflows,
@@ -93,6 +103,12 @@ The ax engine kept moving while the repositories were merged:
   their meaning. Changes to defaults and new fields are listed above; the
   protocol stays at version 1 and the added event and descriptor fields are
   optional.
+- Bots that list `mcpx` in `tools`/`AX_TOOLS` should drop it and move those
+  servers to `[[mcp]]`; `acpi` users should point their MCP host at
+  `ax mcp serve` instead.
+- Sessions written in direct mode contain provider tool calls. Resume them
+  with `-tool-mode direct`, or start a new session; catalog sessions use
+  `search` and `execute`.
 - Old release URLs keep working while the old repositories and their tags
   exist. They are frozen at the versions listed above.
 - `go install` paths gain a `/cmd/<program>` segment:

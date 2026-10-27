@@ -84,7 +84,7 @@ func TestBuildSystemPromptNoUserPrompt(t *testing.T) {
 func TestResolveSystemOverride(t *testing.T) {
 	cfg := cliConfig{system: "override"}
 	bot := &botCtx{Workspace: "/ws", Prompt: "bot"}
-	if got := resolveSystem(cfg, nil, bot); got != "override" {
+	if got := resolveSystem(cfg, nil, bot, nil, nil); got != "override" {
 		t.Errorf("resolveSystem = %q", got)
 	}
 }
@@ -92,7 +92,7 @@ func TestResolveSystemOverride(t *testing.T) {
 func TestResolveSystemFallsBackToBuild(t *testing.T) {
 	cfg := cliConfig{}
 	bot := &botCtx{Workspace: "/ws", Prompt: "bot"}
-	got := resolveSystem(cfg, nil, bot)
+	got := resolveSystem(cfg, nil, bot, nil, nil)
 	if !strings.Contains(got, "You are an expert assistant") {
 		t.Errorf("resolveSystem did not build prompt: %q", got)
 	}

@@ -18,7 +18,7 @@ func main() {
 		args = args[1:]
 	}
 	if len(args) == 1 && args[0] == "describe" {
-		fmt.Println(`{"name":"upload_to_slack","description":"Upload a local file to the current Slack thread","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Path to the local file"}},"required":["path"]}}`)
+		fmt.Println(`{"name":"upload_to_slack","description":"Upload a local file to the current Slack thread","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Path to the local file"}},"required":["path"]},"destructive":true,"open_world":true}`)
 		return
 	}
 	if len(args) != 2 || args[0] != "run" || args[1] != "upload_to_slack" {

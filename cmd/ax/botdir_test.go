@@ -64,3 +64,13 @@ func TestWorkDirAbs(t *testing.T) {
 		t.Errorf("workDirAbs = %q", got)
 	}
 }
+
+func TestBotRootArgSkipsValueFlags(t *testing.T) {
+	args := []string{"-tool-mode", "direct", "-thinking", "off", "-image", "x.png", "-C", "/bot", "prompt"}
+	if got := botRootArg(args); got != "/bot" {
+		t.Errorf("botRootArg = %q", got)
+	}
+	if got := botRootArg([]string{"-C=/other", "prompt"}); got != "/other" {
+		t.Errorf("inline -C = %q", got)
+	}
+}

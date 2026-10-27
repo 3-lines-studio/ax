@@ -78,7 +78,7 @@ class Bot:
         env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
         for k, v in (extra_env or {}).items():
             env[k] = v
-        cmd = [str(bin_dir / "ax"), "-C", str(self.root), "--events"]
+        cmd = [str(bin_dir / "ax"), "-C", str(self.root), "-tool-mode", "direct", "--events"]
         if session:
             cmd += ["--session", session]
         cmd += [prompt]

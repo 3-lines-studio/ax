@@ -130,6 +130,9 @@ type Tool struct {
 	Snippet     string
 	Sequential  bool
 	Replay      string
+	ReadOnly    bool
+	Destructive bool
+	OpenWorld   bool
 	Timeout     int // seconds; 0 means the engine default
 	// Run is the legacy in-process entry point. External providers use
 	// RunContext so the engine can cancel or time out the process.

@@ -28,7 +28,7 @@ While AX runs, stdin accepts JSONL controls:
 {"type":"assistant_delta","text":"partial text"}
 {"type":"reasoning_delta","text":"partial reasoning"}
 {"type":"assistant_done"}
-{"type":"tool_start","id":"call_1","name":"read","arguments":"{\"path\":\"main.go\"}"}
+{"type":"tool_start","id":"call_1","name":"execute","target":"fsx.read","arguments":"{\"tool\":\"fsx.read\",\"arguments\":{\"path\":\"main.go\"}}"}
 {"type":"tool_delta","id":"call_1","text":"partial output"}
 {"type":"tool_result","id":"call_1","output":"result"}
 {"type":"tool_done","id":"call_1"}
@@ -39,6 +39,11 @@ While AX runs, stdin accepts JSONL controls:
 {"type":"done","outcome":"done"}
 ```
 
+In catalog mode `tool_start` names the model-facing tool (`search` or
+`execute`). For `execute`, the optional `target` field carries the resolved
+catalog id, which is what hosts should display and audit. In direct mode the
+event names the provider tool itself and `target` is absent.
+
 AX emits exactly one final `done` event. Outcomes are `done`, `cancelled`, `compact`, `max_turns`, or `failed`. Failed runs exit non-zero.
 
 `reasoning_delta` carries the model's thinking text. It arrives before and
@@ -46,6 +51,9 @@ separately from `assistant_delta`; clients that only render the answer can
 ignore it. `assistant_done` closes the turn in either case.
 
 ## Message content
+
+The tool surface is described in [mcp.md](mcp.md): two tools, `search` and
+`execute`, over a catalog of MCP servers and local providers.
 
 `message` events carry the stored `Message`: `Role`, `Content`, optional
 `ReasoningContent`, optional `ContentParts` and optional `ToolCalls`. A user
