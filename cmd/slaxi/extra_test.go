@@ -247,7 +247,7 @@ func TestWorkPostsMultipleParts(t *testing.T) {
 		return jsonResponse(`{"ok":true,"ts":"1.0"}`), nil
 	})
 	jobs := make(chan job, 1)
-	jobs <- job{channel: "C1", threadTS: "1.0"}
+	jobs <- job{channel: "C1", threadTS: "1.0", prompt: "hi"}
 	close(jobs)
 	work(cfg, jobs)
 	if len(calls) != 3 {
@@ -285,7 +285,7 @@ func TestWorkHandlesProgressError(t *testing.T) {
 		return jsonResponse(`{"ok":true,"ts":"1.0"}`), nil
 	})
 	jobs := make(chan job, 1)
-	jobs <- job{channel: "C1", threadTS: "1.0"}
+	jobs <- job{channel: "C1", threadTS: "1.0", prompt: "hi"}
 	close(jobs)
 	work(cfg, jobs)
 	if len(calls) != 2 {
@@ -320,7 +320,7 @@ func TestWorkHandlesUpdateError(t *testing.T) {
 		return jsonResponse(`{"ok":true,"ts":"1.0"}`), nil
 	})
 	jobs := make(chan job, 1)
-	jobs <- job{channel: "C1", threadTS: "1.0"}
+	jobs <- job{channel: "C1", threadTS: "1.0", prompt: "hi"}
 	close(jobs)
 	work(cfg, jobs)
 	if len(calls) != 2 {
