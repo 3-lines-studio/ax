@@ -93,7 +93,6 @@ type runSink interface {
 	toolDelta(call ToolCall, text string)
 	toolResult(call ToolCall)
 	tokens(input, output, cached int)
-	shouldCompact(input, output int) bool
 	assistant(turn int, msg Message, usage Usage)
 	tool(turn int, msg Message)
 }
@@ -104,6 +103,12 @@ type runOptions struct {
 	tools     []Tool
 	maxTurns  int
 	toolLimit int
+
+	// Context compaction. compactAt is a fraction of contextWindow; zero
+	// disables it. compact rewrites the history and the system prompt.
+	compactAt     float64
+	contextWindow int
+	compact       func(ctx context.Context, history []Message, midRun bool) ([]Message, string, error)
 }
 
 type outcome int
@@ -130,6 +135,9 @@ type Tool struct {
 	Snippet     string
 	Sequential  bool
 	Replay      string
+	ReadOnly    bool
+	Destructive bool
+	OpenWorld   bool
 	Timeout     int // seconds; 0 means the engine default
 	// Run is the legacy in-process entry point. External providers use
 	// RunContext so the engine can cancel or time out the process.

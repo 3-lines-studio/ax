@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,7 +20,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/3-lines-studio/ax/internal/axproto"
+	"github.com/3-lines-studio/ax/internal/axrun"
 	"github.com/3-lines-studio/ax/internal/botdir"
 )
 
@@ -87,19 +86,6 @@ type slackResponse struct {
 	OK    bool   `json:"ok"`
 	TS    string `json:"ts"`
 	Error string `json:"error"`
-}
-
-type axEvent struct {
-	Type     string          `json:"type"`
-	Message  json.RawMessage `json:"message"`
-	Outcome  string          `json:"outcome"`
-	Messages []axMessage     `json:"messages"`
-}
-
-type axMessage struct {
-	Role      string          `json:"Role"`
-	Content   string          `json:"Content"`
-	ToolCalls json.RawMessage `json:"ToolCalls"`
 }
 
 var markdownLink = regexp.MustCompile(`\[([^]]+)\]\((https?://[^ )]+)\)`)
@@ -375,85 +361,35 @@ func executeJob(cfg config, j job) (string, error) {
 	return runAX(cfg, j)
 }
 
+// runAX is the whole engine contract of this transport: one ax process per
+// message, its NDJSON events folded into the reply Slack shows. internal/axrun
+// does the same for webi, so both transports behave alike.
 func runAX(cfg config, j job) (string, error) {
-	session := filepath.Join(cfg.stateAX, j.teamID, j.channel, j.threadTS+".jsonl")
-	args := []string{"--events", "--session", session, "-C", cfg.botRoot}
-	if cfg.baseURL != "" {
-		args = append(args, "-base", cfg.baseURL)
-	}
-	if cfg.model != "" {
-		args = append(args, "-model", cfg.model)
-	}
-	if cfg.system != "" {
-		args = append(args, "-system", cfg.system)
-	}
-	args = append(args, j.prompt)
-	cmd := exec.Command(cfg.axPath, args...)
-	env := []string{
-		"AX_SLACK_CHANNEL=" + j.channel,
-		"AX_SLACK_THREAD=" + j.threadTS,
-		"AX_ARTIFACT_DIR=" + filepath.Join(cfg.artifacts, j.teamID, j.channel),
-	}
-	cmd.Env = append(os.Environ(), env...)
-	stdout, err := cmd.StdoutPipe()
+	result, err := axrun.RunOne(context.Background(), axrun.Config{
+		AXPath:  cfg.axPath,
+		BotRoot: cfg.botRoot,
+		BaseURL: cfg.baseURL,
+		Model:   cfg.model,
+		System:  cfg.system,
+		Env: []string{
+			"AX_SLACK_CHANNEL=" + j.channel,
+			"AX_SLACK_THREAD=" + j.threadTS,
+			"AX_ARTIFACT_DIR=" + filepath.Join(cfg.artifacts, j.teamID, j.channel),
+		},
+	}, axrun.Job{
+		Session: filepath.Join(cfg.stateAX, j.teamID, j.channel, j.threadTS+".jsonl"),
+		Prompt:  j.prompt,
+	}, nil)
 	if err != nil {
 		return "", err
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		return "", err
+	if result.Outcome != "done" {
+		return "", fmt.Errorf("ax ended with %s", result.Outcome)
 	}
-	decoder := json.NewDecoder(stdout)
-	var result []axMessage
-	var eventError string
-	var outcome string
-	for {
-		var event axEvent
-		err := decoder.Decode(&event)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			_ = cmd.Wait()
-			return "", fmt.Errorf("decode AX event: %w", err)
-		}
-		switch event.Type {
-		case axproto.TypeResult:
-			result = event.Messages
-		case axproto.TypeError:
-			if err := json.Unmarshal(event.Message, &eventError); err != nil {
-				eventError = string(event.Message)
-			}
-		case axproto.TypeDone:
-			outcome = event.Outcome
-		}
+	if result.Text == "" {
+		return "", errors.New("ax returned an empty response")
 	}
-	waitErr := cmd.Wait()
-	if eventError != "" {
-		return "", errors.New(eventError)
-	}
-	if waitErr != nil || outcome != axproto.OutcomeDone {
-		message := strings.TrimSpace(stderr.String())
-		if message == "" && waitErr != nil {
-			message = waitErr.Error()
-		}
-		if message == "" {
-			message = "AX ended with " + outcome
-		}
-		return "", errors.New(message)
-	}
-	for i := len(result) - 1; i >= 0; i-- {
-		message := result[i]
-		if message.Role != "assistant" || strings.TrimSpace(message.Content) == "" {
-			continue
-		}
-		if len(message.ToolCalls) > 0 && string(message.ToolCalls) != "null" && string(message.ToolCalls) != "[]" {
-			continue
-		}
-		return strings.TrimSpace(message.Content), nil
-	}
-	return "", errors.New("ax returned an empty response")
+	return result.Text, nil
 }
 
 func formatMarkdown(text string) string {

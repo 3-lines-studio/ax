@@ -15,8 +15,8 @@ import (
 const maxInput = 16 * 1024
 
 var descriptors = []string{
-	`{"name":"skills","description":"List available skills with their names and descriptions.","parameters":{"type":"object","properties":{},"additionalProperties":false},"snippet":"List installed skills"}`,
-	`{"name":"skill","description":"Read one skill's content by name. Use the skills tool to list names first. When a skill references a relative path, resolve it against the skill's directory.","parameters":{"type":"object","properties":{"name":{"type":"string","description":"Skill name"}},"required":["name"],"additionalProperties":false},"snippet":"Read an installed skill"}`,
+	`{"name":"skills","description":"List available skills with their names and descriptions.","parameters":{"type":"object","properties":{},"additionalProperties":false},"read_only":true,"snippet":"List installed skills"}`,
+	`{"name":"skill","description":"Read one skill's content by name. Use the skills tool to list names first. When a skill references a relative path, resolve it against the skill's directory.","parameters":{"type":"object","properties":{"name":{"type":"string","description":"Skill name"}},"required":["name"],"additionalProperties":false},"read_only":true,"snippet":"Read an installed skill"}`,
 }
 
 type arguments struct {

@@ -18,7 +18,10 @@
       "role": "Botdir host loader",
       "description": "Reads bot.toml, installs the declared binaries, wires the Botdir environment, runs the hooks and starts the consumer from the bot root.",
       "protocol": "",
-      "depends_on": ["ax", "slaxi"],
+      "depends_on": [
+        "ax",
+        "slaxi"
+      ],
       "doc": "cmd/boti/README.md"
     },
     {
@@ -27,7 +30,9 @@
       "role": "Slack transport",
       "description": "Connects the ax engine to Slack: listens for mentions, runs the bot and posts replies back.",
       "protocol": "Slack Events API",
-      "depends_on": ["ax"],
+      "depends_on": [
+        "ax"
+      ],
       "doc": "cmd/slaxi/README.md"
     },
     {
@@ -70,7 +75,7 @@
       "name": "browserx",
       "kind": "provider",
       "role": "Chromium tool",
-      "description": "Read-only visible Chromium tool for ax.",
+      "description": "Visible Chromium browser tool for ax.",
       "protocol": "describe/run",
       "depends_on": [],
       "doc": "cmd/browserx/README.md"
@@ -112,24 +117,6 @@
       "doc": "cmd/attachx/README.md"
     },
     {
-      "name": "acpi",
-      "kind": "bridge",
-      "role": "ACP ↔ ax bridge",
-      "description": "Speaks Agent Client Protocol over stdio and runs ax as a subprocess per turn, so any ACP host can drive the engine.",
-      "protocol": "ACP JSON-RPC",
-      "depends_on": ["ax", "mcpx"],
-      "doc": "cmd/acpi/README.md"
-    },
-    {
-      "name": "mcpx",
-      "kind": "bridge",
-      "role": "MCP ↔ ax bridge",
-      "description": "Connects MCP servers and exposes their tools in ax's describe/run convention.",
-      "protocol": "MCP client",
-      "depends_on": [],
-      "doc": "cmd/mcpx/README.md"
-    },
-    {
       "name": "botdir",
       "kind": "spec",
       "role": "Botdir specification",
@@ -137,6 +124,17 @@
       "protocol": "",
       "depends_on": [],
       "doc": "docs/botdir/BOTDIR.md"
+    },
+    {
+      "name": "webi",
+      "kind": "transport",
+      "role": "Browser UI",
+      "description": "Serves the ax engine as a web app: channels are bot directories, threads are ax sessions.",
+      "protocol": "sse + /api",
+      "depends_on": [
+        "ax"
+      ],
+      "doc": "cmd/webi/README.md"
     }
   ]
 }

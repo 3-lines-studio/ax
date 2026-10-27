@@ -18,7 +18,7 @@ import (
 	"github.com/3-lines-studio/ax/internal/botdir"
 )
 
-const describe = `{"name":"bash","description":"Execute non-interactive Bash with host filesystem and network access. Inherits the host environment. Returns stdout and stderr. Commands time out after 120 seconds by default.","parameters":{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run"},"timeout":{"type":"number","minimum":1,"maximum":600,"description":"Timeout in seconds (default 120, maximum 600)"}},"required":["command"],"additionalProperties":false},"sequential":true,"snippet":"Execute Bash commands"}`
+const describe = `{"name":"bash","description":"Execute non-interactive Bash with host filesystem and network access. Inherits the host environment. Returns stdout and stderr. Commands time out after 120 seconds by default.","parameters":{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run"},"timeout":{"type":"number","minimum":1,"maximum":600,"description":"Timeout in seconds (default 120, maximum 600)"}},"required":["command"],"additionalProperties":false},"sequential":true,"destructive":true,"open_world":true,"snippet":"Execute Bash commands"}`
 
 const (
 	maxInput    = 1 << 20
