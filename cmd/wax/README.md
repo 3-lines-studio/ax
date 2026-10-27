@@ -1,6 +1,8 @@
 # wax
 
-Fetch a web page as Markdown, for `ax` and other LLM tools. HTTP first; when a page has little useful text, it renders with an installed Chromium and converts the final HTML to Markdown.
+Web search and fetch for `ax` and other LLM tools. `web_search` uses DeepSeek's
+Search API; `web_fetch` gets a page as Markdown, HTTP first and Chromium when a
+page needs rendering.
 
 ## Install
 
@@ -24,6 +26,30 @@ printf '%s' '{"url":"https://example.com"}' | wax run web_fetch
 ```
 
 Enable it through `ax` tool discovery: `AX_TOOLS="wax" ax`.
+
+## Search
+
+`web_search` exists only when `DEEPSEEK_API_KEY` is set: DeepSeek bills the
+Search API per request ($0.75 per 1,000), so wax does not advertise a tool that
+cannot run.
+
+```sh
+export DEEPSEEK_API_KEY=sk-...
+wax search "deepseek v4 release" -count 5      # Markdown, for humans
+wax search "rust async" -content               # include page text
+wax search "site:github.com tokio" -json       # structured results
+printf '%s' '{"query":"deepseek","count":3}' | wax run web_search
+wax describe                                    # now lists web_search too
+```
+
+The query supports DeepSeek's operators (`site:`, `-site:`, `lang:`, `after:`,
+`before:`, `"exact phrase"`, `-term`). `DEEPSEEK_BASE_URL` overrides the
+endpoint (a trailing `/v1` is fine). The tool returns titles, links, site,
+date, authority and the long summary for each result, and retries the statuses
+DeepSeek documents as retryable (408, 429, 5xx).
+
+`web_fetch` stays local: it renders JavaScript with Chromium, which the
+DeepSeek Fetch API does not do.
 
 ## Build and test
 

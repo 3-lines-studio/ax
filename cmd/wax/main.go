@@ -31,7 +31,15 @@ func main() {
 		args = args[1:]
 	}
 	if len(args) == 1 && args[0] == "describe" {
-		fmt.Println(`{"name":"web_fetch","description":"Fetch a URL as Markdown with automatic Chromium rendering","parameters":{"type":"object","properties":{"url":{"type":"string","description":"HTTP or HTTPS URL"}},"required":["url"]},"read_only":true,"open_world":true,"snippet":"Fetch URL as Markdown with Wax"}`)
+		describe(os.Stdout)
+		return
+	}
+	if len(args) >= 1 && args[0] == "search" {
+		searchCLI(args[1:])
+		return
+	}
+	if len(args) == 2 && args[0] == "run" && args[1] == "web_search" {
+		runSearch()
 		return
 	}
 	if len(args) == 2 && args[0] == "run" && args[1] == "web_fetch" {
@@ -393,4 +401,88 @@ func visibleText(node *html.Node) string {
 	}
 	walk(node)
 	return strings.Join(strings.Fields(text.String()), " ")
+}
+
+// runSearch implements the provider side of web_search.
+func runSearch() {
+	var input struct {
+		Query       string `json:"query"`
+		Count       int    `json:"count"`
+		NeedContent bool   `json:"need_content"`
+	}
+	if err := json.NewDecoder(io.LimitReader(os.Stdin, 1<<20)).Decode(&input); err != nil {
+		fmt.Fprintf(os.Stderr, "error: invalid arguments: %v\n", err)
+		os.Exit(2)
+	}
+	if deepseekKey() == "" {
+		fmt.Fprintln(os.Stderr, "error: web_search needs DEEPSEEK_API_KEY")
+		os.Exit(1)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	results, err := searchWeb(ctx, nil, searchRequest{Query: input.Query, Count: input.Count, NeedContent: input.NeedContent})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(formatSearch(results))
+}
+
+// searchCLI is the human entry point: wax search "query" [-count N] [-content].
+func searchCLI(args []string) {
+	count := 0
+	needContent := false
+	asJSON := false
+	var query []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-count", "--count":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "error: -count needs a number")
+				os.Exit(2)
+			}
+			if _, err := fmt.Sscanf(args[i], "%d", &count); err != nil {
+				fmt.Fprintf(os.Stderr, "error: invalid -count %q\n", args[i])
+				os.Exit(2)
+			}
+		case "-content", "--content":
+			needContent = true
+		case "-json", "--json":
+			asJSON = true
+		default:
+			query = append(query, args[i])
+		}
+	}
+	if strings.TrimSpace(strings.Join(query, " ")) == "" {
+		fmt.Fprintln(os.Stderr, `usage: wax search "query" [-count N] [-content] [-json]`)
+		os.Exit(2)
+	}
+	if deepseekKey() == "" {
+		fmt.Fprintln(os.Stderr, "error: web search needs DEEPSEEK_API_KEY")
+		os.Exit(1)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	results, err := searchWeb(ctx, nil, searchRequest{Query: strings.Join(query, " "), Count: count, NeedContent: needContent})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if asJSON {
+		data, _ := json.MarshalIndent(results, "", "  ")
+		fmt.Println(string(data))
+		return
+	}
+	fmt.Println(formatSearch(results))
+}
+
+// describe prints the tools this build can run. web_search depends on a paid
+// API, so it only appears when DEEPSEEK_API_KEY is configured.
+func describe(w io.Writer) {
+	fmt.Fprintln(w, `{"name":"web_fetch","description":"Fetch a URL as Markdown with automatic Chromium rendering","parameters":{"type":"object","properties":{"url":{"type":"string","description":"HTTP or HTTPS URL"}},"required":["url"]},"read_only":true,"open_world":true,"snippet":"Fetch URL as Markdown with Wax"}`)
+	if deepseekKey() == "" {
+		return
+	}
+	fmt.Fprintln(w, `{"name":"web_search","description":"Search the web (DeepSeek Search): ranked titles, URLs, summaries and optional page content","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Query; supports site:, -site:, lang:, after:, before:, \"exact phrase\" and -term"},"count":{"type":"integer","description":"Results, 1-50 (default 10)"},"need_content":{"type":"boolean","description":"Include page content in the results"}},"required":["query"]},"read_only":true,"open_world":true,"snippet":"Search the web with DeepSeek Search"}`)
 }
