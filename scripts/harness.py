@@ -6,7 +6,7 @@ XDG_CONFIG_HOME, a scripted mock OpenAI-compatible endpoint, one-shot CLI
 runs, and a PTY session for the interactive TUI. Stdlib only.
 
 Usage:
-    python3 scripts/harness.py [--bin path/to/ax] [--filter name] [--list]
+    python3 scripts/harness.py [--bin bin/ax] [--filter name] [--list]
 
 Every case gets a fresh temp HOME. Failures keep their temp dir and print
 its path. The mock server answers /chat/completions from a scenario: the
@@ -95,7 +95,7 @@ TOOL_SCENARIO = [
     {
         "stream": [
             content_chunk("Let me check. "),
-            tool_chunk("bash", {"command": "echo hello"}),
+            tool_chunk("execute", {"tool": "bashprovider.bash", "arguments": {"command": "echo hello"}}),
             usage_chunk(10, 5),
         ]
     },
@@ -103,8 +103,19 @@ TOOL_SCENARIO = [
 ]
 
 WRITE_FILE_SCENARIO = [
-    {"stream": [tool_chunk("bash", {"command": "printf hi > out.txt"}), usage_chunk(10, 5)]},
+    {"stream": [tool_chunk("execute", {"tool": "bashprovider.bash", "arguments": {"command": "printf hi > out.txt"}}), usage_chunk(10, 5)]},
     {"stream": [content_chunk("file written.", "stop"), usage_chunk(20, 8)]},
+]
+
+SEARCH_SCENARIO = [
+    {"stream": [tool_chunk("search", {"query": "run a shell command"}), usage_chunk(10, 5)]},
+    {"stream": [tool_chunk("execute", {"tool": "bashprovider.bash", "arguments": {"command": "echo searched"}}), usage_chunk(10, 5)]},
+    {"stream": [content_chunk("found it.", "stop"), usage_chunk(20, 8)]},
+]
+
+DIRECT_SCENARIO = [
+    {"stream": [tool_chunk("bash", {"command": "printf direct > direct.txt"}), usage_chunk(10, 5)]},
+    {"stream": [content_chunk("direct done.", "stop"), usage_chunk(20, 8)]},
 ]
 
 REWIND_SCENARIO = [
@@ -529,7 +540,7 @@ def oneshot_tool_loop(h, ax):
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
         events = read_events(p)
         check(
-            any(e.get("type") == "tool_start" and e.get("name") == "bash" for e in events),
+            any(e.get("type") == "tool_start" and e.get("name") == "execute" for e in events),
             "no tool_start event",
         )
         content = [m["Content"] for m in last_result(events)["messages"] if m["Role"] == "assistant"]
@@ -540,6 +551,136 @@ def oneshot_tool_loop(h, ax):
             any("hello" in m.get("content", "") for m in tool_msgs),
             "tool result not fed back: %s" % tool_msgs,
         )
+
+
+@case
+def oneshot_catalog_search(h, ax):
+    with h.mock(SEARCH_SCENARIO) as srv:
+        p = h.oneshot(
+            ax,
+            ["--events", "find a tool"],
+            base=srv.base_url,
+            extra_env={"AX_TOOLS": str(bash_provider(h))},
+        )
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        events = read_events(p)
+        check(
+            any(e.get("type") == "tool_start" and e.get("name") == "search" for e in events),
+            "no search tool_start",
+        )
+        check(
+            any(
+                e.get("type") == "tool_start"
+                and e.get("name") == "execute"
+                and e.get("target") == "bashprovider.bash"
+                for e in events
+            ),
+            "no execute target event",
+        )
+        tool_msgs = body_msg(srv, 1, "tool")
+        check(
+            any("bashprovider.bash" in m.get("content", "") for m in tool_msgs),
+            "search result not fed back: %s" % tool_msgs,
+        )
+
+
+@case
+def oneshot_direct_tools(h, ax):
+    with h.mock(DIRECT_SCENARIO) as srv:
+        p = h.oneshot(
+            ax,
+            ["-tool-mode", "direct", "write directly"],
+            base=srv.base_url,
+            extra_env={"AX_TOOLS": str(bash_provider(h))},
+        )
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        check((h.work / "direct.txt").read_text() == "direct", "direct tool did not run")
+
+
+@case
+def mcp_add_from_registry(h, ax):
+    p = h.oneshot(ax, ["mcp", "add", "sentry"])
+    check(p.returncode == 0, "add exit %s: %s" % (p.returncode, p.stderr[-500:]))
+    toml = (h.work / "bot.toml").read_text()
+    check('name = "sentry"' in toml, "bot.toml missing server: %s" % toml)
+    check("mcp.sentry.dev" in toml, "bot.toml missing url: %s" % toml)
+    listed = h.oneshot(ax, ["mcp", "list", "--json"])
+    check(listed.returncode == 0, "list exit %s: %s" % (listed.returncode, listed.stderr[-500:]))
+    servers = json.loads(listed.stdout)
+    check(len(servers) == 1 and servers[0]["name"] == "sentry", "listed: %s" % servers)
+    check(servers[0]["auth"] == "oauth", "auth kind wrong: %s" % servers)
+    check(servers[0]["status"] == "login required", "status wrong: %s" % servers)
+
+
+@case
+def mcp_import_document(h, ax):
+    document = {
+        "mcpServers": {
+            "linear": {"type": "http", "url": "https://mcp.linear.app/mcp"},
+            "files": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-memory"]},
+            "gdocs": {"url": "https://api.cursor.com/rest-mcp/google-docs/mcp"},
+        }
+    }
+    path = h.work / "mcp.json"
+    path.write_text(json.dumps(document))
+    p = h.oneshot(ax, ["mcp", "import", str(path)])
+    check(p.returncode == 0, "import exit %s: %s" % (p.returncode, p.stderr[-500:]))
+    check("Cursor-hosted" in p.stderr, "no skip reason: %s" % p.stderr[-500:])
+    toml = (h.work / "bot.toml").read_text()
+    check('name = "linear"' in toml and 'name = "files"' in toml, "bot.toml: %s" % toml)
+    check("cursor.com" not in toml, "imported a Cursor-only endpoint: %s" % toml)
+    again = h.oneshot(ax, ["mcp", "import", str(path)])
+    check("already configured" in again.stderr, "second import: %s" % again.stderr[-500:])
+
+
+COMPACT_SCENARIO = [
+    # First turn: a tool call and a prompt that is already over half the window.
+    {
+        "stream": [
+            tool_chunk("execute", {"tool": "bashprovider.bash", "arguments": {"command": "echo busy"}}),
+            usage_chunk(8000, 5),
+        ]
+    },
+    # The summarizer's own request.
+    {"stream": [content_chunk("SUMMARY: the user asked for work; a tool ran.", "stop"), usage_chunk(50, 12)]},
+    # The run continues with the summary in the system prompt.
+    {"stream": [content_chunk("# Done\n\nCompacted and finished.\n", "stop"), usage_chunk(60, 8)]},
+]
+
+
+@case
+def oneshot_auto_compaction(h, ax):
+    session = h.root / "compact.jsonl"
+    h.write_config("compact_at = 0.5\ncontext_window = 10000\n")
+    with h.mock(COMPACT_SCENARIO) as srv:
+        p = h.oneshot(
+            ax,
+            ["--events", "--session", str(session), "keep working"],
+            base=srv.base_url,
+            extra_env={"AX_TOOLS": str(bash_provider(h))},
+        )
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        events = read_events(p)
+        check(
+            any(e.get("type") == "compaction" and e.get("summary") for e in events),
+            "no compaction event: %s" % events[:5],
+        )
+        check(events[-1] == {"type": "done", "outcome": "done"}, "bad final event")
+        systems = [
+            m["content"]
+            for m in srv.requests[-1]["json"]["messages"]
+            if m["role"] == "system"
+        ]
+        check(
+            any("Summary of the earlier conversation" in s for s in systems),
+            "summary missing from the system prompt",
+        )
+        check(len(srv.requests) == 3, "expected 3 requests, got %d" % len(srv.requests))
+    entries = [json.loads(line) for line in session.read_text().splitlines() if line.strip()]
+    check(
+        any(e.get("type") == "compaction" and e.get("upto") for e in entries),
+        "session log has no compaction entry",
+    )
 
 
 @case
@@ -716,7 +857,7 @@ def oneshot_bot_workspace_split(h, ax):
 
 
 def main(argv):
-    ax = "target/release/ax"
+    ax = "bin/ax"
     filt = None
     i = 0
     while i < len(argv):
@@ -742,7 +883,7 @@ def main(argv):
         i += 1
     ax = os.path.abspath(ax)
     if not os.path.exists(ax):
-        print("binary not found: %s (build first: make harness or cargo build --release)" % ax)
+        print("binary not found: %s (build first: make harness)" % ax)
         return 2
 
     failed = []

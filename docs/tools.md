@@ -12,7 +12,10 @@ AX_TOOLS="wax browserx bqx"
 
 Names and paths in `AX_TOOLS` cannot contain whitespace. AX does not scan `PATH` for providers.
 
-AX has no built-in tools. When `AX_TOOLS` is unset, AX starts without tools.
+AX has no built-in tools. When `AX_TOOLS` is unset, AX starts without local
+providers. Providers are indexed into ax's tool catalog alongside MCP servers;
+the model sees `search` and `execute`, not each provider tool. See
+[mcp.md](mcp.md). `-tool-mode direct` restores the old per-tool surface.
 
 ## Discovery
 
@@ -33,9 +36,29 @@ Each descriptor contains:
 - `name`: 1 to 64 ASCII letters, digits, underscores, or hyphens;
 - `description`: a non-empty string;
 - `parameters`: a JSON Schema object;
-- `snippet`: an optional string.
+- `snippet`: an optional short hint the engine adds to the system prompt;
+- `sequential`: optional boolean; run this tool alone, in call order, instead
+  of in parallel with other calls in the same batch;
+- `timeout`: optional per-call limit in seconds; `0` uses the engine default
+  (300 s);
+- `replay`: optional `"safe"` when re-running an interrupted call has no side
+  effects;
+- `read_only`, `destructive`, `open_world`: optional catalog hints used for
+  search tags and batching.
 
 Tool names must be unique across all providers. Unknown descriptor fields are ignored. A provider with no available tools prints nothing and exits successfully.
+
+Mutating tools (`write`, `edit`, `bash`, browser actions, MCP tools) set
+`sequential`. The engine then runs the batch one call at a time and keeps the
+model's call order, so two writes cannot race on the same file.
+
+`replay` records intent for hosts; it does not make the engine re-run a call
+automatically. After a crash, an interrupted call is reported to the model
+with its side effects unknown — see [session.md](session.md).
+
+The engine validates arguments against `parameters` before executing. A
+violation is returned to the model as a tool error instead of being passed to
+the provider.
 
 Discovery diagnostics belong on stderr. A nonzero status fails discovery. AX rejects combined descriptor output larger than 64 KiB.
 
@@ -67,6 +90,10 @@ Exit statuses are:
 ```
 
 Other nonzero statuses are failures.
+
+The engine stops a call that exceeds its timeout, cancelling the provider's
+process group; the model sees a timeout error that says the side effects are
+unknown.
 
 ## Cancellation
 
