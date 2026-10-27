@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,64 +27,54 @@ func newHTTPTransport(cfg ServerConfig) *httpTransport {
 }
 
 func (t *httpTransport) RoundTrip(ctx context.Context, request []byte) ([]byte, error) {
+	resp, err := t.do(ctx, request, false)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusUnauthorized && t.cfg.Auth != nil {
+		_ = resp.Body.Close()
+		resp, err = t.do(ctx, request, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return readResponse(resp, t.cfg.Name)
+}
+
+func (t *httpTransport) do(ctx context.Context, request []byte, force bool) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.cfg.URL, bytes.NewReader(request))
 	if err != nil {
 		return nil, fmt.Errorf("mcp: server %q: request: %w", t.cfg.Name, err)
 	}
-	t.headers(req)
+	if err := t.headers(ctx, req, force); err != nil {
+		return nil, err
+	}
 	resp, err := t.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: server %q: %w", t.cfg.Name, err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 	t.captureSession(resp)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		var envelope struct {
-			Error *RPCError `json:"error"`
-		}
-		if json.Unmarshal(body, &envelope) == nil && envelope.Error != nil {
-			return nil, envelope.Error
-		}
-		message := strings.TrimSpace(string(body))
-		if message == "" {
-			message = http.StatusText(resp.StatusCode)
-		}
-		return nil, fmt.Errorf("mcp: server %q: HTTP %d: %s", t.cfg.Name, resp.StatusCode, message)
+	if resp.StatusCode == http.StatusUnauthorized && t.cfg.Auth == nil {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("mcp: server %q: authentication required; run ax mcp login %s", t.cfg.Name, t.cfg.Name)
 	}
-	contentType := resp.Header.Get("Content-Type")
-	if strings.Contains(contentType, "text/event-stream") {
-		return readEventStream(resp.Body)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMessage+1))
-	if err != nil {
-		return nil, fmt.Errorf("mcp: server %q: read response: %w", t.cfg.Name, err)
-	}
-	if len(body) > maxMessage {
-		return nil, fmt.Errorf("mcp: server %q: response exceeds %d bytes", t.cfg.Name, maxMessage)
-	}
-	return body, nil
+	return resp, nil
 }
 
 func (t *httpTransport) Notify(ctx context.Context, notification []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.cfg.URL, bytes.NewReader(notification))
+	resp, err := t.do(ctx, notification, false)
 	if err != nil {
-		return fmt.Errorf("mcp: server %q: request: %w", t.cfg.Name, err)
-	}
-	t.headers(req)
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("mcp: server %q: %w", t.cfg.Name, err)
+		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	t.captureSession(resp)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("mcp: server %q: notification failed with HTTP %d", t.cfg.Name, resp.StatusCode)
 	}
 	return nil
 }
 
-func (t *httpTransport) headers(req *http.Request) {
+func (t *httpTransport) headers(ctx context.Context, req *http.Request, force bool) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("User-Agent", "ax/"+Version)
@@ -96,9 +87,22 @@ func (t *httpTransport) headers(req *http.Request) {
 	if session != "" {
 		req.Header.Set("Mcp-Session-Id", session)
 	}
+	if t.cfg.Auth != nil {
+		token, err := t.cfg.Auth.Token(ctx, force)
+		if err != nil {
+			if errors.Is(err, ErrLoginRequired) {
+				return &AuthRequiredError{Server: t.cfg.Name}
+			}
+			return fmt.Errorf("mcp: server %q: %w", t.cfg.Name, err)
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+	}
 	for key, value := range t.cfg.Headers {
 		req.Header.Set(key, value)
 	}
+	return nil
 }
 
 func (t *httpTransport) captureSession(resp *http.Response) {
@@ -124,6 +128,35 @@ func (t *httpTransport) SetSessionID(id string) {
 func (t *httpTransport) Close() error {
 	t.client.CloseIdleConnections()
 	return nil
+}
+
+func readResponse(resp *http.Response, name string) ([]byte, error) {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		var envelope struct {
+			Error *RPCError `json:"error"`
+		}
+		if json.Unmarshal(body, &envelope) == nil && envelope.Error != nil {
+			return nil, envelope.Error
+		}
+		message := strings.TrimSpace(string(body))
+		if message == "" {
+			message = http.StatusText(resp.StatusCode)
+		}
+		return nil, fmt.Errorf("mcp: server %q: HTTP %d: %s", name, resp.StatusCode, message)
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if strings.Contains(contentType, "text/event-stream") {
+		return readEventStream(resp.Body)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMessage+1))
+	if err != nil {
+		return nil, fmt.Errorf("mcp: server %q: read response: %w", name, err)
+	}
+	if len(body) > maxMessage {
+		return nil, fmt.Errorf("mcp: server %q: response exceeds %d bytes", name, maxMessage)
+	}
+	return body, nil
 }
 
 // readEventStream returns the first JSON-RPC response in an SSE stream. A

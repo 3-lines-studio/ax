@@ -9,6 +9,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -24,6 +25,12 @@ const LegacyProtocol = "2025-11-25"
 
 var legacyProtocols = []string{"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"}
 
+// TokenSource supplies an OAuth access token for an HTTP server. force asks
+// for a refresh after a 401; without force the source may reuse a cached token.
+type TokenSource interface {
+	Token(ctx context.Context, force bool) (string, error)
+}
+
 // ServerConfig describes one configured MCP server.
 type ServerConfig struct {
 	Name    string
@@ -33,6 +40,7 @@ type ServerConfig struct {
 	Dir     string
 	URL     string
 	Headers map[string]string
+	Auth    TokenSource
 	Timeout time.Duration
 }
 

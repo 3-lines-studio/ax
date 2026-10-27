@@ -66,7 +66,10 @@ because all programs now share one version.
   exposes two tools, `search` and `execute`; `mcpx` and `acpi` were removed.
   `bot.toml` gained `[[mcp]]`, `tool_mode` and `core_tools`. The old
   per-provider surface is available for one release with
-  `-tool-mode direct`. See `docs/mcp.md`.
+  `-tool-mode direct`. Remote servers authenticate with a token header or with
+  `ax mcp login` (OAuth, PKCE, tokens in `state/ax/mcp/auth/`);
+  `ax mcp add`/`ax mcp import` connect registry servers or an existing
+  `mcp.json`/Cursor plugin. See `docs/mcp.md`.
 - **One quality gate.** `scripts/check.sh` (also `make check`) runs gofmt, tidy,
   vet, tests, race, builds, per-binary size budgets, the catalog check, the
   provider contract check and the ax harness. The per-program workflows,

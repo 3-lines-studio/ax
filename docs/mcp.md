@@ -75,41 +75,145 @@ catalog still loads.
 ```toml
 [[mcp]]
 name = "github"
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-github"]
-pass_env = ["GITHUB_TOKEN"]
-timeout = 30
+url = "https://api.githubcopilot.com/mcp/"
+headers = { Authorization = "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}" }
 
 [[mcp]]
-name = "linear"
-url = "https://mcp.linear.app/mcp"
-token_env = "LINEAR_TOKEN"
+name = "sentry"
+url = "https://mcp.sentry.dev/mcp"          # OAuth: ax mcp login sentry
+
+[[mcp]]
+name = "filesystem"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/work"]
+timeout = 30
 ```
 
 - `command` starts a stdio server; `url` uses Streamable HTTP. Exactly one.
 - `pass_env` passes named environment variables through. `env` sets literal
-  values; `${VAR}` expands in `env` and `headers`. `token_env` sets
-  `Authorization: Bearer <value>`. Secrets stay out of `bot.toml`.
+  values; `${VAR}` (and `${VAR:-default}`) expands in `env`, `headers` and
+  `url`. `token_env` sets `Authorization: Bearer <value>`. Secrets stay out
+  of `bot.toml`.
 - `timeout` is the per-request limit in seconds (default 30, max 600).
 - Names are lowercase letters, digits, `_` and `-`; they namespace tool ids
   (`github.create_issue`) and must be unique across sources.
 
+A `[[mcp]]` table that only fails at runtime — an unset environment variable,
+a missing binary — is shown as `unavailable` in the menu with the reason.
+It never stops the rest of the catalog from loading.
+
 The client speaks protocol `2026-07-28` (`server/discover`, stateless requests,
 `tools/list`, `tools/call`) and falls back to the `initialize` handshake for
-older servers. It does not implement OAuth, elicitation, sampling, resources,
-prompts or subscriptions; a server that requires them returns a clear error.
+older servers. Resources, prompts, elicitation, sampling and subscriptions are
+not implemented; a server that requires them returns a clear error.
+
+### Authentication
+
+A remote server with no `token_env` and no `Authorization` header uses ax's
+own OAuth login. ax is a public client: it discovers the protected resource
+metadata (`WWW-Authenticate: resource_metadata` or
+`/.well-known/oauth-protected-resource`), registers itself dynamically when
+the authorization server allows it, and runs the authorization-code flow with
+PKCE and a loopback redirect on `127.0.0.1`.
+
+```bash
+ax mcp login sentry        # opens a browser, stores the session
+ax mcp logout sentry
+```
+
+- Tokens live in `BOT_DATA/state/ax/mcp/auth/<server>.json`, mode `0600`, and
+  are refreshed automatically; a 401 triggers one forced refresh and retry.
+- Requests go out anonymously first. Only a 401 produces the hint
+  `run ax mcp login <server>`, so a public endpoint works without a login.
+- When the server hands ax a pre-registered client instead of dynamic
+  registration, keep it in `bot.toml` without the secret:
+
+  ```toml
+  [[mcp]]
+  name = "zoom"
+  url = "https://mcp.zoom.us/mcp/zoom/streamable"
+  client_id = "${ZOOM_CLIENT_ID}"
+  client_secret_env = "ZOOM_CLIENT_SECRET"
+  scopes = ["meeting:read"]
+  ```
+
+- `auth = "none"` disables OAuth for a remote server; `auth = "oauth"` is the
+  default and can be spelled out.
+
+The catalog shows a server that needs a login as
+`login required: run ax mcp login <server>`, and the model sees the same line
+in the menu, so it can tell the user what to run instead of retrying.
+
+### Importing `mcp.json`
+
+`ax mcp import` reads the shapes Cursor, Claude Desktop and VS Code write and
+appends `[[mcp]]` tables to `bot.toml`:
+
+```bash
+ax mcp import ./mcp.json                     # {"mcpServers": {...}}
+ax mcp import ./mcp.json --print             # show the TOML, write nothing
+ax mcp import https://example.com/mcp.json
+ax mcp import ./my-cursor-plugin             # .cursor-plugin/plugin.json
+```
+
+- Accepts an `mcpServers` object, an array of named servers, a `"path"` to
+  another document, and VS Code's `servers` key.
+- `env`, `headers` and `url` keep their `${VAR}` references; `auth`
+  (`CLIENT_ID`, `CLIENT_SECRET`) becomes `client_id` and
+  `client_secret_env`, never a literal secret.
+- Existing names are kept unless `--force`. Skipped servers are listed with
+  the reason; Cursor-hosted `api.cursor.com/rest-mcp/...` endpoints are not
+  reachable outside Cursor and are skipped.
+
+An imported plugin may declare `variables.required`; the importer prints those
+names so you know which environment variables to set.
+
+### Registry
+
+`ax mcp add` knows the common servers, so a connection is one command:
+
+```bash
+ax mcp add                                 # list the registry
+ax mcp add sentry                          # https://mcp.sentry.dev/mcp, OAuth
+ax mcp add github                          # PAT header, needs GITHUB_PERSONAL_ACCESS_TOKEN
+ax mcp add filesystem --arg /work          # stdio server with an argument
+ax mcp add https://example.com/mcp --name example
+```
+
+The registry is the curated list in `cmd/ax/mcps.json`: GitHub, GitLab,
+Sentry, Linear, Notion, Atlassian, Stripe, Vercel, Figma, Supabase, Slack,
+Neon, PostHog, Todoist, HubSpot, Attio, Calendly, Gamma, Framer, Docusign,
+Zoom, Greenhouse, Gusto, Square, Readwise, Mem, Hunter, Klaviyo, Typeform,
+Trello, Wrike, Statsig, Shopify, Coda, Intercom, Cloudflare docs, plus the
+reference stdio servers (Playwright, filesystem, memory, sequential thinking,
+fetch, time, git, SQLite, Postgres). `ax mcp add` prints what is still
+missing, usually an environment variable or `ax mcp login <server>`.
+
+### CLI
+
+| Command | Purpose |
+| --- | --- |
+| `ax mcp list [--json]` | Configured servers, auth kind and login state. |
+| `ax mcp add [name\|url]` | Append a server to `bot.toml`. |
+| `ax mcp import <path\|url\|dir>` | Import `mcp.json`, `plugin.json` or a Cursor plugin. |
+| `ax mcp login <server>` | OAuth login (`--manual` pastes a callback URL instead of using a loopback port). |
+| `ax mcp logout <server>` | Delete the stored token. |
+| `ax mcp doctor [--refresh]` | Connect to every server, list tool counts and failures. |
+| `ax mcp serve` | Expose `search`/`execute` over MCP stdio. |
 
 ### Cache and lifetime
 
 Tool lists are cached at `BOT_DATA/state/ax/mcp/<server>.json`, mode `0600`,
+and OAuth sessions at `BOT_DATA/state/ax/mcp/auth/<server>.json`, also `0600`;
 keyed by a fingerprint of the server configuration (names only, never secret
 values). The TTL is the server's `ttlMs` or 10 minutes. `search` with a warm
 cache does not spawn anything. `execute` starts the owning server and keeps
 the connection for the rest of the run. A server that cannot be reached and
 has a cache is served stale; without a cache it is reported as unavailable.
 
-`ax catalog --refresh` bypasses the cache. The same information is available
-to scripts with `ax catalog --json`.
+`ax catalog --refresh` bypasses the cache (`ax mcp doctor --refresh` does the
+same per server). The same information is available to scripts with
+`ax catalog --json` and `ax mcp list --json`.
 
 ## `ax mcp serve`
 
