@@ -26,6 +26,7 @@ const (
 	TypeToolResult     = "tool_result"
 	TypeToolDone       = "tool_done"
 	TypeUsage          = "usage"
+	TypeCompaction     = "compaction"
 	TypeMessage        = "message"
 	TypeResult         = "result"
 	TypeError          = "error"

@@ -26,6 +26,10 @@ func (c *Catalog) Menu() string {
 	}
 	out.WriteString("## Servers\n\n")
 	for _, server := range servers {
+		if server.AuthRequired {
+			fmt.Fprintf(&out, "- **%s** - login required: run `ax mcp login %s`\n", server.Name, server.Name)
+			continue
+		}
 		if server.Error != "" {
 			fmt.Fprintf(&out, "- **%s** - unavailable: %s\n", server.Name, oneLine(server.Error, 160))
 			continue
@@ -63,6 +67,10 @@ func (c *Catalog) Brief(core []string) string {
 	servers := c.Servers()
 	var parts []string
 	for _, server := range servers {
+		if server.AuthRequired {
+			parts = append(parts, fmt.Sprintf("%s (login required)", server.Name))
+			continue
+		}
 		if server.Error != "" {
 			parts = append(parts, fmt.Sprintf("%s (unavailable)", server.Name))
 			continue
@@ -170,7 +178,9 @@ func (c *Catalog) serverMenu(name string, limit int) string {
 		if server.Description != "" {
 			out.WriteString(oneLine(server.Description, 300) + "\n\n")
 		}
-		if server.Error != "" {
+		if server.AuthRequired {
+			fmt.Fprintf(&out, "Login required: run `ax mcp login %s`.\n", server.Name)
+		} else if server.Error != "" {
 			fmt.Fprintf(&out, "Unavailable: %s\n", oneLine(server.Error, 300))
 			return out.String()
 		}

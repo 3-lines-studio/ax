@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"sync/atomic"
@@ -216,7 +217,7 @@ func TestRunStreamToolExecutionThenDone(t *testing.T) {
 		handleWithResponse(turn1, nil, StreamEvent{Kind: eventContent, Text: "final"}, StreamEvent{Kind: eventDone}),
 	}}
 	sink := &recordingSink{}
-	end := runStream(p, &runOptions{model: "m", tools: []Tool{tool}, maxTurns: 4}, []Message{{Role: "user", Content: "hello"}}, &atomic.Bool{}, sink)
+	end := runStream(context.Background(), p, &runOptions{model: "m", tools: []Tool{tool}, maxTurns: 4}, []Message{{Role: "user", Content: "hello"}}, &atomic.Bool{}, sink)
 
 	if end.outcome != outcomeDone {
 		t.Errorf("outcome = %v", end.outcome)
@@ -247,7 +248,7 @@ func TestRunStreamMaxTurnsExhausted(t *testing.T) {
 	p := &fakeProvider{handles: []*StreamHandle{
 		handleWithResponse(turn0, nil, StreamEvent{Kind: eventToolCall, Call: &c1}, StreamEvent{Kind: eventDone}),
 	}}
-	end := runStream(p, &runOptions{model: "m", maxTurns: 1}, []Message{{Role: "user", Content: "hi"}}, &atomic.Bool{}, &recordingSink{})
+	end := runStream(context.Background(), p, &runOptions{model: "m", maxTurns: 1}, []Message{{Role: "user", Content: "hi"}}, &atomic.Bool{}, &recordingSink{})
 	if end.outcome != outcomeMaxTurns {
 		t.Errorf("outcome = %v", end.outcome)
 	}
@@ -257,7 +258,7 @@ func TestRunStreamCancelImmediately(t *testing.T) {
 	cancel := &atomic.Bool{}
 	cancel.Store(true)
 	p := &fakeProvider{}
-	end := runStream(p, &runOptions{model: "m", maxTurns: 2}, []Message{{Role: "user", Content: "hi"}}, cancel, &recordingSink{})
+	end := runStream(context.Background(), p, &runOptions{model: "m", maxTurns: 2}, []Message{{Role: "user", Content: "hi"}}, cancel, &recordingSink{})
 	if end.outcome != outcomeCancelled {
 		t.Errorf("outcome = %v", end.outcome)
 	}

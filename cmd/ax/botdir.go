@@ -16,6 +16,8 @@ type botConfig struct {
 	ToolMode        string     `toml:"tool_mode"`
 	CoreTools       []string   `toml:"core_tools"`
 	MCP             []mcpEntry `toml:"mcp"`
+	CompactAt       *float64   `toml:"compact_at"`
+	ContextWindow   *int       `toml:"context_window"`
 }
 
 // botCtx is what the engine needs from the Botdir conventions.
@@ -63,6 +65,12 @@ func mergeBotConfig(fc fileConfig, bc botConfig) fileConfig {
 	}
 	if len(bc.MCP) > 0 {
 		fc.mcp = append([]mcpEntry(nil), bc.MCP...)
+	}
+	if bc.CompactAt != nil {
+		fc.compactAt, fc.compactAtSet = *bc.CompactAt, true
+	}
+	if bc.ContextWindow != nil {
+		fc.contextWindow, fc.contextWindowSet = *bc.ContextWindow, true
 	}
 	return fc
 }

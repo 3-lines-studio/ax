@@ -598,6 +598,92 @@ def oneshot_direct_tools(h, ax):
 
 
 @case
+def mcp_add_from_registry(h, ax):
+    p = h.oneshot(ax, ["mcp", "add", "sentry"])
+    check(p.returncode == 0, "add exit %s: %s" % (p.returncode, p.stderr[-500:]))
+    toml = (h.work / "bot.toml").read_text()
+    check('name = "sentry"' in toml, "bot.toml missing server: %s" % toml)
+    check("mcp.sentry.dev" in toml, "bot.toml missing url: %s" % toml)
+    listed = h.oneshot(ax, ["mcp", "list", "--json"])
+    check(listed.returncode == 0, "list exit %s: %s" % (listed.returncode, listed.stderr[-500:]))
+    servers = json.loads(listed.stdout)
+    check(len(servers) == 1 and servers[0]["name"] == "sentry", "listed: %s" % servers)
+    check(servers[0]["auth"] == "oauth", "auth kind wrong: %s" % servers)
+    check(servers[0]["status"] == "login required", "status wrong: %s" % servers)
+
+
+@case
+def mcp_import_document(h, ax):
+    document = {
+        "mcpServers": {
+            "linear": {"type": "http", "url": "https://mcp.linear.app/mcp"},
+            "files": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-memory"]},
+            "gdocs": {"url": "https://api.cursor.com/rest-mcp/google-docs/mcp"},
+        }
+    }
+    path = h.work / "mcp.json"
+    path.write_text(json.dumps(document))
+    p = h.oneshot(ax, ["mcp", "import", str(path)])
+    check(p.returncode == 0, "import exit %s: %s" % (p.returncode, p.stderr[-500:]))
+    check("Cursor-hosted" in p.stderr, "no skip reason: %s" % p.stderr[-500:])
+    toml = (h.work / "bot.toml").read_text()
+    check('name = "linear"' in toml and 'name = "files"' in toml, "bot.toml: %s" % toml)
+    check("cursor.com" not in toml, "imported a Cursor-only endpoint: %s" % toml)
+    again = h.oneshot(ax, ["mcp", "import", str(path)])
+    check("already configured" in again.stderr, "second import: %s" % again.stderr[-500:])
+
+
+COMPACT_SCENARIO = [
+    # First turn: a tool call and a prompt that is already over half the window.
+    {
+        "stream": [
+            tool_chunk("execute", {"tool": "bashprovider.bash", "arguments": {"command": "echo busy"}}),
+            usage_chunk(8000, 5),
+        ]
+    },
+    # The summarizer's own request.
+    {"stream": [content_chunk("SUMMARY: the user asked for work; a tool ran.", "stop"), usage_chunk(50, 12)]},
+    # The run continues with the summary in the system prompt.
+    {"stream": [content_chunk("# Done\n\nCompacted and finished.\n", "stop"), usage_chunk(60, 8)]},
+]
+
+
+@case
+def oneshot_auto_compaction(h, ax):
+    session = h.root / "compact.jsonl"
+    h.write_config("compact_at = 0.5\ncontext_window = 10000\n")
+    with h.mock(COMPACT_SCENARIO) as srv:
+        p = h.oneshot(
+            ax,
+            ["--events", "--session", str(session), "keep working"],
+            base=srv.base_url,
+            extra_env={"AX_TOOLS": str(bash_provider(h))},
+        )
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        events = read_events(p)
+        check(
+            any(e.get("type") == "compaction" and e.get("summary") for e in events),
+            "no compaction event: %s" % events[:5],
+        )
+        check(events[-1] == {"type": "done", "outcome": "done"}, "bad final event")
+        systems = [
+            m["content"]
+            for m in srv.requests[-1]["json"]["messages"]
+            if m["role"] == "system"
+        ]
+        check(
+            any("Summary of the earlier conversation" in s for s in systems),
+            "summary missing from the system prompt",
+        )
+        check(len(srv.requests) == 3, "expected 3 requests, got %d" % len(srv.requests))
+    entries = [json.loads(line) for line in session.read_text().splitlines() if line.strip()]
+    check(
+        any(e.get("type") == "compaction" and e.get("upto") for e in entries),
+        "session log has no compaction entry",
+    )
+
+
+@case
 def oneshot_tool_workdir(h, ax):
     with h.mock(WRITE_FILE_SCENARIO) as srv:
         p = h.oneshot(
