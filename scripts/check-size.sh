@@ -14,6 +14,7 @@ budget() {
     # the extra megabyte keeps room for the transport in cmd/webi.
     ax) echo 8400000 ;;
     boti) echo 7000000 ;;
+    webi) echo 9500000 ;;
     slaxi) echo 8063000 ;;
     fsx) echo 2970000 ;;
     bashx) echo 3200000 ;;
