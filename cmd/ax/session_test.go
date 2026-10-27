@@ -29,16 +29,6 @@ func TestParseEntryLineForms(t *testing.T) {
 	}
 }
 
-func TestParseEntryLineEmptyObjectOddity(t *testing.T) {
-	entry, ok := parseEntryLine(`{}`)
-	if !ok {
-		t.Fatal("{} should parse as empty bare message")
-	}
-	if entry.Type != "message" || entry.Message == nil {
-		t.Errorf("empty object entry = %+v", entry)
-	}
-}
-
 func TestContextMessagesProjectsOnlyMessages(t *testing.T) {
 	a := Message{Role: "user", Content: "a"}
 	b := Message{Role: "assistant", Content: "b"}
@@ -104,115 +94,141 @@ func TestLoadPathInvalidLine(t *testing.T) {
 	}
 }
 
-func TestAtomicWriteCreatesDirs(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "a", "b", "out.txt")
-	if err := atomicWrite(path, []byte("data")); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil || string(data) != "data" {
-		t.Errorf("read back = %q err=%v", string(data), err)
-	}
-}
-
-func TestAtomicWriteOverwrites(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "out.txt")
-	_ = os.WriteFile(path, []byte("old"), 0o644)
-	if err := atomicWrite(path, []byte("new")); err != nil {
-		t.Fatal(err)
-	}
-	data, _ := os.ReadFile(path)
-	if string(data) != "new" {
-		t.Errorf("read back = %q", string(data))
-	}
-}
-
-func TestAtomicWriteRemovesTempFiles(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "out.txt")
-	if err := atomicWrite(path, []byte("x")); err != nil {
-		t.Fatal(err)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".ax-tmp-") {
-			t.Errorf("leftover temp file: %s", e.Name())
-		}
-	}
-}
-
-func TestAppendMessagesRoundTrip(t *testing.T) {
+func TestLoadPathToleratesTornTail(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	m1 := Message{Role: "user", Content: "first"}
-	m2 := Message{Role: "assistant", Content: "second"}
-	if err := appendMessages(path, []Message{m1}); err != nil {
-		t.Fatal(err)
-	}
-	if err := appendMessages(path, []Message{m2}); err != nil {
-		t.Fatal(err)
-	}
+	valid := `{"type":"message","message":{"Role":"user","Content":"ok"}}` + "\n"
+	_ = os.WriteFile(path, []byte(valid+`{"type":"message","mess`), 0o644)
 	entries, err := loadPath(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	msgs := contextMessages(entries)
-	if len(msgs) != 2 || !reflect.DeepEqual(msgs[0], m1) || !reflect.DeepEqual(msgs[1], m2) {
-		t.Errorf("messages = %+v", msgs)
-	}
-}
-
-func TestAppendMessagesCreatesMissingFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "new", "s.jsonl")
-	if err := appendMessages(path, []Message{{Role: "user", Content: "hi"}}); err != nil {
-		t.Fatal(err)
-	}
-	entries, err := loadPath(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 || entries[0].Message == nil || entries[0].Message.Content != "hi" {
+	if len(entries) != 1 || entries[0].Message == nil || entries[0].Message.Content != "ok" {
 		t.Errorf("entries = %+v", entries)
 	}
 }
 
-func TestAppendUsage(t *testing.T) {
+func TestSessionLogAppendPreservesPrefix(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	if err := appendUsage(path, 10, 20, 5, nil, "gpt-4"); err != nil {
-		t.Fatal(err)
-	}
-	entries, err := loadPath(path)
+	log, err := openSessionLog(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Type != "usage" {
-		t.Fatalf("entries = %+v", entries)
+	if err := log.append(sessionEntry{Type: entryRunStart, RunID: "r1"}); err != nil {
+		t.Fatal(err)
 	}
-	u := entries[0].Usage
-	if u.Input != 10 || u.Output != 20 || u.CachedInput != 5 || u.Model != "gpt-4" {
-		t.Errorf("usage = %+v", u)
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := log.append(sessionEntry{Type: entryRunEnd, RunID: "r1", Outcome: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(second), string(first)) {
+		t.Errorf("append rewrote the log:\nfirst=%q\nsecond=%q", first, second)
+	}
+	if len(second) <= len(first) {
+		t.Error("append did not grow the log")
 	}
 }
 
-func TestAppendMessagesOverwritePreservesUsage(t *testing.T) {
+func TestSessionLogExclusiveLock(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	if err := appendUsage(path, 1, 2, 0, nil, "m"); err != nil {
-		t.Fatal(err)
-	}
-	msg := Message{Role: "user", Content: "hi"}
-	if err := appendMessages(path, []Message{msg}); err != nil {
-		t.Fatal(err)
-	}
-	entries, err := loadPath(path)
+	first, err := openSessionLog(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 {
-		t.Fatalf("entries = %+v", entries)
+	defer func() { _ = first.close() }()
+	if _, err := openSessionLog(path); err == nil {
+		t.Fatal("second opener should fail while the session is locked")
 	}
-	if entries[0].Type != "usage" || entries[1].Message == nil {
-		t.Errorf("order lost: %+v", entries)
+}
+
+func TestDeriveRepairsInterruptedTool(t *testing.T) {
+	user := Message{Role: "user", Content: "do it"}
+	assistant := Message{Role: "assistant", Content: "", ToolCalls: []ToolCall{
+		{ID: "a", Name: "bash", Arguments: "{}"},
+		{ID: "b", Name: "read", Arguments: "{}"},
+	}}
+	entries := []sessionEntry{
+		{Type: entryRunStart, RunID: "r1"},
+		{Type: entryMessage, Message: &user},
+		{Type: entryMessage, Message: &assistant},
+		{Type: entryToolIntent, Call: &assistant.ToolCalls[0]},
+		{Type: entryToolResult, Call: &assistant.ToolCalls[1], Output: "second"},
+	}
+	state := deriveSession(entries)
+	if len(state.Messages) != 4 {
+		t.Fatalf("messages = %+v", state.Messages)
+	}
+	if state.Messages[2].Role != "tool" || state.Messages[2].ToolCallID != "a" || !strings.Contains(state.Messages[2].Content, "interrupted") {
+		t.Errorf("repaired first result = %+v", state.Messages[2])
+	}
+	if state.Messages[3].ToolCallID != "b" || state.Messages[3].Content != "second" {
+		t.Errorf("second result = %+v", state.Messages[3])
+	}
+	if state.Repaired != 1 || !state.OpenRun {
+		t.Errorf("state = %+v", state)
+	}
+}
+
+func TestDeriveDropsPartialAndOrphanResults(t *testing.T) {
+	user := Message{Role: "user", Content: "hi"}
+	partial := Message{Role: "assistant", Content: "half"}
+	entries := []sessionEntry{
+		{Type: entryRunStart, RunID: "r1"},
+		{Type: entryMessage, Message: &user},
+		{Type: entryAssistantPartial, Message: &partial},
+		{Type: entryToolResult, Call: &ToolCall{ID: "orphan"}, Output: "ignored"},
+	}
+	state := deriveSession(entries)
+	if len(state.Messages) != 1 || state.Messages[0].Content != "hi" {
+		t.Errorf("messages = %+v", state.Messages)
+	}
+	if state.LastPartial == nil || state.LastPartial.Content != "half" {
+		t.Errorf("partial = %+v", state.LastPartial)
+	}
+}
+
+func TestDeriveClosesRun(t *testing.T) {
+	entries := []sessionEntry{
+		{Type: entryRunStart, RunID: "r1"},
+		{Type: entryRunEnd, RunID: "r1", Outcome: "done"},
+	}
+	state := deriveSession(entries)
+	if state.OpenRun {
+		t.Error("run should be closed")
+	}
+}
+
+func TestDeriveUsageTotals(t *testing.T) {
+	entries := []sessionEntry{
+		{Type: entryUsage, Usage: &usageInfo{Input: 10, Output: 2, CachedInput: 7, Reasoning: 1}},
+		{Type: entryUsage, Usage: &usageInfo{Input: 5, Output: 3, CachedInput: 4, Reasoning: 2}},
+	}
+	state := deriveSession(entries)
+	if state.Usage != (Usage{Input: 15, Output: 5, CachedInput: 11, Reasoning: 3}) {
+		t.Errorf("usage = %+v", state.Usage)
+	}
+}
+
+func TestDeriveLegacyToolMessage(t *testing.T) {
+	user := Message{Role: "user", Content: "hi"}
+	assistant := Message{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Name: "read"}}}
+	tool := Message{Role: "tool", Content: "out", ToolCallID: "c1"}
+	entries := []sessionEntry{
+		{Type: entryMessage, Message: &user},
+		{Type: entryMessage, Message: &assistant},
+		{Type: entryMessage, Message: &tool},
+	}
+	state := deriveSession(entries)
+	if len(state.Messages) != 3 || state.Messages[2].Content != "out" {
+		t.Errorf("messages = %+v", state.Messages)
 	}
 }

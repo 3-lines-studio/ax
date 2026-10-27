@@ -8,24 +8,26 @@ import (
 )
 
 type recordingSink struct {
-	deltas   []string
-	dones    int
-	starts   []ToolCall
-	toolDel  []string
-	results  []string
-	tok      []Usage
-	assist   []Message
-	tools    []Message
-	flushCnt int
+	reasoning string
+	deltas    []string
+	dones     int
+	starts    []ToolCall
+	toolDel   []string
+	results   []string
+	tok       []Usage
+	assist    []Message
+	tools     []Message
+	flushCnt  int
 }
 
 func (r *recordingSink) assistantDelta(text string)           { r.deltas = append(r.deltas, text) }
+func (r *recordingSink) reasoningDelta(text string)           { r.reasoning += text }
 func (r *recordingSink) assistantDone()                       { r.dones++ }
 func (r *recordingSink) toolStart(call ToolCall)              { r.starts = append(r.starts, call) }
 func (r *recordingSink) toolDelta(call ToolCall, text string) { r.toolDel = append(r.toolDel, text) }
 func (r *recordingSink) toolResult(call ToolCall)             { r.results = append(r.results, call.ID) }
 func (r *recordingSink) tokens(input, output, cached int) {
-	r.tok = append(r.tok, Usage{input, output, cached})
+	r.tok = append(r.tok, Usage{Input: input, Output: output, CachedInput: cached})
 }
 func (r *recordingSink) shouldCompact(input, output int) bool      { return false }
 func (r *recordingSink) assistant(turn int, msg Message, us Usage) { r.assist = append(r.assist, msg) }
@@ -111,7 +113,7 @@ func TestRequestStreamSuccessForwardsEvents(t *testing.T) {
 	if !reflect.DeepEqual(sink.deltas, []string{"hi"}) {
 		t.Errorf("deltas = %v", sink.deltas)
 	}
-	if len(sink.tok) != 1 || sink.tok[0] != (Usage{1, 2, 0}) {
+	if len(sink.tok) != 1 || sink.tok[0] != (Usage{Input: 1, Output: 2}) {
 		t.Errorf("tokens = %v", sink.tok)
 	}
 	if p.idx != 1 {

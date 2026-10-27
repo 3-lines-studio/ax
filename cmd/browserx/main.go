@@ -87,10 +87,10 @@ func main() {
 }
 
 func printTools() {
-	fmt.Println(`{"name":"browser_open","description":"Open an HTTP or HTTPS URL in the visible browser","parameters":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}}`)
-	fmt.Println(`{"name":"browser_read","description":"Read the title, URL, and visible text from the current browser page","parameters":{"type":"object","properties":{}}}`)
-	fmt.Println(`{"name":"browser_links","description":"List visible links from the current browser page","parameters":{"type":"object","properties":{}}}`)
-	fmt.Println(`{"name":"browser_screenshot","description":"Save a screenshot of the current browser page","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}`)
+	fmt.Println(`{"name":"browser_open","description":"Open an HTTP or HTTPS URL in the visible browser","parameters":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]},"sequential":true}`)
+	fmt.Println(`{"name":"browser_read","description":"Read the title, URL, and visible text from the current browser page","parameters":{"type":"object","properties":{}},"sequential":true}`)
+	fmt.Println(`{"name":"browser_links","description":"List visible links from the current browser page","parameters":{"type":"object","properties":{}},"sequential":true}`)
+	fmt.Println(`{"name":"browser_screenshot","description":"Save a screenshot of the current browser page","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]},"sequential":true}`)
 }
 
 func browserContext(parent context.Context) (context.Context, error) {

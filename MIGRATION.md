@@ -64,11 +64,34 @@ because all programs now share one version.
 - **The botdir spec moved** to `docs/botdir/`, next to the code that implements
   it.
 
+## Engine changes after the import
+
+The ax engine kept moving while the repositories were merged:
+
+- **DeepSeek is the default provider.** `base_url` defaults to
+  `https://api.deepseek.com` and `model` to `deepseek-flash`; the API key is
+  read from `DEEPSEEK_API_KEY` before `OPENAI_API_KEY`. Existing bots that set
+  `base_url`/`model` in `bot.toml` or flags are unaffected. Set
+  `OPENAI_API_KEY`/`-base`/`-model` as before for other providers.
+- **Thinking is on by default for DeepSeek.** `-thinking auto|on|off`,
+  `-effort low|high|max` (`none` disables) and `-max-tokens` control it;
+  `bot.toml` gained `thinking`, `reasoning_effort` and `max_tokens`.
+- **Images.** `-image PATH|URL` (repeatable) and `-image-detail` add vision
+  input; images are content-addressed blobs next to the session log.
+- **Durable sessions.** `--session FILE` is now an append-only, fsynced JSONL
+  log that resumes and repairs interrupted runs instead of a convenience dump.
+  See `docs/session.md`.
+- **New event and descriptor fields.** `reasoning_delta` was added to the
+  event stream and `sequential`, `timeout` and `replay` are accepted in tool
+  descriptors. All are additive; protocol version stays 1, and clients may
+  ignore unknown events and fields.
+
 ## Compatibility
 
-- Binary names, flags, environment variables and wire protocols are unchanged.
-  The only code-level moves are the shared helpers; behavior is covered by the
-  imported tests.
+- Binary names, existing flags, environment variables and wire protocols keep
+  their meaning. Changes to defaults and new fields are listed above; the
+  protocol stays at version 1 and the added event and descriptor fields are
+  optional.
 - Old release URLs keep working while the old repositories and their tags
   exist. They are frozen at the versions listed above.
 - `go install` paths gain a `/cmd/<program>` segment:

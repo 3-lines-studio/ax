@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unicode/utf8"
 
 	"github.com/3-lines-studio/ax/internal/axproto"
@@ -18,6 +19,7 @@ import (
 
 const maxOutput = 16 * 1024
 const maxDescribeOutput = 64 * 1024
+const defaultToolTimeout = 300 // seconds
 
 type externalToolSpec = axproto.ToolSpec
 
@@ -86,13 +88,43 @@ func validToolName(name string) bool {
 	return true
 }
 
-type boundedBuffer struct {
+// tailBuffer keeps the last limit bytes of a stream without growing with it.
+// Tool output can be arbitrarily large; the model only ever sees the tail.
+type tailBuffer struct {
+	buf   []byte
+	limit int
+	total int
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.total += len(p)
+	if len(p) >= b.limit {
+		b.buf = append(b.buf[:0], p[len(p)-b.limit:]...)
+		return len(p), nil
+	}
+	if len(b.buf)+len(p) > b.limit {
+		drop := len(b.buf) + len(p) - b.limit
+		copy(b.buf, b.buf[drop:])
+		b.buf = b.buf[:len(b.buf)-drop]
+	}
+	b.buf = append(b.buf, p...)
+	return len(p), nil
+}
+
+func (b *tailBuffer) String() string { return string(b.buf) }
+
+func (b *tailBuffer) Truncated() bool { return b.total > len(b.buf) }
+
+// limitedBuffer accepts at most limit bytes and remembers when it overflowed,
+// so discovery can reject an oversized describe stream instead of parsing a
+// silent truncation.
+type limitedBuffer struct {
 	buf      []byte
 	limit    int
 	exceeded bool
 }
 
-func (b *boundedBuffer) Write(p []byte) (int, error) {
+func (b *limitedBuffer) Write(p []byte) (int, error) {
 	if b.exceeded {
 		return len(p), nil
 	}
@@ -104,26 +136,27 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func boundedOutput(command *exec.Cmd, limit int) (int, []byte, []byte, error) {
+func boundedDescribe(command *exec.Cmd) (int, []byte, []byte, bool, error) {
 	ensureSignalHandler()
-	var stdout, stderr boundedBuffer
-	stdout.limit, stderr.limit = limit, limit
+	var stdout, stderr limitedBuffer
+	stdout.limit, stderr.limit = maxDescribeOutput, maxDescribeOutput
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	if err := command.Start(); err != nil {
-		return -1, nil, nil, err
+		return -1, nil, nil, false, err
 	}
 	registerGroup(command.Process.Pid)
 	waitErr := command.Wait()
 	unregisterGroup(command.Process.Pid)
+	exceeded := stdout.exceeded || stderr.exceeded
 	if waitErr != nil {
 		var exitErr *exec.ExitError
 		if errors.As(waitErr, &exitErr) {
-			return exitErr.ExitCode(), stdout.buf, stderr.buf, nil
+			return exitErr.ExitCode(), stdout.buf, stderr.buf, exceeded, nil
 		}
-		return -1, nil, nil, waitErr
+		return -1, nil, nil, exceeded, waitErr
 	}
-	return 0, stdout.buf, stderr.buf, nil
+	return 0, stdout.buf, stderr.buf, exceeded, nil
 }
 
 func tryExternalTools(commands string, workdir string) ([]Tool, error) {
@@ -131,11 +164,11 @@ func tryExternalTools(commands string, workdir string) ([]Tool, error) {
 	for _, command := range strings.Fields(commands) {
 		describe := exec.Command(command, "describe")
 		describe.Dir = workdir
-		code, stdout, stderr, err := boundedOutput(describe, maxDescribeOutput)
+		code, stdout, stderr, exceeded, err := boundedDescribe(describe)
 		if err != nil {
 			return nil, fmt.Errorf("discover tools from %s: %w", command, err)
 		}
-		if len(stdout) > maxDescribeOutput {
+		if exceeded {
 			return nil, fmt.Errorf("discover tools from %s: output exceeds %d bytes", command, maxDescribeOutput)
 		}
 		if code != 0 {
@@ -161,8 +194,9 @@ func tryExternalTools(commands string, workdir string) ([]Tool, error) {
 			if strings.TrimSpace(spec.Description) == "" {
 				return nil, fmt.Errorf("empty tool description from %s: %s", command, spec.Name)
 			}
-			if !isJSONObject(spec.Parameters) {
-				return nil, fmt.Errorf("invalid tool parameters from %s: %s", command, spec.Name)
+			schema, err := compileSchema(spec.Parameters)
+			if err != nil {
+				return nil, fmt.Errorf("invalid tool parameters from %s: %s", command, spec.Name+": "+err.Error())
 			}
 			for _, existing := range tools {
 				if existing.Name == spec.Name {
@@ -174,14 +208,18 @@ func tryExternalTools(commands string, workdir string) ([]Tool, error) {
 			description := spec.Description
 			parameters := append(json.RawMessage(nil), spec.Parameters...)
 			snippet := spec.Snippet
+			timeout := spec.Timeout
 			tool := Tool{
 				Name:        toolName,
 				Description: description,
 				Parameters:  parameters,
 				Snippet:     snippet,
-				Sequential:  false,
-				Run: func(arguments string, _ func(string)) string {
-					return runExternalTool(executable, toolName, arguments, workdir)
+				Sequential:  spec.Sequential,
+				Replay:      spec.Replay,
+				Timeout:     timeout,
+				Validate:    schema.validate,
+				RunContext: func(ctx context.Context, arguments string, _ func(string)) string {
+					return runExternalTool(ctx, executable, toolName, arguments, workdir, timeout)
 				},
 			}
 			if tool.Snippet == "" {
@@ -193,28 +231,58 @@ func tryExternalTools(commands string, workdir string) ([]Tool, error) {
 	return tools, nil
 }
 
-func isJSONObject(raw json.RawMessage) bool {
-	var obj map[string]interface{}
-	return json.Unmarshal(raw, &obj) == nil
-}
-
-func runExternalTool(command, name, arguments, workdir string) string {
+func runExternalTool(ctx context.Context, command, name, arguments, workdir string, timeoutSeconds int) string {
 	ensureSignalHandler()
-	cmd := exec.Command(command, "run", name)
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = defaultToolTimeout
+	}
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, command, "run", name)
 	cmd.Dir = workdir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin = strings.NewReader(arguments)
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr tailBuffer
+	stdout.limit, stderr.limit = maxOutput, maxOutput
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		pgid := cmd.Process.Pid
+		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+		go func() {
+			time.Sleep(2 * time.Second)
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		}()
+		return nil
+	}
+	cmd.WaitDelay = 5 * time.Second
 	if err := cmd.Start(); err != nil {
 		return fmt.Sprintf("error: %s", err)
 	}
 	registerGroup(cmd.Process.Pid)
 	waitErr := cmd.Wait()
 	unregisterGroup(cmd.Process.Pid)
+
+	if runCtx.Err() == context.DeadlineExceeded || runCtx.Err() == context.Canceled {
+		reason := "timed out"
+		if errors.Is(runCtx.Err(), context.Canceled) {
+			reason = "was cancelled"
+		}
+		message := fmt.Sprintf("error: %s %s after %ds; its side effects are unknown", command, reason, timeoutSeconds)
+		if partial := strings.TrimSpace(sanitize(stdout.String())); partial != "" {
+			message += "; partial output:\n" + tail(partial)
+		}
+		return message
+	}
 	if waitErr != nil {
 		message := sanitize(stderr.String())
+		if strings.TrimSpace(message) == "" {
+			message = sanitize(stdout.String())
+		}
 		if strings.TrimSpace(message) == "" {
 			return fmt.Sprintf("error: %s exited with %s", command, statusString(waitErr))
 		}
@@ -225,6 +293,16 @@ func runExternalTool(command, name, arguments, workdir string) string {
 		return fmt.Sprintf("error: %s returned no output", command)
 	}
 	return tail(result)
+}
+
+func validateToolArguments(tool Tool, arguments string) error {
+	if tool.Validate == nil {
+		return nil
+	}
+	if err := tool.Validate(arguments); err != nil {
+		return fmt.Errorf("invalid arguments for %s: %w", tool.Name, err)
+	}
+	return nil
 }
 
 func statusString(waitErr error) string {

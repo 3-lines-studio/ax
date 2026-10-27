@@ -46,6 +46,9 @@ func runDescribe(ctx context.Context) error {
 				Name:        s.Name + toolSeparator + t.Name,
 				Description: t.Description,
 				Parameters:  parameters,
+				// MCP tools have unknown side effects, so never run two in
+				// parallel within one model batch.
+				Sequential: true,
 			}
 			line, err := json.Marshal(spec)
 			if err != nil {

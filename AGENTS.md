@@ -11,6 +11,10 @@ wire contracts in `internal/axproto` and the Botdir helpers in
   `docs/tools.md` (describe/run) are consumed by every transport, bridge and
   provider. Change the document and the code together; never break v1
   semantics silently.
+- **Sessions are append-only.** The `--session` JSONL log is a recovery
+  contract (`docs/session.md`): never rewrite old lines, keep `run_start`/
+  `run_end` meaning, and report interrupted tool calls instead of replaying
+  them.
 - **Botdir is the directory contract.** Consumers read `bot.toml`, `bot.md`,
   `skills/` from the bot root and runtime data from `BOT_DATA`; providers work
   in the resolved workspace. Use `internal/botdir` instead of open-coding
@@ -26,7 +30,7 @@ wire contracts in `internal/axproto` and the Botdir helpers in
 - `cmd/<program>/` — `package main`, README, tests.
 - `internal/axproto` — event types, outcomes, tool descriptors.
 - `internal/botdir` — Botdir paths, config and secrets.
-- `docs/` — protocol, tools, Botdir spec.
+- `docs/` — protocol, tools, session log, Botdir spec.
 - `scripts/` — installer, packaging, harnesses; take arguments, don't copy.
 - `catalog.json` — program registry; `scripts/render-catalog.py` renders the
   README table.
