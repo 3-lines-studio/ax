@@ -124,6 +124,17 @@
       "protocol": "",
       "depends_on": [],
       "doc": "docs/botdir/BOTDIR.md"
+    },
+    {
+      "name": "webi",
+      "kind": "transport",
+      "role": "Browser UI",
+      "description": "Serves the ax engine as a web app: channels are bot directories, threads are ax sessions.",
+      "protocol": "sse + /api",
+      "depends_on": [
+        "ax"
+      ],
+      "doc": "cmd/webi/README.md"
     }
   ]
 }

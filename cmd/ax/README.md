@@ -41,6 +41,8 @@ core_tools = ["fsx.read", "fsx.write", "fsx.edit", "bashx.bash"]
 thinking = true
 reasoning_effort = "max"
 max_tokens = 65536
+compact_at = 0.5
+context_window = 1000000
 
 [[mcp]]
 name = "github"
@@ -57,7 +59,29 @@ has `workspace/`, the model and tools run there.
 
 `~/.config/ax/config` is a plain `key=value` file with the same keys as the
 `bot.toml` fields above (`api_key`, `model`, `base`, `tools`, `thinking`,
-`effort`, `max_tokens`, `image_detail`, `tool_mode`, `core_tools`).
+`effort`, `max_tokens`, `image_detail`, `tool_mode`, `core_tools`, `compact_at`,
+`context_window`).
+
+## Context compaction
+
+Long sessions compact themselves. When the projected prompt reaches
+`compact_at` of the context window (defaults `0.5` and `1000000`, the same
+numbers pixi used), AX summarizes the older messages with the model, appends one
+`compaction` entry to the session log and puts the summary at the top of the
+system prompt. The log stays append-only, so resuming works exactly as before.
+
+```sh
+ax -compact-at 0.7 "keep going"       # later threshold
+ax -compact-at 0 "keep going"         # disable
+ax -context-window 128000 "..."       # smaller window, earlier compaction
+ax compact --session thread.jsonl     # the "Compact context" button
+```
+
+A compaction is visible in the event stream as
+`{"type":"compaction","upto":N,"summary":"..."}`. A mid-run compaction also adds
+a `Continue the task...` user turn, so the model keeps something to act on; a
+compaction that cannot run (provider error) fails the run instead of silently
+growing the prompt.
 
 ## Thinking and output budget
 
@@ -136,20 +160,37 @@ pass_env = ["GITHUB_TOKEN"]             # names only; values come from the envir
 timeout = 30
 
 [[mcp]]
-name = "linear"
-url = "https://mcp.linear.app/mcp"      # Streamable HTTP
-token_env = "LINEAR_TOKEN"              # Authorization: Bearer <value>
+name = "sentry"
+url = "https://mcp.sentry.dev/mcp"      # Streamable HTTP + OAuth
 ```
 
 - `pass_env` passes environment variables through; `env = { LOG_LEVEL = "debug" }`
-  sets literal values; `${VAR}` expands in `env` and `headers`.
-- Secrets never go in `bot.toml`: use `pass_env` or `token_env`.
+  sets literal values; `${VAR}` expands in `env`, `headers` and `url`.
+- Secrets never go in `bot.toml`: use `pass_env`, `token_env` or the OAuth
+  login. `token_env` sets `Authorization: Bearer <value>`.
+- Remote servers without a token use ax's OAuth login; tokens live in
+  `state/ax/mcp/auth/<server>.json` (mode `0600`) and refresh by themselves.
 - A server that fails to start is shown as `unavailable` in the catalog; it
   does not take down the other integrations.
 - Tool lists are cached under `state/ax/mcp/<server>.json` for 10 minutes (or
   the server's `ttlMs`) and refreshed with `ax catalog --refresh`.
 - No daemon: `search` uses the cache, `execute` starts the owning server and
   keeps it only for the run.
+
+Connect a common server in one command, import what Cursor or Claude already
+configured, or debug what is broken:
+
+```sh
+ax mcp add                                 # list the curated registry
+ax mcp add sentry                          # OAuth server -> then: ax mcp login sentry
+ax mcp add github                          # PAT header: GITHUB_PERSONAL_ACCESS_TOKEN
+ax mcp add filesystem --arg /work          # stdio server with an argument
+ax mcp import ./mcp.json                   # {"mcpServers": {...}}
+ax mcp import ./my-cursor-plugin           # .cursor-plugin/plugin.json
+ax mcp list                                # auth kind and login state
+ax mcp login sentry                        # browser authorization, PKCE
+ax mcp doctor                              # connect to everything, report failures
+```
 
 `ax mcp serve` exposes the same `search`/`execute` catalog to any MCP host over
 stdio:
@@ -159,7 +200,7 @@ ax mcp serve
 ```
 
 See the [MCP catalog contract](../../docs/mcp.md) for the full behavior and
-current limits (no OAuth, elicitation, resources or prompts yet).
+current limits (no elicitation, resources or prompts yet).
 
 ### Direct mode
 

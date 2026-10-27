@@ -22,32 +22,40 @@ import (
 const catalogLoadTimeout = 20 * time.Second
 
 type cliConfig struct {
-	base        string
-	model       string
-	system      string
-	dir         string
-	session     string
-	thinking    string
-	effort      string
-	maxTokens   int
-	images      []string
-	imageDetail string
-	toolMode    string
-	literal     bool
+	base             string
+	model            string
+	system           string
+	dir              string
+	session          string
+	thinking         string
+	effort           string
+	maxTokens        int
+	images           []string
+	imageDetail      string
+	toolMode         string
+	compactAt        float64
+	compactAtSet     bool
+	contextWindow    int
+	contextWindowSet bool
+	literal          bool
 }
 
 type fileConfig struct {
-	apiKey      string
-	model       string
-	base        string
-	tools       string
-	thinking    string
-	effort      string
-	maxTokens   int
-	imageDetail string
-	toolMode    string
-	coreTools   []string
-	mcp         []mcpEntry
+	apiKey           string
+	model            string
+	base             string
+	tools            string
+	thinking         string
+	effort           string
+	maxTokens        int
+	imageDetail      string
+	toolMode         string
+	coreTools        []string
+	mcp              []mcpEntry
+	compactAt        float64
+	compactAtSet     bool
+	contextWindow    int
+	contextWindowSet bool
 }
 
 func main() {
@@ -108,6 +116,9 @@ func main() {
 		case "catalog":
 			runCatalogCommand(fc, bot, prompt[1:])
 			return
+		case "compact":
+			runCompactCommand(cfg, fc, bot, prompt[1:])
+			return
 		case "mcp":
 			runMCPCommand(fc, bot, prompt[1:])
 			return
@@ -146,7 +157,7 @@ func parseArgs(args []string) (cliConfig, []string, error) {
 			name, inline, hasInline = stripped[:idx], stripped[idx+1:], true
 		}
 		switch name {
-		case "base", "model", "system", "C", "session", "thinking", "effort", "max-tokens", "image", "image-detail", "tool-mode":
+		case "base", "model", "system", "C", "session", "thinking", "effort", "max-tokens", "image", "image-detail", "tool-mode", "compact-at", "context-window":
 			if !hasInline {
 				i++
 				if i >= len(args) {
@@ -181,6 +192,18 @@ func parseArgs(args []string) (cliConfig, []string, error) {
 				cfg.imageDetail = inline
 			case "tool-mode":
 				cfg.toolMode = inline
+			case "compact-at":
+				value, err := strconv.ParseFloat(inline, 64)
+				if err != nil || value < 0 || value >= 1 {
+					return cfg, nil, fmt.Errorf("invalid -compact-at: %s (use 0 to disable, or a fraction between 0 and 1)", inline)
+				}
+				cfg.compactAt, cfg.compactAtSet = value, true
+			case "context-window":
+				value, err := strconv.Atoi(inline)
+				if err != nil || value < 0 {
+					return cfg, nil, fmt.Errorf("invalid -context-window: %s", inline)
+				}
+				cfg.contextWindow, cfg.contextWindowSet = value, true
 			}
 		default:
 			return cfg, nil, fmt.Errorf("flag provided but not defined: %s", a)
@@ -191,7 +214,7 @@ func parseArgs(args []string) (cliConfig, []string, error) {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, "Usage: ax [flags] [prompt]\n\nFlags:\n  -base URL    OpenAI-compatible API base URL (default \"https://api.deepseek.com\")\n  -model NAME  model name (default \"deepseek-flash\")\n  -system TEXT  system prompt override (default: built-in + bot.md)\n  -C DIR       bot directory root (default: current directory)\n  --session FILE  append-only durable session log\n  --events      emit JSONL events on stdout\n  -thinking X  thinking mode: auto, on, off (default auto)\n  -effort X    reasoning effort: low, high, max (default max for DeepSeek)\n  -max-tokens N  maximum output tokens (default: provider default)\n  -image PATH|URL  attach an image to the prompt (repeatable)\n  -image-detail X  image detail: low, high, original, auto (default auto)\n  -tool-mode X  tool surface: catalog or direct (default catalog)\n\nCommands:\n  ax catalog [--json] [--refresh]   print the tool catalog\n  ax mcp serve [--stdio]            expose the catalog to MCP hosts\n\nWith no prompt, reads the prompt from stdin.\nA prompt of the form /name [args] expands a user command from\n~/.config/ax/commands/<name>.md.\n")
+	fmt.Fprint(os.Stderr, "Usage: ax [flags] [prompt]\n\nFlags:\n  -base URL    OpenAI-compatible API base URL (default \"https://api.deepseek.com\")\n  -model NAME  model name (default \"deepseek-flash\")\n  -system TEXT  system prompt override (default: built-in + bot.md)\n  -C DIR       bot directory root (default: current directory)\n  --session FILE  append-only durable session log\n  --events      emit JSONL events on stdout\n  -thinking X  thinking mode: auto, on, off (default auto)\n  -effort X    reasoning effort: low, high, max (default max for DeepSeek)\n  -max-tokens N  maximum output tokens (default: provider default)\n  -image PATH|URL  attach an image to the prompt (repeatable)\n  -image-detail X  image detail: low, high, original, auto (default auto)\n  -tool-mode X  tool surface: catalog or direct (default catalog)\n  -compact-at X  compact when the prompt reaches this fraction of the window\n  -context-window N  context window in tokens (default 1000000)\n\nCommands:\n  ax catalog [--json] [--refresh]   print the tool catalog\n  ax compact --session FILE         summarize a session into a shorter prompt\n  ax mcp serve [--stdio]            expose the catalog to MCP hosts\n  ax mcp add|import|list            connect servers (registry, mcp.json)\n  ax mcp login|logout|doctor        OAuth sessions and diagnostics\n\nWith no prompt, reads the prompt from stdin.\nA prompt of the form /name [args] expands a user command from\n~/.config/ax/commands/<name>.md.\n")
 }
 
 func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
@@ -201,6 +224,10 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 	}
 	if err := validateToolMode(cfg, fc); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(2)
+	}
+	if compactAt, window := resolveCompact(cfg, fc); compactAt >= 1 || compactAt < 0 || window < 0 {
+		fmt.Fprintf(os.Stderr, "error: invalid compaction: compact_at=%g context_window=%d (compact_at is a fraction of the window, 0 disables)\n", compactAt, window)
 		os.Exit(2)
 	}
 	printJSON(map[string]any{"type": axproto.TypeProtocol, "version": axproto.Version})
@@ -249,6 +276,10 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 	}
 	defer closeCatalog()
 	system := resolveSystem(cfg, tools, bot, cat, coreTools(fc))
+	baseSystem := system
+	if state.Summary != "" {
+		system += summarySection(state.Summary)
+	}
 	base := cfg.base
 	model := cfg.model
 	userMessage := buildUserMessage(expandPromptCommand(strings.Join(prompt, " "), axRoot()), images)
@@ -294,11 +325,35 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 		log: log, runID: runID, model: model,
 		calls: map[string]ToolCall{},
 	}
-	end := runStream(provider, &runOptions{
-		model:    model,
-		system:   system,
-		tools:    tools,
-		maxTurns: int(^uint(0) >> 1),
+	compactAt, contextWindow := resolveCompact(cfg, fc)
+	var compact func(context.Context, []Message, bool) ([]Message, string, error)
+	if compactAt > 0 && contextWindow > 0 {
+		summarizer := NewOpenAI(base, apiKey(fc, bot))
+		summarizer.SessionPath = cfg.session
+		thinking := false
+		summarizer.Thinking = &thinking
+		summarizer.Effort = "none"
+		summarizer.MaxTokens = compactSummaryTokens
+		engine := &compactor{
+			provider: summarizer,
+			model:    model,
+			base:     baseSystem,
+			summary:  state.Summary,
+			log:      log,
+			runID:    runID,
+			cancel:   &cancel,
+			emit:     printJSON,
+		}
+		compact = engine.compact
+	}
+	end := runStream(context.Background(), provider, &runOptions{
+		model:         model,
+		system:        system,
+		tools:         tools,
+		maxTurns:      int(^uint(0) >> 1),
+		compactAt:     compactAt,
+		contextWindow: contextWindow,
+		compact:       compact,
 	}, history, &cancel, sink)
 
 	outcomeName := outcomeString(end.outcome)
@@ -341,6 +396,25 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 		closeCatalog()
 		os.Exit(1)
 	}
+}
+
+// resolveCompact merges the compaction settings: flags, then bot.toml, then
+// the defaults copied from pixi (half of a one-million-token window).
+func resolveCompact(cfg cliConfig, fc fileConfig) (float64, int) {
+	compactAt, window := defaultCompactAt, defaultContextWindow
+	if fc.compactAtSet {
+		compactAt = fc.compactAt
+	}
+	if fc.contextWindowSet {
+		window = fc.contextWindow
+	}
+	if cfg.compactAtSet {
+		compactAt = cfg.compactAt
+	}
+	if cfg.contextWindowSet {
+		window = cfg.contextWindow
+	}
+	return compactAt, window
 }
 
 func outcomeString(out outcome) string {
@@ -638,6 +712,14 @@ func loadConfig() fileConfig {
 			c.toolMode = val
 		case "core_tools":
 			c.coreTools = strings.Fields(strings.ReplaceAll(val, ",", " "))
+		case "compact_at":
+			if value, err := strconv.ParseFloat(val, 64); err == nil && value >= 0 && value < 1 {
+				c.compactAt, c.compactAtSet = value, true
+			}
+		case "context_window":
+			if n, err := strconv.Atoi(val); err == nil && n >= 0 {
+				c.contextWindow, c.contextWindowSet = n, true
+			}
 		}
 	}
 	return c
@@ -790,8 +872,6 @@ func (s *eventSink) tokens(input, output, cached int) {
 	s.lastUsage = &u
 	s.emit(map[string]any{"type": axproto.TypeUsage, "input": input, "output": output, "cached_input": cached, "model": s.model})
 }
-
-func (s *eventSink) shouldCompact(input, output int) bool { return false }
 
 func (s *eventSink) assistant(turn int, msg Message, usage Usage) {
 	s.turn = turn
