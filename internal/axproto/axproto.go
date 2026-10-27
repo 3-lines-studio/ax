@@ -5,7 +5,7 @@
 //
 // The human-readable version of this contract lives in docs/protocol.md and
 // docs/tools.md. Keep the constants here in sync with those documents: they
-// are what bridges (acpi, mcpx) and transports (slaxi) compile against.
+// are what transports (slaxi) and hosts compile against.
 package axproto
 
 import "encoding/json"
@@ -57,4 +57,9 @@ type ToolSpec struct {
 	// effects. The engine still reports interrupted calls instead of
 	// replaying them automatically; the field records intent for hosts.
 	Replay string `json:"replay,omitempty"`
+	// ReadOnly and Destructive are catalog hints. They do not change
+	// execution, but they drive search tags and the default batching policy.
+	ReadOnly    bool `json:"read_only,omitempty"`
+	Destructive bool `json:"destructive,omitempty"`
+	OpenWorld   bool `json:"open_world,omitempty"`
 }

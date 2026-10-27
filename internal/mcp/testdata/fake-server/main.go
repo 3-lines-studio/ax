@@ -1,7 +1,7 @@
-// Command fake-mcp-server is a minimal, real MCP server used only by
-// mcpx_test.go, so mcpx's client side is exercised against an actual MCP
+// Command fake-server is a minimal, real MCP server used only by the
+// internal/mcp tests, so the ax client is exercised against an actual MCP
 // server (not a hand-rolled stand-in) without depending on any external
-// service such as buzz-cli.
+// service.
 package main
 
 import (

@@ -95,7 +95,7 @@ TOOL_SCENARIO = [
     {
         "stream": [
             content_chunk("Let me check. "),
-            tool_chunk("bash", {"command": "echo hello"}),
+            tool_chunk("execute", {"tool": "bashprovider.bash", "arguments": {"command": "echo hello"}}),
             usage_chunk(10, 5),
         ]
     },
@@ -103,8 +103,19 @@ TOOL_SCENARIO = [
 ]
 
 WRITE_FILE_SCENARIO = [
-    {"stream": [tool_chunk("bash", {"command": "printf hi > out.txt"}), usage_chunk(10, 5)]},
+    {"stream": [tool_chunk("execute", {"tool": "bashprovider.bash", "arguments": {"command": "printf hi > out.txt"}}), usage_chunk(10, 5)]},
     {"stream": [content_chunk("file written.", "stop"), usage_chunk(20, 8)]},
+]
+
+SEARCH_SCENARIO = [
+    {"stream": [tool_chunk("search", {"query": "run a shell command"}), usage_chunk(10, 5)]},
+    {"stream": [tool_chunk("execute", {"tool": "bashprovider.bash", "arguments": {"command": "echo searched"}}), usage_chunk(10, 5)]},
+    {"stream": [content_chunk("found it.", "stop"), usage_chunk(20, 8)]},
+]
+
+DIRECT_SCENARIO = [
+    {"stream": [tool_chunk("bash", {"command": "printf direct > direct.txt"}), usage_chunk(10, 5)]},
+    {"stream": [content_chunk("direct done.", "stop"), usage_chunk(20, 8)]},
 ]
 
 REWIND_SCENARIO = [
@@ -529,7 +540,7 @@ def oneshot_tool_loop(h, ax):
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
         events = read_events(p)
         check(
-            any(e.get("type") == "tool_start" and e.get("name") == "bash" for e in events),
+            any(e.get("type") == "tool_start" and e.get("name") == "execute" for e in events),
             "no tool_start event",
         )
         content = [m["Content"] for m in last_result(events)["messages"] if m["Role"] == "assistant"]
@@ -540,6 +551,50 @@ def oneshot_tool_loop(h, ax):
             any("hello" in m.get("content", "") for m in tool_msgs),
             "tool result not fed back: %s" % tool_msgs,
         )
+
+
+@case
+def oneshot_catalog_search(h, ax):
+    with h.mock(SEARCH_SCENARIO) as srv:
+        p = h.oneshot(
+            ax,
+            ["--events", "find a tool"],
+            base=srv.base_url,
+            extra_env={"AX_TOOLS": str(bash_provider(h))},
+        )
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        events = read_events(p)
+        check(
+            any(e.get("type") == "tool_start" and e.get("name") == "search" for e in events),
+            "no search tool_start",
+        )
+        check(
+            any(
+                e.get("type") == "tool_start"
+                and e.get("name") == "execute"
+                and e.get("target") == "bashprovider.bash"
+                for e in events
+            ),
+            "no execute target event",
+        )
+        tool_msgs = body_msg(srv, 1, "tool")
+        check(
+            any("bashprovider.bash" in m.get("content", "") for m in tool_msgs),
+            "search result not fed back: %s" % tool_msgs,
+        )
+
+
+@case
+def oneshot_direct_tools(h, ax):
+    with h.mock(DIRECT_SCENARIO) as srv:
+        p = h.oneshot(
+            ax,
+            ["-tool-mode", "direct", "write directly"],
+            base=srv.base_url,
+            extra_env={"AX_TOOLS": str(bash_provider(h))},
+        )
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        check((h.work / "direct.txt").read_text() == "direct", "direct tool did not run")
 
 
 @case

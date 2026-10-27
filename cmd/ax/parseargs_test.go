@@ -184,13 +184,16 @@ func TestLoadConfigParsesLegacyConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgDir := filepath.Join(dir, "ax")
 	_ = os.MkdirAll(cfgDir, 0o755)
-	content := "# comment\n\napi_key = \"sk-123\"\nmodel = \"gpt-4\"\nbase = \"http://len\"\ntools = \"bash edit\"\n"
+	content := "# comment\n\napi_key = \"sk-123\"\nmodel = \"gpt-4\"\nbase = \"http://len\"\ntools = \"bash edit\"\ntool_mode = \"direct\"\ncore_tools = \"fsx.read, bashx.bash\"\n"
 	_ = os.WriteFile(filepath.Join(cfgDir, "config"), []byte(content), 0o644)
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
 	c := loadConfig()
 	if c.apiKey != "sk-123" || c.model != "gpt-4" || c.base != "http://len" || c.tools != "bash edit" {
 		t.Errorf("loadConfig = %+v", c)
+	}
+	if c.toolMode != "direct" || len(c.coreTools) != 2 || c.coreTools[0] != "fsx.read" {
+		t.Errorf("tool config = %+v", c)
 	}
 }
 
@@ -208,7 +211,7 @@ func TestLoadConfigMissingReturnsZero(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	c := loadConfig()
-	if c != (fileConfig{}) {
+	if !reflect.DeepEqual(c, fileConfig{}) {
 		t.Errorf("loadConfig = %+v", c)
 	}
 }
@@ -319,5 +322,15 @@ func TestLoadConfigParsesModelOptions(t *testing.T) {
 	cfg := loadConfig()
 	if cfg.thinking != "off" || cfg.effort != "max" || cfg.maxTokens != 9000 || cfg.imageDetail != "low" {
 		t.Errorf("cfg = %+v", cfg)
+	}
+}
+
+func TestParseArgsDoubleDashForcesPrompt(t *testing.T) {
+	cfg, rest, err := parseArgs([]string{"--", "catalog"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.literal || len(rest) != 1 || rest[0] != "catalog" {
+		t.Errorf("cfg=%+v rest=%v", cfg, rest)
 	}
 }

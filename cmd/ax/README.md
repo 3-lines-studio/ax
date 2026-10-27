@@ -4,8 +4,9 @@ A minimal headless LLM coding-agent harness for scripts and Unix-style
 clients. One static binary, stdlib HTTP, no built-in tools.
 
 `ax` is the engine of the [AX ecosystem](../../README.md). It runs a prompt,
-streams JSONL events on stdout and exits. Every capability is an external
-process registered explicitly through `AX_TOOLS`.
+streams JSONL events on stdout and exits. Capabilities come from a catalog:
+MCP servers plus local describe/run providers registered through `AX_TOOLS`.
+The model sees two tools, `search` and `execute`, instead of a tool list.
 
 The default provider is DeepSeek: `https://api.deepseek.com` with
 `deepseek-flash`. Any OpenAI-compatible endpoint works with `-base` (OpenAI,
@@ -36,9 +37,16 @@ current directory (or `-C DIR`); it reads `bot.toml` there:
 model = "deepseek-flash"
 base_url = "https://api.deepseek.com"
 tools = ["fsx", "bashx", "skillx"]
+core_tools = ["fsx.read", "fsx.write", "fsx.edit", "bashx.bash"]
 thinking = true
 reasoning_effort = "max"
 max_tokens = 65536
+
+[[mcp]]
+name = "github"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+pass_env = ["GITHUB_TOKEN"]
 ```
 
 Every key is optional. The API key comes from `DEEPSEEK_API_KEY`, then
@@ -49,7 +57,7 @@ has `workspace/`, the model and tools run there.
 
 `~/.config/ax/config` is a plain `key=value` file with the same keys as the
 `bot.toml` fields above (`api_key`, `model`, `base`, `tools`, `thinking`,
-`effort`, `max_tokens`, `image_detail`).
+`effort`, `max_tokens`, `image_detail`, `tool_mode`, `core_tools`).
 
 ## Thinking and output budget
 
@@ -88,24 +96,84 @@ endpoints). With `--session`, the image is stored as a content-addressed blob
 next to the log and only the digest is recorded; without a session it is
 inlined as a data URL.
 
-## Tools
+## Tool catalog
 
-`ax` has no built-in tools — register every capability explicitly:
+`ax` has no built-in tools. Everything is a catalog source:
+
+- **MCP servers** declared with `[[mcp]]` (stdio or Streamable HTTP).
+- **Local providers** declared with `tools`/`AX_TOOLS`; they keep the
+  `describe`/`run` convention and are indexed exactly like MCP servers.
+
+The model always sees two tools:
+
+- `search` is the index. An empty call returns the whole catalog (servers,
+  descriptions, tool ids, how to call them). A query ranks matches and always
+  includes a fallback menu, so a bad query never returns nothing. Use
+  `{"server":"github"}` for one server or `{"tool":"github.create_issue"}` for
+  the full schema and an example call.
+- `execute` runs one tool by id with a JSON object of arguments. It validates
+  arguments against the tool schema before calling anything.
 
 ```sh
-AX_TOOLS="fsx bashx skillx" ax
+AX_TOOLS="fsx bashx skillx" ax "read main.go and add the missing test"
+ax catalog                     # the same index, from the shell
+ax catalog --json              # machine-readable
+ax catalog --refresh           # bypass the MCP catalog cache
 ```
 
-At startup `ax` runs `<command> describe` (one JSON spec per line: name,
-description, JSON-Schema parameters, and optional `sequential`, `timeout` and
-`replay`). For a call it runs `<command> run <name>`, writes the JSON
-arguments to stdin, reads the result from stdout and treats a non-zero exit as
-a tool error. Arguments are validated against the schema before execution;
-`sequential` tools run alone in call order; a call that exceeds its timeout is
-cancelled with its process group. See the [tool contract](../../docs/tools.md).
+`core_tools` (default: `fsx.read`, `fsx.write`, `fsx.edit`, `bashx.bash`)
+appear as a compact cheat sheet in the system prompt, so common file and shell
+work can call `execute` directly without paying for a `search` turn.
 
-Available providers: `fsx`, `bashx`, `wax`, `bqx`, `pgx`, `slackx`,
-`browserx`, `skillx`, `attachx`, `mcpx`.
+### MCP servers
+
+```toml
+[[mcp]]
+name = "github"
+command = "npx"                         # stdio server
+args = ["-y", "@modelcontextprotocol/server-github"]
+pass_env = ["GITHUB_TOKEN"]             # names only; values come from the environment
+timeout = 30
+
+[[mcp]]
+name = "linear"
+url = "https://mcp.linear.app/mcp"      # Streamable HTTP
+token_env = "LINEAR_TOKEN"              # Authorization: Bearer <value>
+```
+
+- `pass_env` passes environment variables through; `env = { LOG_LEVEL = "debug" }`
+  sets literal values; `${VAR}` expands in `env` and `headers`.
+- Secrets never go in `bot.toml`: use `pass_env` or `token_env`.
+- A server that fails to start is shown as `unavailable` in the catalog; it
+  does not take down the other integrations.
+- Tool lists are cached under `state/ax/mcp/<server>.json` for 10 minutes (or
+  the server's `ttlMs`) and refreshed with `ax catalog --refresh`.
+- No daemon: `search` uses the cache, `execute` starts the owning server and
+  keeps it only for the run.
+
+`ax mcp serve` exposes the same `search`/`execute` catalog to any MCP host over
+stdio:
+
+```sh
+ax mcp serve
+```
+
+See the [MCP catalog contract](../../docs/mcp.md) for the full behavior and
+current limits (no OAuth, elicitation, resources or prompts yet).
+
+### Direct mode
+
+The old behavior is still available for one release:
+
+```sh
+ax -tool-mode direct "use the bash tool"
+```
+
+In direct mode every local provider tool is exposed to the model with its own
+schema; `[[mcp]]` servers are ignored. Catalog mode is the default.
+
+Available local providers: `fsx`, `bashx`, `wax`, `bqx`, `pgx`, `slackx`,
+`browserx`, `skillx`, `attachx`.
 
 ## Session
 

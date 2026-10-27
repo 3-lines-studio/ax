@@ -13,7 +13,6 @@ budget() {
     ax) echo 8000000 ;;
     boti) echo 7000000 ;;
     slaxi) echo 8063000 ;;
-    acpi) echo 3750000 ;;
     fsx) echo 2970000 ;;
     bashx) echo 3200000 ;;
     attachx) echo 8000000 ;;
@@ -23,7 +22,6 @@ budget() {
     slackx) echo 7543000 ;;
     bqx) echo 24789000 ;;
     pgx) echo 10593000 ;;
-    mcpx) echo 6850000 ;;
     *)
         echo "size: no budget for $1; add one to scripts/check-size.sh" >&2
         return 1

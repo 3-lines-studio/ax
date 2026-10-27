@@ -38,7 +38,7 @@ func main() {
 		return
 	}
 	if len(args) == 1 && args[0] == "describe" {
-		fmt.Println(`{"name":"bigquery_query","description":"Run a read-only BigQuery SQL query","parameters":{"type":"object","properties":{"sql":{"type":"string","description":"SELECT or WITH query"}},"required":["sql"]}}`)
+		fmt.Println(`{"name":"bigquery_query","description":"Run a read-only BigQuery SQL query","parameters":{"type":"object","properties":{"sql":{"type":"string","description":"SELECT or WITH query"}},"required":["sql"]},"read_only":true}`)
 		return
 	}
 	if len(args) != 2 || args[0] != "run" || args[1] != "bigquery_query" {

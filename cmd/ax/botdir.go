@@ -7,12 +7,15 @@ import (
 )
 
 type botConfig struct {
-	Model           string   `toml:"model"`
-	BaseURL         string   `toml:"base_url"`
-	Tools           []string `toml:"tools"`
-	Thinking        *bool    `toml:"thinking"`
-	ReasoningEffort string   `toml:"reasoning_effort"`
-	MaxTokens       int      `toml:"max_tokens"`
+	Model           string     `toml:"model"`
+	BaseURL         string     `toml:"base_url"`
+	Tools           []string   `toml:"tools"`
+	Thinking        *bool      `toml:"thinking"`
+	ReasoningEffort string     `toml:"reasoning_effort"`
+	MaxTokens       int        `toml:"max_tokens"`
+	ToolMode        string     `toml:"tool_mode"`
+	CoreTools       []string   `toml:"core_tools"`
+	MCP             []mcpEntry `toml:"mcp"`
 }
 
 // botCtx is what the engine needs from the Botdir conventions.
@@ -52,6 +55,15 @@ func mergeBotConfig(fc fileConfig, bc botConfig) fileConfig {
 	if bc.MaxTokens > 0 {
 		fc.maxTokens = bc.MaxTokens
 	}
+	if bc.ToolMode != "" {
+		fc.toolMode = bc.ToolMode
+	}
+	if len(bc.CoreTools) > 0 {
+		fc.coreTools = append([]string(nil), bc.CoreTools...)
+	}
+	if len(bc.MCP) > 0 {
+		fc.mcp = append([]mcpEntry(nil), bc.MCP...)
+	}
 	return fc
 }
 
@@ -77,7 +89,7 @@ func botRootArg(args []string) string {
 			return ""
 		}
 		switch name {
-		case "base", "model", "system", "session":
+		case "base", "model", "system", "session", "thinking", "effort", "max-tokens", "image", "image-detail", "tool-mode":
 			if !hasInline {
 				i++
 			}
