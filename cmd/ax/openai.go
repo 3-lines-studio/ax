@@ -132,7 +132,7 @@ func (o OpenAI) buildRequest(req *Request, stream bool) (builtRequest, error) {
 			kind = "enabled"
 			effort := o.Effort
 			if effort == "" {
-				effort = "high"
+				effort = "max"
 			}
 			request.ReasoningEffort = effort
 		}
