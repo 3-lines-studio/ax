@@ -37,6 +37,7 @@ type cliConfig struct {
 	compactAtSet     bool
 	contextWindow    int
 	contextWindowSet bool
+	resume           bool
 	literal          bool
 }
 
@@ -113,7 +114,7 @@ func main() {
 	if compute.root != "" {
 		bot.Workspace = compute.root
 	}
-	promptFromStdin := len(prompt) == 0
+	promptFromStdin := len(prompt) == 0 && !cfg.resume
 	if promptFromStdin {
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
@@ -152,6 +153,11 @@ func parseArgs(args []string) (cliConfig, []string, error) {
 			os.Exit(0)
 		}
 		if a == "--events" {
+			i++
+			continue
+		}
+		if a == "--resume" || a == "-resume" {
+			cfg.resume = true
 			i++
 			continue
 		}
@@ -259,7 +265,22 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 		}
 	}
 	state := deriveSession(entries)
-	if state.OpenRun {
+	if cfg.resume {
+		if cfg.session == "" {
+			fmt.Fprintln(os.Stderr, "error: --resume needs --session FILE")
+			os.Exit(2)
+		}
+		if !state.OpenRun {
+			fmt.Fprintln(os.Stderr, "error: session has no interrupted run to resume")
+			os.Exit(2)
+		}
+		prompt = []string{resumePrompt(state)}
+		printJSON(map[string]any{
+			"type":        axproto.TypeResume,
+			"run":         state.LastRunID,
+			"interrupted": state.Interrupted,
+		})
+	} else if state.OpenRun {
 		fmt.Fprintf(os.Stderr, "warning: previous run did not finish; repaired %d interrupted tool call(s)\n", state.Repaired)
 	}
 

@@ -779,6 +779,38 @@ def oneshot_steering(h, ax):
 
 
 @case
+def oneshot_resume(h, ax):
+    session = h.work / "resume.jsonl"
+    session.write_text(
+        "\n".join([
+            '{"type":"run_start","run_id":"r1"}',
+            '{"type":"message","message":{"Role":"user","Content":"do the work"}}',
+            '{"type":"message","message":{"Role":"assistant","ToolCalls":[{"ID":"c1","Name":"execute"}]}}',
+            '{"type":"tool_intent","call":{"ID":"c1"},"target":"bashprovider.bash"}',
+        ]) + "\n"
+    )
+    with h.mock(ANSWER_SCENARIO) as srv:
+        p = h.oneshot(ax, ["--events", "--resume", "--session", str(session)], base=srv.base_url)
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        events = read_events(p)
+        resumed = [e for e in events if e.get("type") == "resume"]
+        check(len(resumed) == 1, "no resume event: %s" % [e.get("type") for e in events])
+        check(resumed[0]["run"] == "r1", "resume run = %s" % resumed[0])
+        check(resumed[0]["interrupted"] == ["bashprovider.bash"], "resume interrupted = %s" % resumed[0])
+        users = [m["content"] for m in body_msg(srv, 0, "user")]
+        check(len(users) == 2, "user turns = %s" % users)
+        check("Resume the interrupted run" in users[-1], "no resume turn: %s" % users[-1])
+        check("bashprovider.bash" in users[-1], "interrupted target missing: %s" % users[-1])
+        check(events[-1] == {"type": "done", "outcome": "done"}, "bad final event")
+    entries = [json.loads(line) for line in session.read_text().splitlines() if line.strip()]
+    check(entries[-1]["type"] == "run_end", "session not closed: %s" % entries[-1])
+
+    again = h.oneshot(ax, ["--resume", "--session", str(session)], stdin=b"")
+    check(again.returncode == 2, "resuming a finished session must fail: %s" % again.returncode)
+    check("no interrupted run" in again.stderr, "stderr = %s" % again.stderr)
+
+
+@case
 def oneshot_auto_compaction(h, ax):
     session = h.root / "compact.jsonl"
     h.write_config("compact_at = 0.5\ncontext_window = 10000\n")
