@@ -22,7 +22,7 @@ import (
 )
 
 func main() {
-	listen := flag.String("listen", "127.0.0.1:8377", "address to serve the UI on (setup asks about other devices)")
+	listen := flag.String("listen", "", "address to serve the UI on (default 127.0.0.1:8377)")
 	stateDir := flag.String("state", "", "state directory (default <BOT_DATA>/state/webi)")
 	botRoot := flag.String("C", "", "bot directory (default: the per-user app directory)")
 	axPath := flag.String("ax", "ax", "path to the ax binary")
@@ -53,6 +53,10 @@ func main() {
 		os.Exit(2)
 	}
 
+	listenAddr := *listen
+	if listenAddr == "" {
+		listenAddr = "127.0.0.1:8377"
+	}
 	root, fresh, err := resolveRoot(*botRoot)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -95,8 +99,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
-	if alreadyServes(*listen, token) {
-		host, port := splitListen(*listen)
+	if alreadyServes(listenAddr, token) {
+		host, port := splitListen(listenAddr)
 		printURLs(host, port, token, *open, tokenPath)
 		return
 	}
@@ -118,7 +122,7 @@ func main() {
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    64 << 10,
 	}
-	listener, err := net.Listen("tcp", *listen)
+	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
