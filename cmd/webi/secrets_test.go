@@ -77,14 +77,11 @@ func TestSecretRequestRoundTrip(t *testing.T) {
 	deadline = time.Now().Add(5 * time.Second)
 	for {
 		data, err := os.ReadFile(record)
-		if err == nil {
-			if !strings.Contains(string(data), `"type":"secret"`) || !strings.Contains(string(data), "s3cret") {
-				t.Fatalf("control line = %s", data)
-			}
+		if err == nil && strings.Contains(string(data), `"type":"secret"`) && strings.Contains(string(data), "s3cret") {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the secret never reached ax: %v", err)
+			t.Fatalf("the secret never reached ax: %v %q", err, data)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -141,14 +138,11 @@ func TestSecretSkip(t *testing.T) {
 	deadline = time.Now().Add(5 * time.Second)
 	for {
 		data, err := os.ReadFile(record)
-		if err == nil {
-			if !strings.Contains(string(data), `"skip":true`) {
-				t.Fatalf("control line = %s", data)
-			}
+		if err == nil && strings.Contains(string(data), `"skip":true`) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the skip never reached ax: %v", err)
+			t.Fatalf("the skip never reached ax: %v %q", err, data)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
