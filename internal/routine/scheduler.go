@@ -59,18 +59,20 @@ func (s *Scheduler) Due(now time.Time) []Routine {
 func (s *Scheduler) Run(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	s.tick(ctx, s.now())
+	s.Tick(ctx, s.now())
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			s.tick(ctx, now)
+			s.Tick(ctx, now)
 		}
 	}
 }
 
-func (s *Scheduler) tick(ctx context.Context, now time.Time) {
+// Tick runs the routines due at now. It is exported for hosts that schedule
+// several bot roots from one loop.
+func (s *Scheduler) Tick(ctx context.Context, now time.Time) {
 	for _, item := range s.Due(now) {
 		item := item
 		go func() {

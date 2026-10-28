@@ -83,6 +83,62 @@ echo "hello from routine"
 	}
 }
 
+func TestRunsAndRunLog(t *testing.T) {
+	paths := testPaths(t)
+	writeRoutine(t, paths, "hello", "entry = \"./run.sh\"\n", "#!/bin/sh\necho hello\n")
+	set, _ := Open(paths)
+	item, _ := set.Find("hello")
+	runner := NewRunner(paths)
+	first, err := runner.Run(context.Background(), item, "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := runner.Run(context.Background(), item, "cron")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := runner.Runs("hello", 10)
+	if err != nil || len(runs) != 2 || runs[0].ID != second.ID || runs[1].ID != first.ID {
+		t.Fatalf("runs = %+v err=%v", runs, err)
+	}
+	result, log, err := runner.RunLog("hello", first.ID)
+	if err != nil || result.ID != first.ID || !strings.Contains(log, "hello") {
+		t.Fatalf("run log = %+v %q err=%v", result, log, err)
+	}
+	if _, _, err := runner.RunLog("hello", "../x"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("escape = %v", err)
+	}
+}
+
+func TestStaleRunningIsReconciled(t *testing.T) {
+	paths := testPaths(t)
+	writeRoutine(t, paths, "hello", "entry = \"./run.sh\"\n", "#!/bin/sh\necho hello\n")
+	runner := NewRunner(paths)
+	state := runner.stateDir("hello")
+	stale := filepath.Join(state, "runs", "20200101T000000-deadbeef")
+	if err := os.MkdirAll(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "output.log"), []byte("partial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.writeResult(stale, RunResult{
+		ID: "20200101T000000-deadbeef", Name: "hello", Trigger: "cron",
+		Status: "running", ExitCode: -1, StartedAt: time.Now().UTC().Add(-time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	set, _ := Open(paths)
+	item, _ := set.Find("hello")
+	if _, err := runner.Run(context.Background(), item, "manual"); err != nil {
+		t.Fatal(err)
+	}
+	result, _, err := runner.RunLog("hello", "20200101T000000-deadbeef")
+	if err != nil || result.Status != "interrupted" || !strings.Contains(result.Error, "interrupted") {
+		t.Fatalf("stale run = %+v err=%v", result, err)
+	}
+}
+
 func TestTimeoutAndFailure(t *testing.T) {
 	paths := testPaths(t)
 	writeRoutine(t, paths, "slow", "entry = \"./run.sh\"\ntimeout = \"100ms\"\n", "#!/bin/sh\nsleep 5\n")

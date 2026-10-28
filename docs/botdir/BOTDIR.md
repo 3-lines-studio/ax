@@ -178,7 +178,9 @@ variable or as `secrets/api-key`.
 `routines/` optionally contains deterministic routine definitions. Each
 `<name>/routine.toml` declares an executable entry and an optional schedule;
 the format is defined in [docs/routines.md](../routines.md). Loading a bot MUST
-NOT run a routine; it runs only on demand or from an explicit scheduler.
+NOT run a routine; it runs only on demand or from an explicit scheduler. The
+runtime state of each routine (lock, run records, output) lives under the
+runtime data root, at `state/routines/<name>/`.
 
 ### `resources/`
 

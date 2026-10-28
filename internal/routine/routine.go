@@ -139,6 +139,8 @@ func (r *Runner) Run(ctx context.Context, item Routine, trigger string) (RunResu
 	}
 	defer unlockRun(lock)
 
+	r.reconcile(state)
+
 	id, err := runID()
 	if err != nil {
 		return RunResult{}, err
@@ -206,37 +208,143 @@ func (r *Runner) Run(ctx context.Context, item Routine, trigger string) (RunResu
 	return result, nil
 }
 
-// LastRun returns the most recent run metadata for a routine.
-func (r *Runner) LastRun(name string) (RunResult, error) {
+// reconcile marks runs left in the running state by a host that died as
+// interrupted. It runs while the lock is held, so any other "running" record
+// in this routine belongs to a process that is gone.
+func (r *Runner) reconcile(state string) {
+	dir := filepath.Join(state, "runs")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	now := time.Now().UTC()
+	for _, entry := range entries {
+		if !entry.IsDir() || !validRunID(entry.Name()) {
+			continue
+		}
+		runDir := filepath.Join(dir, entry.Name())
+		result, err := readResult(runDir)
+		if err != nil || result.Status != "running" {
+			continue
+		}
+		result.Status = "interrupted"
+		result.Error = "interrupted: the host stopped before the run finished"
+		if result.EndedAt.IsZero() {
+			result.EndedAt = now
+		}
+		_ = r.writeResult(runDir, result)
+	}
+}
+
+// Runs returns recent runs for a routine, newest first. limit defaults to 20
+// and is capped at 100.
+func (r *Runner) Runs(name string, limit int) ([]RunResult, error) {
 	if !validName(name) {
-		return RunResult{}, ErrNotFound
+		return nil, ErrNotFound
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
 	}
 	dir := filepath.Join(r.stateDir(name), "runs")
 	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	results := make([]RunResult, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() || !validRunID(entry.Name()) {
+			continue
+		}
+		result, err := readResult(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		results = append(results, result)
+	}
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].StartedAt.Equal(results[j].StartedAt) {
+			return results[i].ID > results[j].ID
+		}
+		return results[i].StartedAt.After(results[j].StartedAt)
+	})
+	if len(results) > limit {
+		results = results[:limit]
+	}
+	return results, nil
+}
+
+// RunInfo returns one run's metadata without reading its log.
+func (r *Runner) RunInfo(name, runID string) (RunResult, error) {
+	if !validName(name) || !validRunID(runID) {
+		return RunResult{}, ErrNotFound
+	}
+	result, err := readResult(filepath.Join(r.stateDir(name), "runs", runID))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return RunResult{}, ErrNotFound
 		}
 		return RunResult{}, err
 	}
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() {
-			names = append(names, entry.Name())
-		}
+	return result, nil
+}
+
+// RunLog returns one run's metadata and log text.
+func (r *Runner) RunLog(name, runID string) (RunResult, string, error) {
+	result, err := r.RunInfo(name, runID)
+	if err != nil {
+		return RunResult{}, "", err
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(names)))
-	for _, name := range names {
-		data, err := os.ReadFile(filepath.Join(dir, name, "run.json"))
-		if err != nil {
+	data, err := os.ReadFile(result.Log)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return RunResult{}, "", err
+		}
+		data = nil
+	}
+	return result, string(data), nil
+}
+
+// LastRun returns the most recent run metadata for a routine.
+func (r *Runner) LastRun(name string) (RunResult, error) {
+	runs, err := r.Runs(name, 1)
+	if err != nil {
+		return RunResult{}, err
+	}
+	if len(runs) == 0 {
+		return RunResult{}, ErrNotFound
+	}
+	return runs[0], nil
+}
+
+func readResult(dir string) (RunResult, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "run.json"))
+	if err != nil {
+		return RunResult{}, err
+	}
+	var result RunResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return RunResult{}, err
+	}
+	return result, nil
+}
+
+func validRunID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
 			continue
 		}
-		var result RunResult
-		if err := json.Unmarshal(data, &result); err == nil {
-			return result, nil
-		}
+		return false
 	}
-	return RunResult{}, ErrNotFound
+	return true
 }
 
 func load(dir, name string) (Routine, error) {
