@@ -34,13 +34,16 @@ type Channel struct {
 }
 
 type Thread struct {
-	ID      string    `json:"id"`
-	Channel string    `json:"channel"`
-	Title   string    `json:"title"`
-	Created time.Time `json:"created"`
-	Updated time.Time `json:"updated"`
-	Preview string    `json:"preview,omitempty"`
-	Running bool      `json:"running,omitempty"`
+	ID      string `json:"id"`
+	Channel string `json:"channel"`
+	Title   string `json:"title"`
+	// TitleGenerated marks a model-written title, so a thread keeps the name it
+	// earned instead of being renamed after every run.
+	TitleGenerated bool      `json:"title_generated,omitempty"`
+	Created        time.Time `json:"created"`
+	Updated        time.Time `json:"updated"`
+	Preview        string    `json:"preview,omitempty"`
+	Running        bool      `json:"running,omitempty"`
 }
 
 type channelsFile struct {
@@ -213,6 +216,22 @@ func (s *Store) Touch(id string, text string) {
 		thread.Title = truncate(oneLine(text), 60)
 	}
 	_ = s.PutThread(thread)
+}
+
+// SetTitle stores a generated title once. A later run does not rename a thread
+// that already has one.
+func (s *Store) SetTitle(id, title string) error {
+	thread, err := s.Thread(id)
+	if err != nil {
+		return err
+	}
+	if thread.TitleGenerated {
+		return nil
+	}
+	thread.Title = title
+	thread.TitleGenerated = true
+	thread.Updated = time.Now().UTC()
+	return s.PutThread(thread)
 }
 
 // Blobs returns the image files of a thread, the ones ax resolves with
