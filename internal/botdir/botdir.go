@@ -21,6 +21,7 @@ import (
 type Paths struct {
 	Root      string
 	DataRoot  string
+	State     string
 	Workspace string
 	Skills    string
 	Prompt    string
@@ -50,6 +51,7 @@ func LoadTOML(root string, v any) error {
 func Resolve(root string) Paths {
 	paths := Paths{Root: root, IsBot: Exists(filepath.Join(root, "bot.toml"))}
 	paths.DataRoot = DataRoot(root)
+	paths.State = StateRoot(root)
 	workspace := filepath.Join(paths.DataRoot, "workspace")
 	if IsDir(workspace) {
 		paths.Workspace = workspace
@@ -86,6 +88,12 @@ func DataRoot(root string) string {
 		return d
 	}
 	return root
+}
+
+// StateRoot is the durable runtime state directory: state/ under the runtime
+// data root. Consumers keep their own subdirectories there.
+func StateRoot(root string) string {
+	return filepath.Join(DataRoot(root), "state")
 }
 
 // EnvRoot is the runtime root a host passed to this process: BOT_DATA when

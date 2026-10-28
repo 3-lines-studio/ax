@@ -113,6 +113,7 @@ and `execute`, so adding integrations does not grow the prompt. See
 | [fsx](cmd/fsx/README.md) | Filesystem tools | Reads, writes and edits files inside the workspace. |
 | [sshx](cmd/sshx/README.md) | Remote filesystem and shell | Reads, writes, edits and runs commands on a remote host over SSH, so a bot can work on a remote workspace with the same tool names as fsx and bashx. |
 | [skillx](cmd/skillx/README.md) | Agent Skills provider | Exposes Agent Skills to ax. |
+| [memoryx](cmd/memoryx/README.md) | Personal memory | Durable personal facts as readable JSON files under state/memory, exposed as search/get/verify/upsert/delete tools for ax. |
 | [attachx](cmd/attachx/README.md) | Conversation attachment tool | Copies workspace files into the bot's artifact directory so a transport can deliver them to the user. |
 
 ### Specification
@@ -184,6 +185,8 @@ are no per-program tags, and no per-program assets to map by name.
 - [docs/connections.md](docs/connections.md) — connections, capabilities and the
   local/remote compute plan.
 - [docs/session.md](docs/session.md) — the durable session log contract.
+- [docs/memory.md](docs/memory.md) — personal memory as runtime data and the
+  `memoryx` tools.
 - [docs/deploy.md](docs/deploy.md) — systemd, container, and what goes in front.
 - [docs/botdir/](docs/botdir/README.md) — the Botdir specification and guide.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — development workflow and conventions.

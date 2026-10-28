@@ -27,6 +27,8 @@ budget() {
     # SSH transport client (x/crypto/ssh + sftp) for remote compute.
     sshx) echo 9000000 ;;
     skillx) echo 2934000 ;;
+    # Personal memory store + provider; JSON files, no database driver.
+    memoryx) echo 3200000 ;;
     slackx) echo 7543000 ;;
     bqx) echo 24789000 ;;
     pgx) echo 10593000 ;;

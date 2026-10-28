@@ -146,6 +146,9 @@ func TestResolveUsesBotDataRoot(t *testing.T) {
 	if ctx.Workspace != wantWorkspace {
 		t.Errorf("Workspace = %q, want %q", ctx.Workspace, wantWorkspace)
 	}
+	if ctx.State != filepath.Join(data, "state") {
+		t.Errorf("State = %q, want %q", ctx.State, filepath.Join(data, "state"))
+	}
 	if _, err := os.Stat(filepath.Join(root, "workspace")); err == nil {
 		t.Error("workspace must be created under BOT_DATA, not the bot root")
 	}
