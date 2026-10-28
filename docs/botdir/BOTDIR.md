@@ -101,6 +101,8 @@ id           = "web"
 kind         = "local"          # local | mcp-stdio | mcp-http
 command      = "wax"
 trust        = "auto"           # auto | read
+compute      = false            # true: defines the bot's workspace and core tools
+root         = "vol"            # compute only; relative to the bot root
 capabilities = ["web.search"]   # optional allowlist
 ```
 
