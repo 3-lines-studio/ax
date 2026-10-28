@@ -101,4 +101,10 @@ A log whose last `run_start` has no `run_end` is an interrupted run. `ax
 model verifies state instead of repeating them.
 
 The log is never rewritten to resume: a resume is one more `run_start`, one
-more user message and a final `run_end`, in that order.
+more user message and a final `run_end`, in that order. That user entry carries
+`"resume": true`, so a host can show it as an interruption note instead of
+something the user typed.
+
+Who calls it is the host's business: `webi` sweeps its threads at startup and
+every 30 seconds; a consumer that only runs foreground turns (`slaxi`) leaves
+the choice to the user.
