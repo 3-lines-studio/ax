@@ -18,7 +18,7 @@ func TestSecretRequestRoundTrip(t *testing.T) {
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' '{\"type\":\"secret_request\",\"id\":\"c1\",\"tool\":\"demo.need\",\"name\":\"DEMO_TOKEN\",\"description\":\"demo\"}'\n" +
 		"read line\n" +
-		"printf '%s' \"$line\" > " + record + "\n" +
+		"printf '%s' \"$line\" > " + record + ".tmp && mv " + record + ".tmp " + record + "\n" +
 		"printf '%s\\n' '{\"type\":\"done\",\"outcome\":\"done\"}'\n"
 	axPath := filepath.Join(dir, "ax")
 	if err := os.WriteFile(axPath, []byte(script), 0o755); err != nil {
@@ -105,7 +105,7 @@ func TestSecretSkip(t *testing.T) {
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' '{\"type\":\"secret_request\",\"id\":\"c1\",\"name\":\"DEMO_TOKEN\"}'\n" +
 		"read line\n" +
-		"printf '%s' \"$line\" > " + record + "\n" +
+		"printf '%s' \"$line\" > " + record + ".tmp && mv " + record + ".tmp " + record + "\n" +
 		"printf '%s\\n' '{\"type\":\"done\",\"outcome\":\"done\"}'\n"
 	axPath := filepath.Join(dir, "ax")
 	if err := os.WriteFile(axPath, []byte(script), 0o755); err != nil {

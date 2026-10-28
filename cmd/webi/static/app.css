@@ -968,3 +968,38 @@ dialog.wide-dialog .field.grow textarea { flex: 1 1 auto; min-height: 220px; res
 .empty .btn {
   margin-top: 16px;
 }
+
+/* ---------------------------------------------------------------- routines */
+
+.routines-dialog { width: min(680px, calc(100vw - 28px)); }
+.routine-row {
+  display: flex; gap: 16px; align-items: flex-start; justify-content: space-between;
+  padding: 12px 0; border-bottom: 1px solid var(--line-soft);
+}
+.routine-row:last-child { border-bottom: 0; }
+.routine-main { flex: 1; min-width: 0; }
+.routine-name { font-size: 13.5px; font-weight: 600; }
+.routine-meta { color: var(--muted); font-size: 11.5px; font-weight: 400; }
+.routine-main p { margin: 4px 0; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+.routine-status { color: var(--muted); font-size: 11.5px; }
+.routine-status.ok { color: #6ee7b7; }
+.routine-status.failed, .routine-status.timeout { color: var(--danger); }
+.routine-status.running { color: #fbbf24; }
+.routine-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.routine-actions .btn { min-height: 32px; padding: 4px 10px; font-size: 12px; }
+.routine-actions .btn:disabled { opacity: .55; }
+.routine-empty { padding: 22px 0; color: var(--muted); font-size: 13px; text-align: center; }
+.routine-empty code { color: var(--text); }
+.routine-log-head { display: flex; gap: 10px; align-items: center; }
+.routine-log {
+  max-height: 52vh; overflow: auto; margin: 10px 0 0; padding: 12px;
+  background: #0d1114; border: 1px solid var(--line); border-radius: 8px;
+  color: var(--text); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap; word-break: break-word;
+}
+@media (max-width: 640px) {
+  dialog.routines-dialog { width: 100%; }
+  .routine-row { flex-direction: column; gap: 8px; }
+  .routine-actions { width: 100%; }
+  .routine-actions .btn { flex: 1; }
+}

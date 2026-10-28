@@ -140,6 +140,7 @@ webi is also the routine scheduler. Every 30 seconds it reads
 `routines/*/routine.toml` under the bot root and runs enabled cron schedules
 with no model in the loop. `ax routine list` shows them and `ax routine run
 NAME` tests one manually; logs and state are under `state/routines/<name>/`.
+The sidebar's **Routines** view lists them with **Run now** and **Log**.
 See [docs/routines.md](../../docs/routines.md).
 
 ## Not here yet
