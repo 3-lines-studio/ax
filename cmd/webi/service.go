@@ -110,11 +110,8 @@ func runSetup(opts setupOptions) error {
 	if err != nil {
 		return err
 	}
-	if !active && opts.Wait > 0 && !waitListening(listen, opts.Wait) {
+	if opts.Wait > 0 && (!active || changed) && !waitListening(listen, opts.Wait) {
 		return fmt.Errorf("the service did not answer on %s; check: %s", listen, statusHint())
-	}
-	if active && changed {
-		fmt.Fprintf(os.Stderr, "the settings changed; restart it with: %s\n", restartHint())
 	}
 	host, port := splitListen(listen)
 	printURLs(host, port, token, opts.Open, tokenPath)
@@ -127,11 +124,19 @@ func runSetup(opts setupOptions) error {
 // askListen chooses the one setting a consumer should not have to know. A
 // terminal gets a yes/no question; a script gets loopback.
 func askListen() string {
-	if !isTerminal(os.Stdin) {
+	input := os.Stdin
+	if !isTerminal(input) && isTerminal(os.Stdout) {
+		if tty, err := os.Open("/dev/tty"); err == nil {
+			defer func() { _ = tty.Close() }()
+			input = tty
+		}
+	}
+	if !isTerminal(input) {
+		fmt.Fprintln(os.Stderr, "  Local only (run webi setup in a terminal to share it with other devices).")
 		return "127.0.0.1:8377"
 	}
 	fmt.Fprint(os.Stdout, "\n  Use it from your phone or another computer on this network? [y/N] ")
-	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	line, _ := bufio.NewReader(input).ReadString('\n')
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
 		return "0.0.0.0:8377"
 	}
@@ -177,15 +182,21 @@ func installSystemd(spec serviceSpec) (active, changed bool, err error) {
 		return false, false, fmt.Errorf("systemctl daemon-reload: %w", err)
 	}
 	active = exec.Command("systemctl", "--user", "is-active", "--quiet", serviceName).Run() == nil
-	if !active {
-		if portInUse(spec.Listen) {
-			return false, changed, fmt.Errorf("%s is already in use; stop the service that owns it, then run webi setup again", spec.Listen)
+	if active {
+		if changed {
+			if out, err := exec.Command("systemctl", "--user", "restart", serviceName).CombinedOutput(); err != nil {
+				return true, changed, fmt.Errorf("systemctl restart %s: %v: %s", serviceName, err, strings.TrimSpace(string(out)))
+			}
 		}
-		if out, err := exec.Command("systemctl", "--user", "enable", "--now", serviceName).CombinedOutput(); err != nil {
-			return false, changed, fmt.Errorf("systemctl enable --now %s: %v: %s", serviceName, err, strings.TrimSpace(string(out)))
-		}
+		return true, changed, nil
 	}
-	return active, changed, nil
+	if portInUse(spec.Listen) {
+		return false, changed, fmt.Errorf("%s is already in use; stop the service that owns it, then run webi setup again", spec.Listen)
+	}
+	if out, err := exec.Command("systemctl", "--user", "enable", "--now", serviceName).CombinedOutput(); err != nil {
+		return false, changed, fmt.Errorf("systemctl enable --now %s: %v: %s", serviceName, err, strings.TrimSpace(string(out)))
+	}
+	return false, changed, nil
 }
 
 func installLaunchd(spec serviceSpec) (active, changed bool, err error) {
@@ -382,15 +393,6 @@ func statusHint() string {
 		return fmt.Sprintf("launchctl print gui/%d/%s", os.Getuid(), launchLabel)
 	default:
 		return "systemctl --user status " + serviceName
-	}
-}
-
-func restartHint() string {
-	switch runtime.GOOS {
-	case "darwin":
-		return fmt.Sprintf("launchctl kickstart -k gui/%d/%s", os.Getuid(), launchLabel)
-	default:
-		return "systemctl --user restart " + serviceName
 	}
 }
 

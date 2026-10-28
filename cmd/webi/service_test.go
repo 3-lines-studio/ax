@@ -112,3 +112,12 @@ func TestRunSetup(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestAskListenNonInteractive(t *testing.T) {
+	if isTerminal(os.Stdin) || isTerminal(os.Stdout) {
+		t.Skip("interactive terminal")
+	}
+	if got := askListen(); got != "127.0.0.1:8377" {
+		t.Fatalf("askListen = %q", got)
+	}
+}
