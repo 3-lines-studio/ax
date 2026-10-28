@@ -150,6 +150,8 @@ version: there are no per-program tags.
 - [docs/protocol.md](docs/protocol.md) — ax's JSONL event stream.
 - [docs/tools.md](docs/tools.md) — the provider describe/run convention.
 - [docs/mcp.md](docs/mcp.md) — the MCP-first catalog, search/execute and config.
+- [docs/connections.md](docs/connections.md) — connections, capabilities and the
+  local/remote compute plan.
 - [docs/session.md](docs/session.md) — the durable session log contract.
 - [docs/botdir/](docs/botdir/README.md) — the Botdir specification and guide.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — development workflow and conventions.

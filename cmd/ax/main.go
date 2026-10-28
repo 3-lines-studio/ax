@@ -52,6 +52,7 @@ type fileConfig struct {
 	toolMode         string
 	coreTools        []string
 	mcp              []mcpEntry
+	connections      []connectionEntry
 	compactAt        float64
 	compactAtSet     bool
 	contextWindow    int

@@ -133,6 +133,15 @@ All keys are optional.
 
 `tools` is an ordered array of tool provider command names. Each name identifies one executable resolved through the consumer's `PATH`. Entries are command names, not shell commands, and MUST NOT contain arguments. Consumers MUST preserve entry order and ignore duplicate entries after the first.
 
+`[[connection]]` declares one integration as a unit — an id the model sees as a tool namespace, a kind, and how to reach it. Tools are discovered from the connection, so `bot.toml` does not list them; `capabilities` optionally narrows what a connection exposes. Ids are lowercase letters, digits, `_` and `-` (1–64 characters) and unique across the bot. `tools` and MCP server tables are legacy spellings of the same concept and keep their ids.
+
+```toml
+[[connection]]
+id      = "web"
+kind    = "local"        # local | mcp-stdio | mcp-http
+command = "wax"
+```
+
 A missing `bot.toml` or missing key means that the consumer applies its own default.
 
 Consumers MUST ignore unknown keys for forward compatibility.
