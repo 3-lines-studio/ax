@@ -25,7 +25,15 @@ wax describe
 printf '%s' '{"url":"https://example.com"}' | wax run web_fetch
 ```
 
-Enable it through `ax` tool discovery: `AX_TOOLS="wax" ax`.
+Declare it as a local connection:
+
+```toml
+[[connection]]
+id = "wax"
+kind = "local"
+command = "wax"
+```
+
 
 ## Search
 
@@ -49,7 +57,7 @@ printf '%s' '{"query":"deepseek","count":3}' | wax run web_search
 wax describe                                    # now lists web_search too
 ```
 
-With `AX_TOOLS="wax"` the model sees `wax.web_search` and `wax.web_fetch`; no
+With a `wax` connection the model sees `wax.web_search` and `wax.web_fetch`; no
 extra environment variable is needed beyond the key the bot already uses.
 
 The query supports DeepSeek's operators (`site:`, `-site:`, `lang:`, `after:`,
