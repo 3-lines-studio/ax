@@ -93,7 +93,8 @@ Each `tools` entry is one executable name resolved through `PATH`. It MUST NOT c
 kind and how to reach it. Consumers MUST treat the id as the tool namespace
 (`<id>.<tool>`); tools are discovered from the connection, never listed in
 `bot.toml`. `tools` and `[[mcp]]` are legacy spellings of the same thing and
-keep their ids.
+keep their ids; MCP servers are connections with `kind = "mcp-stdio"` or
+`kind = "mcp-http"`.
 
 ```toml
 [[connection]]
