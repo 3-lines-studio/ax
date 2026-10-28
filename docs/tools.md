@@ -77,7 +77,21 @@ printf '%s\n' '{"url":"https://example.com"}' |
   wax run web_fetch
 ```
 
-The result has no envelope. AX treats stdout as opaque text.
+The result has no envelope. AX treats stdout as opaque text, with one
+exception: a provider that needs a secret answers with the ask envelope
+instead of a result.
+
+```json
+{"ask": {"name": "GH_TOKEN", "description": "the gh CLI reads it"}}
+```
+
+AX does not show that to the model. It emits
+`{"type":"secret_request","id":...,"tool":...,"name":...,"description":...}` to
+the host, waits, and retries the same call with the value in the provider's
+environment. The value never enters the conversation or the session log. A run
+with no host (stdin is a terminal) fails the call instead of waiting, and the
+model is told to set the variable. The envelope only counts when it is the whole
+of stdout.
 
 Diagnostics belong on stderr. Successful execution must produce non-empty stdout.
 
