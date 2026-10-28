@@ -32,6 +32,7 @@ type Server struct {
 	static   http.Handler
 	settings string // path to settings.json
 	vault    *Vault
+	resume   resumeState
 	started  time.Time
 
 	mu   sync.Mutex
@@ -48,6 +49,7 @@ func NewServer(store *Store, cfg axrun.Config, stateDir string, static http.Hand
 		vault:    NewVault(filepath.Join(stateDir, "vault.json")),
 		started:  time.Now(),
 		runs:     map[string]*axrun.Run{},
+		resume:   resumeState{marks: map[string]sessionMark{}},
 		subs:     map[chan []byte]struct{}{},
 	}
 }
@@ -454,6 +456,24 @@ func (s *Server) prepareImages(thread Thread, ids []string) ([]string, error) {
 
 // startRun launches ax for one user turn and streams its events to the UI.
 func (s *Server) startRun(thread Thread, prompt string, images []string) error {
+	return s.launch(thread, axrun.Job{
+		Session: s.store.SessionPath(thread.ID),
+		Prompt:  prompt,
+		Images:  images,
+	}, prompt)
+}
+
+// startResume continues a run whose ax process died, with the prompt ax writes
+// itself from the session log. Title generation is skipped: the thread already
+// has a name by the time it can be interrupted.
+func (s *Server) startResume(thread Thread) error {
+	return s.launch(thread, axrun.Job{
+		Session: s.store.SessionPath(thread.ID),
+		Resume:  true,
+	}, "")
+}
+
+func (s *Server) launch(thread Thread, job axrun.Job, prompt string) error {
 	channel, ok := s.store.Channel(thread.Channel)
 	if !ok {
 		return fmt.Errorf("unknown channel %s", thread.Channel)
@@ -474,11 +494,7 @@ func (s *Server) startRun(thread Thread, prompt string, images []string) error {
 	env = append(env, vaultEnv...)
 	cfg.Env = append(cfg.Env, env...)
 
-	run, err := axrun.Start(context.Background(), cfg, axrun.Job{
-		Session: s.store.SessionPath(thread.ID),
-		Prompt:  prompt,
-		Images:  images,
-	}, func(event axrun.Event) {
+	run, err := axrun.Start(context.Background(), cfg, job, func(event axrun.Event) {
 		s.forwardEvent(thread.ID, event)
 	})
 	if err != nil {
@@ -504,7 +520,7 @@ func (s *Server) startRun(thread Thread, prompt string, images []string) error {
 			}})
 		}
 		s.store.Touch(thread.ID, "")
-		if err == nil && result.Text != "" && !thread.TitleGenerated {
+		if err == nil && !job.Resume && result.Text != "" && !thread.TitleGenerated {
 			go s.generateTitle(thread, prompt, result.Text)
 		}
 		s.publish(map[string]any{"type": "run", "thread": thread.ID, "running": false})
