@@ -3,12 +3,13 @@ package main
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
+	"time"
 )
 
 // starterBot is written when webi creates a bot directory, so tools get a
@@ -18,57 +19,6 @@ const starterBot = `# A Botdir: bot.md adds context, skills/ adds procedures,
 model = "deepseek-flash"
 `
 
-// resolveRoot picks the bot directory. Running from the home directory is the
-// common first case, and using $HOME as a workspace would be a bad surprise,
-// so that one case lands in ~/bots/default. Everything else is the current
-// directory, and an explicit -C always wins.
-func resolveRoot(explicit string) (root string, fresh bool, err error) {
-	if explicit == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", false, err
-		}
-		root = cwd
-		if home, err := os.UserHomeDir(); err == nil && filepath.Clean(cwd) == filepath.Clean(home) {
-			root = filepath.Join(home, "bots", "default")
-		}
-	} else {
-		root = expandHome(explicit)
-	}
-	root, err = filepath.Abs(root)
-	if err != nil {
-		return "", false, err
-	}
-	info, err := os.Stat(root)
-	if err == nil {
-		if !info.IsDir() {
-			return "", false, fmt.Errorf("%s is not a directory", root)
-		}
-		return root, false, nil
-	}
-	if !os.IsNotExist(err) {
-		return "", false, err
-	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return "", false, err
-	}
-	return root, true, nil
-}
-
-func expandHome(path string) string {
-	if path != "~" && !strings.HasPrefix(path, "~/") {
-		return path
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	if path == "~" {
-		return home
-	}
-	return filepath.Join(home, path[2:])
-}
-
 func writeStarter(root string) error {
 	return os.WriteFile(filepath.Join(root, "bot.toml"), []byte(starterBot), 0o644)
 }
@@ -77,28 +27,69 @@ func writeStarter(root string) error {
 // supervisor's log is a file, and a token in it would outlive the terminal.
 // Only a person at a terminal sees (and opens) the link.
 func announce(listener net.Listener, token string, open bool) {
-	if !isTerminal(os.Stdout) {
-		return
-	}
 	addr, ok := listener.Addr().(*net.TCPAddr)
 	if !ok {
 		return
 	}
-	localHost := addr.IP.String()
-	if addr.IP.IsUnspecified() {
-		localHost = "127.0.0.1"
+	host := ""
+	if !addr.IP.IsUnspecified() {
+		host = addr.IP.String()
 	}
-	local := "http://" + net.JoinHostPort(localHost, strconv.Itoa(addr.Port)) + "/?token=" + token
+	printURLs(host, addr.Port, token, open, "")
+}
+
+// printURLs is shared by the foreground server and `webi setup`.
+func printURLs(host string, port int, token string, open bool, tokenPath string) {
+	if !isTerminal(os.Stdout) {
+		if tokenPath != "" {
+			fmt.Fprintf(os.Stdout, "token: %s\n", tokenPath)
+		}
+		return
+	}
+	localHost := host
+	all := false
+	if localHost == "" || localHost == "0.0.0.0" || localHost == "::" {
+		localHost = "localhost"
+		all = true
+	} else if localHost == "127.0.0.1" || localHost == "::1" {
+		localHost = "localhost"
+	}
+	local := "http://" + net.JoinHostPort(localHost, strconv.Itoa(port)) + "/?token=" + token
 	fmt.Fprintf(os.Stdout, "\n  webi is ready\n\n  This machine:  %s\n", local)
-	if addr.IP.IsUnspecified() {
+	if all {
 		if lan := lanAddress(); lan != "" {
-			fmt.Fprintf(os.Stdout, "  Other devices: http://%s/?token=%s\n", net.JoinHostPort(lan, strconv.Itoa(addr.Port)), token)
+			fmt.Fprintf(os.Stdout, "  Other devices: http://%s/?token=%s\n", net.JoinHostPort(lan, strconv.Itoa(port)), token)
 		}
 	}
 	fmt.Fprintln(os.Stdout, "\n  The link sets a cookie, so it is needed only once. Treat it like the PIN.")
 	if open {
 		openBrowser(local)
 	}
+}
+
+// alreadyServes reports whether a webi with this token is already answering on
+// the address. Typing webi again then opens the running app instead of failing
+// with "address already in use".
+func alreadyServes(listen, token string) bool {
+	host, port := splitListen(listen)
+	if port == 0 {
+		return false
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	request, err := http.NewRequest(http.MethodGet, "http://"+net.JoinHostPort(host, strconv.Itoa(port))+"/api/state", nil)
+	if err != nil {
+		return false
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	client := &http.Client{Timeout: time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = response.Body.Close() }()
+	return response.StatusCode == http.StatusOK
 }
 
 func isTerminal(file *os.File) bool {

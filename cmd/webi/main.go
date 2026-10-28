@@ -22,15 +22,36 @@ import (
 )
 
 func main() {
-	listen := flag.String("listen", "127.0.0.1:8377", "address to serve the UI on")
+	listen := flag.String("listen", "127.0.0.1:8377", "address to serve the UI on (setup asks about other devices)")
 	stateDir := flag.String("state", "", "state directory (default <BOT_DATA>/state/webi)")
-	botRoot := flag.String("C", "", "bot directory (default: current directory)")
+	botRoot := flag.String("C", "", "bot directory (default: the per-user app directory)")
 	axPath := flag.String("ax", "ax", "path to the ax binary")
 	baseURL := flag.String("base", "", "override the model endpoint for every run")
 	model := flag.String("model", "", "override the model for every run")
 	selftest := flag.Bool("selftest", false, "check the bot, state and ax binary, then exit")
 	open := flag.Bool("open", true, "open the token URL in a browser when run in a terminal")
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: webi [flags] [setup]")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "  setup   install a systemd user unit, start the UI and open it")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "flags:")
+		flag.PrintDefaults()
+	}
 	flag.Parse()
+
+	switch flag.Arg(0) {
+	case "setup":
+		if err := runSetup(setupOptions{Root: *botRoot, State: *stateDir, Listen: *listen, AXPath: *axPath, Open: *open, Wait: 10 * time.Second}); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	case "":
+	default:
+		fmt.Fprintf(os.Stderr, "webi: unknown command %q\n", flag.Arg(0))
+		os.Exit(2)
+	}
 
 	root, fresh, err := resolveRoot(*botRoot)
 	if err != nil {
@@ -49,10 +70,6 @@ func main() {
 	}
 	if *selftest {
 		os.Exit(runSelftest(root, state, *axPath, os.Stdout, os.Stderr))
-	}
-	if _, err := exec.LookPath(*axPath); err != nil {
-		fmt.Fprintf(os.Stderr, "webi: cannot find ax (%s); install it with `install.sh ax` or pass -ax\n", *axPath)
-		os.Exit(1)
 	}
 	store, err := NewStore(state)
 	if err != nil {
@@ -76,6 +93,15 @@ func main() {
 	token, tokenPath, err := loadToken(state)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	if alreadyServes(*listen, token) {
+		host, port := splitListen(*listen)
+		printURLs(host, port, token, *open, tokenPath)
+		return
+	}
+	if _, err := exec.LookPath(*axPath); err != nil {
+		fmt.Fprintf(os.Stderr, "webi: cannot find ax (%s); install it with `install.sh ax` or pass -ax\n", *axPath)
 		os.Exit(1)
 	}
 	srv.token = token
