@@ -407,6 +407,42 @@ for p in "$@"; do : > "$bindir/$p"; chmod 0755 "$bindir/$p"; done
 	}
 }
 
+// The release is one archive per platform, so boti installs every missing tool
+// with one installer invocation instead of one download per tool.
+func TestInstallCallsTheInstallerOnce(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "bot.toml"), `tools = ["wax", "fsx"]
+`)
+	present := t.TempDir()
+	record := filepath.Join(t.TempDir(), "record")
+	installer := filepath.Join(t.TempDir(), "install.sh")
+	writeFile(t, installer, `#!/bin/sh
+set -eu
+echo "$*" >> "$RECORD_FILE"
+bindir="${AX_PREFIX:-$HOME/.local}/bin"
+mkdir -p "$bindir"
+for p in "$@"; do : > "$bindir/$p"; chmod 0755 "$bindir/$p"; done
+`)
+	t.Setenv("AX_PREFIX", t.TempDir())
+	t.Setenv("RECORD_FILE", record)
+	t.Setenv("PATH", present+":/usr/bin:/bin")
+
+	if err := install(dir, "file://"+installer); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("installer ran %d times, want 1: %q", len(lines), data)
+	}
+	if lines[0] != "ax slaxi wax fsx" {
+		t.Fatalf("installer args = %q", lines[0])
+	}
+}
+
 func TestInstallSkipsFetchWhenNothingMissing(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "bot.toml"), `tools = ["wax"]
