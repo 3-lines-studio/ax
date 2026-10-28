@@ -110,12 +110,14 @@ func browserContext(parent context.Context) (context.Context, error) {
 	return ctx, nil
 }
 
+var cdpClient = &http.Client{Timeout: 30 * time.Second}
+
 func currentTarget(ctx context.Context, endpoint string) (string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/json/list", nil)
 	if err != nil {
 		return "", err
 	}
-	response, err := http.DefaultClient.Do(request)
+	response, err := cdpClient.Do(request)
 	if err != nil {
 		return "", fmt.Errorf("list browser pages: %w", err)
 	}

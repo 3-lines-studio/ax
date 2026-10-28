@@ -218,6 +218,15 @@ func (o OpenAI) complete(req *Request) (Response, error) {
 	return o.runRequest(built, &atomic.Bool{}, nil)
 }
 
+// providerClient bounds the wait for response headers. The body can stream for
+// as long as the model needs; the context still cancels a run.
+var providerClient = &http.Client{Transport: func() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 3 * time.Minute
+	transport.TLSHandshakeTimeout = 15 * time.Second
+	return transport
+}()}
+
 func (o OpenAI) runRequest(built builtRequest, cancel *atomic.Bool, events chan StreamEvent) (Response, error) {
 	httpReq, err := http.NewRequest(http.MethodPost, built.url, bytes.NewReader(built.body))
 	if err != nil {
@@ -232,7 +241,7 @@ func (o OpenAI) runRequest(built builtRequest, cancel *atomic.Bool, events chan 
 	if cancel != nil {
 		go watchCancel(ctx, cancelCtx, cancel)
 	}
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := providerClient.Do(httpReq)
 	if err != nil {
 		if cancel != nil && cancel.Load() {
 			return Response{}, newProvider("interrupted")
