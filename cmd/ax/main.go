@@ -665,7 +665,7 @@ func buildCatalogSystemPrompt(dir string, bot *botCtx, cat *catalog.Catalog, cor
 		fmt.Fprintf(&out, "- Use %s for precise file changes; every edits[].oldText must match one unique region.\n", edit)
 	}
 	if bot != nil && bot.Prompt != "" {
-		out.WriteString("\n## Bot instructions\n")
+		out.WriteString("\n## Bot instructions\nFollow these instructions exactly.\n")
 		out.WriteString(bot.Prompt)
 	}
 	if up := userSystemPrompt(); up != "" {
