@@ -52,7 +52,7 @@ type channelsFile struct {
 
 func NewStore(dir string) (*Store, error) {
 	for _, sub := range []string{"", "threads", "blobs"} {
-		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
 			return nil, err
 		}
 	}
@@ -106,7 +106,7 @@ func (s *Store) PutChannel(channel Channel) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(s.channelsPath(), data, 0o644)
+	return writeFileAtomic(s.channelsPath(), data, 0o600)
 }
 
 func (s *Store) DeleteChannel(id string) error {
@@ -123,7 +123,7 @@ func (s *Store) DeleteChannel(id string) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(s.channelsPath(), data, 0o644)
+	return writeFileAtomic(s.channelsPath(), data, 0o600)
 }
 
 func (s *Store) threadDir(id string) string { return filepath.Join(s.dir, "threads", id) }
@@ -144,7 +144,7 @@ func (s *Store) CreateThread(channel string, title string) (Thread, error) {
 	}
 	now := time.Now().UTC()
 	thread := Thread{ID: id, Channel: channel, Title: title, Created: now, Updated: now}
-	if err := os.MkdirAll(s.threadDir(id), 0o755); err != nil {
+	if err := os.MkdirAll(s.threadDir(id), 0o700); err != nil {
 		return Thread{}, err
 	}
 	return thread, s.PutThread(thread)
@@ -157,7 +157,7 @@ func (s *Store) PutThread(thread Thread) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Join(s.threadDir(thread.ID), "meta.json"), data, 0o644)
+	return writeFileAtomic(filepath.Join(s.threadDir(thread.ID), "meta.json"), data, 0o600)
 }
 
 func (s *Store) Thread(id string) (Thread, error) {
@@ -238,7 +238,7 @@ func (s *Store) SetTitle(id, title string) error {
 // -image. webi keeps them next to the session so a thread is self-contained.
 func (s *Store) Blobs(thread Thread) string {
 	dir := filepath.Join(s.threadDir(thread.ID), "images")
-	_ = os.MkdirAll(dir, 0o755)
+	_ = os.MkdirAll(dir, 0o700)
 	return dir
 }
 
@@ -251,7 +251,7 @@ func (s *Store) SaveBlob(data []byte, ext string) (string, error) {
 		ext = ".bin"
 	}
 	path := filepath.Join(s.dir, "blobs", id+ext)
-	return id, writeFileAtomic(path, data, 0o644)
+	return id, writeFileAtomic(path, data, 0o600)
 }
 
 func (s *Store) BlobPath(id string) (string, bool) {
