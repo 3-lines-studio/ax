@@ -65,6 +65,9 @@ func main() {
 		Model:   *model,
 	}, state, staticHandler(), buildID())
 
+	// A promotion restarts webi; the key the host kept saves the PIN.
+	srv.adoptVaultKey()
+
 	// A run that outlived the last process is picked up here, not by the user.
 	srv.StartResumeLoop(resumeInterval)
 

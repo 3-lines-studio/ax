@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -102,6 +103,8 @@ type host struct {
 
 	mu       sync.Mutex
 	switchMu sync.Mutex
+	vaultMu  sync.Mutex
+	vaultKey []byte
 	state    hostState
 	restart  chan struct{}
 	recent   []time.Time
@@ -130,7 +133,7 @@ func newHost(root string, bc botConfig) (*host, error) {
 	h := &host{
 		paths:        paths,
 		cfg:          bc.serveSettings(),
-		env:          hostEnv(paths, bc),
+		env:          withoutEnv(hostEnv(paths, bc), "AX_VAULT_FD", "AX_HOST_SOCK"),
 		log:          file,
 		restart:      make(chan struct{}, 1),
 		failed:       map[string]bool{},
@@ -334,6 +337,7 @@ func (h *host) spawn(id, bin string) (*childProc, error) {
 	}
 	env := h.env
 	env = setEnv(env, "AX_BUILD", id)
+	env = setEnv(env, "AX_HOST_SOCK", h.paths.sock)
 	if bin != "" {
 		path := envValue(env, "PATH")
 		if path != "" {
@@ -360,8 +364,36 @@ func (h *host) spawn(id, bin string) (*childProc, error) {
 	cmd.Stdout = h.log
 	cmd.Stderr = h.log
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	// The vault key is handed over on fd 3, never on the command line or the
+	// environment: a child reads it once and closes it.
+	var keyW *os.File
+	key := h.copyVaultKey()
+	if len(key) == 32 {
+		keyR, writeEnd, err := os.Pipe()
+		if err != nil {
+			return nil, err
+		}
+		cmd.ExtraFiles = []*os.File{keyR}
+		keyW = writeEnd
+		env = setEnv(env, "AX_VAULT_FD", "3")
+		cmd.Env = env
+	}
 	if err := cmd.Start(); err != nil {
+		if keyW != nil {
+			_ = keyW.Close()
+		}
+		if len(cmd.ExtraFiles) > 0 {
+			_ = cmd.ExtraFiles[0].Close()
+		}
 		return nil, err
+	}
+	if len(cmd.ExtraFiles) > 0 {
+		_ = cmd.ExtraFiles[0].Close()
+	}
+	if keyW != nil {
+		_, _ = keyW.Write(key)
+		_ = keyW.Close()
 	}
 	proc := &childProc{cmd: cmd, done: make(chan struct{})}
 	go func() {
@@ -613,6 +645,26 @@ func (h *host) control(ctx context.Context) error {
 		h.signalRestart()
 		writeJSON(w, http.StatusOK, activateReply{Build: req.Build, Activated: true})
 	})
+	mux.HandleFunc("PUT /vault-key", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Key string `json:"key"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		key, err := hex.DecodeString(req.Key)
+		if err != nil || len(key) != 32 {
+			http.Error(w, "a vault key is 32 bytes of hex", http.StatusBadRequest)
+			return
+		}
+		h.setVaultKey(key)
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("DELETE /vault-key", func(w http.ResponseWriter, r *http.Request) {
+		h.setVaultKey(nil)
+		w.WriteHeader(http.StatusOK)
+	})
 	mux.HandleFunc("POST /rollback", func(w http.ResponseWriter, r *http.Request) {
 		h.mu.Lock()
 		previous := h.state.Previous
@@ -660,12 +712,50 @@ func hostEnv(paths hostPaths, bc botConfig) []string {
 	return env
 }
 
+// copyVaultKey returns the key the supervisor keeps across child restarts, or
+// nil when the vault is locked or was never unlocked in this process.
+func (h *host) copyVaultKey() []byte {
+	h.vaultMu.Lock()
+	defer h.vaultMu.Unlock()
+	return append([]byte(nil), h.vaultKey...)
+}
+
+func (h *host) setVaultKey(key []byte) {
+	h.vaultMu.Lock()
+	h.vaultKey = append([]byte(nil), key...)
+	h.vaultMu.Unlock()
+}
+
+func withoutEnv(env []string, keys ...string) []string {
+	drop := map[string]bool{}
+	for _, key := range keys {
+		drop[key] = true
+	}
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		if !drop[key] {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
 func controlPost(sock, path string, body []byte) ([]byte, error) {
+	return controlDo(sock, http.MethodPost, path, body)
+}
+
+func controlDo(sock, method, path string, body []byte) ([]byte, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
-	resp, err := controlClient(sock).Post("http://unix"+path, "application/json", reader)
+	req, err := http.NewRequest(method, "http://unix"+path, reader)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := controlClient(sock).Do(req)
 	if err != nil {
 		return nil, err
 	}
