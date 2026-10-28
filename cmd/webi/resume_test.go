@@ -14,7 +14,7 @@ func TestResumeLoopPicksUpInterruptedThreads(t *testing.T) {
 	dir := t.TempDir()
 	record := filepath.Join(dir, "args.txt")
 	script := "#!/bin/sh\n" +
-		"printf '%s\\n' \"$*\" > " + record + "\n" +
+		"printf '%s\\n' \"$*\" > " + record + ".tmp && mv " + record + ".tmp " + record + "\n" +
 		"printf '%s\\n' '{\"type\":\"message\",\"message\":{\"Role\":\"assistant\",\"Content\":\"continued\"}}' '{\"type\":\"done\",\"outcome\":\"done\"}'\n"
 	axPath := filepath.Join(dir, "ax")
 	if err := os.WriteFile(axPath, []byte(script), 0o755); err != nil {
@@ -44,7 +44,7 @@ func TestResumeLoopPicksUpInterruptedThreads(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		data, err := os.ReadFile(record)
-		if err == nil {
+		if err == nil && len(data) > 0 {
 			if !strings.Contains(string(data), "--resume") || !strings.Contains(string(data), "--session") {
 				t.Fatalf("ax was started without --resume: %s", data)
 			}
