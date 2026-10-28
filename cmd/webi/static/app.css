@@ -964,3 +964,7 @@ dialog.wide-dialog .field.grow textarea { flex: 1 1 auto; min-height: 220px; res
   box-shadow: inset 0 0 0 1px rgba(74, 222, 128, .08);
 }
 .side-btn.active .ico { color: var(--accent); }
+
+.empty .btn {
+  margin-top: 16px;
+}
