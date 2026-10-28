@@ -339,7 +339,7 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 			closeCatalog()
 			eventFailure(err.Error())
 		}
-		if err := log.append(sessionEntry{Type: entryMessage, RunID: runID, Message: &userMessage}); err != nil {
+		if err := log.append(sessionEntry{Type: entryMessage, RunID: runID, Message: &userMessage, Resume: cfg.resume}); err != nil {
 			_ = log.close()
 			closeCatalog()
 			eventFailure(err.Error())

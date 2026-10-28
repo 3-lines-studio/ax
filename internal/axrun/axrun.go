@@ -32,6 +32,9 @@ type Job struct {
 	Session string
 	Prompt  string
 	Images  []string
+	// Resume continues the interrupted run recorded in Session; Prompt is
+	// then unused, because ax writes the resume turn itself.
+	Resume bool
 }
 
 // Event is one line of the process protocol. Fields that do not apply to a
@@ -155,8 +158,11 @@ type Run struct {
 // Start launches ax. Events are delivered on Events until it closes; Wait
 // reports the outcome. The caller must always Wait.
 func Start(ctx context.Context, cfg Config, job Job, onEvent func(Event)) (*Run, error) {
-	if strings.TrimSpace(job.Prompt) == "" {
+	if strings.TrimSpace(job.Prompt) == "" && !job.Resume {
 		return nil, errors.New("axrun: empty prompt")
+	}
+	if job.Resume && job.Session == "" {
+		return nil, errors.New("axrun: resume needs a session")
 	}
 	path := cfg.AXPath
 	if path == "" {
@@ -165,6 +171,9 @@ func Start(ctx context.Context, cfg Config, job Job, onEvent func(Event)) (*Run,
 	args := []string{"--events"}
 	if job.Session != "" {
 		args = append(args, "--session", job.Session)
+	}
+	if job.Resume {
+		args = append(args, "--resume")
 	}
 	if cfg.BotRoot != "" {
 		args = append(args, "-C", cfg.BotRoot)
@@ -181,7 +190,9 @@ func Start(ctx context.Context, cfg Config, job Job, onEvent func(Event)) (*Run,
 	for _, image := range job.Images {
 		args = append(args, "-image", image)
 	}
-	args = append(args, job.Prompt)
+	if !job.Resume {
+		args = append(args, job.Prompt)
+	}
 	return start(ctx, path, args, cfg.Env, onEvent)
 }
 

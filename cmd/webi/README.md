@@ -27,6 +27,12 @@ Open `http://127.0.0.1:8377`. Flags: `-ax` (binary), `-state` (default
   next turn boundary and records it in the session. The composer stays usable
   during a run for exactly this. Images cannot be steered (`409`): they need a
   new prompt, not a user turn.
+- Runs survive the process. On startup and every 30 s, webi looks for threads
+  whose ax run never wrote its `run_end` and calls `ax --resume` on them, so a
+  crash or a deploy picks the work up instead of stranding it. The session cache
+  is keyed by size+mtime, so an untouched log costs one `stat` per sweep, and
+  the resume turn is shown as a "run resumed" divider rather than a message the
+  user typed.
 - The first finished run names the thread: one small model call with the first
   exchange, best effort. The name is stored once (`title_generated`) and a
   later run never renames the thread; without a key the title stays the one
