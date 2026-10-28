@@ -9,6 +9,8 @@ boti serve     # keep a transport alive, restart it, roll back a bad build
 boti status    # what is running, which build, last error
 boti logs      # tail the transport's log
 boti restart   # restart the child without stopping the host
+boti promote   # build this checkout and activate it when the bot is idle
+boti rollback  # switch back to the previous build
 ```
 
 `boti run` replaces itself with the consumer (a container entrypoint).
@@ -60,6 +62,9 @@ command = "refresh-skill --name metrics"
 [boti.serve]
 command = ["webi", "-listen", "127.0.0.1:8377"]
 health = "http://127.0.0.1:8377/healthz"
+idle = "http://127.0.0.1:8377/api/state"
+selftest = ["webi", "-selftest"]
+repo = "/srv/ax"
 ```
 
 - `consumer` — executable resolved through `PATH`; the loader execs it.
@@ -73,6 +78,15 @@ health = "http://127.0.0.1:8377/healthz"
 - `[boti.serve].health` — a URL that answers 200 when the transport is useful. It
   defaults to `/healthz` on the default listen address; set it to empty to
   supervise by process liveness only (a transport without a port).
+- `[boti.serve].repo` — the ax checkout `boti promote` builds from.
+- `[boti.serve].idle` — a URL whose `running` field is the number of live
+  runs. Activation waits for zero, so a promotion asked for inside a
+  conversation does not interrupt that conversation; if the bot never goes
+  idle, the host activates after 30 minutes. Without `idle`, promotion
+  activates at once.
+- `[boti.serve].selftest` — an extra command to run on the new build, with the
+  build first on `PATH`. `webi -selftest` checks the UI and the state; `ax
+  selftest` is always part of the transaction.
 - `[boti.serve]` also makes `boti install`/`selftest`/`update` include the
   transport binary, so a webi bot installs webi.
 
@@ -85,6 +99,7 @@ state.json    pid, build, previous, child, restarts, last error
 log           the child's stdout and stderr (rotated at 4 MiB)
 sock          control socket for `boti status|restart`, mode 0600
 builds/       one directory per build, `current` is a symlink to the active one
+              `builds/<id>/bin` holds the programs, `meta.json` the commit
 ```
 
 When `builds/current` exists, the host prepends its `bin/` to `PATH` and sets
@@ -95,6 +110,33 @@ A child that exits is restarted; three exits in a minute with a `previous`
 build recorded switch `current` back to it and record why. A build that is
 healthy for one start clears the failure counter, so a later promotion can
 still try again. `SIGTERM` to `boti serve` stops the child and exits cleanly.
+
+## Promote
+
+`boti promote` builds the bot's programs from `[boti.serve].repo` and asks the
+running `boti serve` to activate them:
+
+```sh
+boti -C ~/bots/example promote          # activate when no run is in flight
+boti -C ~/bots/example promote --now    # activate immediately
+boti -C ~/bots/example rollback
+```
+
+The build id is the short commit, plus `-dirty` when the tree has uncommitted
+changes; promoting the same tree again gets `-2`, `-3`. The transaction is `go
+vet`, `go test`, `scripts/package.sh --dest`, `ax selftest`, the optional
+`[boti.serve].selftest`, and then activation. A failed step leaves the build
+in `builds/<id>` for inspection and changes nothing that is running.
+
+The build contains the bot's package list (`ax`, the consumer, the transport
+and every tool the checkout can build); a tool from another repository stays on
+the host `PATH`. Binaries that are byte-identical to one in the active build
+become hard links, so promoting one changed program does not copy the rest, and
+the host keeps the active build, the rollback target and the newest one.
+
+`boti rollback` switches back to the previous build and restarts. It is the
+same switch a crash loop performs, available when the crash is semantic
+instead of a process exit.
 
 ## Development
 
