@@ -37,7 +37,7 @@ func serveMCP(input io.Reader, output io.Writer, tools []Tool) error {
 			continue
 		}
 		hasID := len(request.ID) > 0 && string(request.ID) != "null"
-		result, rpcErr := handleMCPRequest(request, tools)
+		result, rpcErr := handleMCPRequest(context.Background(), request, tools)
 		if !hasID {
 			continue
 		}
@@ -50,7 +50,7 @@ func serveMCP(input io.Reader, output io.Writer, tools []Tool) error {
 	return scanner.Err()
 }
 
-func handleMCPRequest(request mcpRequest, tools []Tool) (any, map[string]any) {
+func handleMCPRequest(ctx context.Context, request mcpRequest, tools []Tool) (any, map[string]any) {
 	switch request.Method {
 	case "server/discover":
 		return map[string]any{
@@ -103,7 +103,7 @@ func handleMCPRequest(request mcpRequest, tools []Tool) (any, map[string]any) {
 			if len(args) == 0 || string(args) == "null" {
 				args = json.RawMessage(`{}`)
 			}
-			output := runTool(context.Background(), []Tool{tool}, ToolCall{Name: tool.Name, Arguments: string(args)}, nil)
+			output := runTool(ctx, []Tool{tool}, ToolCall{Name: tool.Name, Arguments: string(args)}, nil)
 			return map[string]any{
 				"content": []map[string]any{{"type": "text", "text": output}},
 				"isError": strings.HasPrefix(output, "error:"),

@@ -223,7 +223,7 @@ missing, usually an environment variable or `ax mcp login <server>`.
 | `ax mcp login <server>` | OAuth login (`--manual` pastes a callback URL instead of using a loopback port). |
 | `ax mcp logout <server>` | Delete the stored token. |
 | `ax mcp doctor [--server NAME]` | Connect to every server, list tool counts and failures (always bypasses the cache). |
-| `ax mcp serve` | Expose `search`/`execute` over MCP stdio. |
+| `ax mcp serve` | Expose `search`/`execute` over MCP stdio or HTTP. |
 
 ### Cache and lifetime
 
@@ -241,9 +241,23 @@ the server. The same information is available to scripts with
 
 ## `ax mcp serve`
 
-`ax mcp serve` exposes `search` and `execute` over MCP stdio, using the same
-catalog. Any MCP host — Claude, Cursor, Kody — can use every configured AX
-integration through two stable tools. `--http` is not implemented yet.
+`ax mcp serve` exposes `search` and `execute` over MCP, using the same catalog.
+Any MCP host — Claude, Cursor, Kody — can use every configured AX integration
+through two stable tools.
+
+```sh
+ax mcp serve                          # stdio, one JSON-RPC message per line
+ax mcp serve --http 127.0.0.1:8710    # streamable HTTP
+```
+
+The HTTP mode is the MCP streamable HTTP transport, stateless: every `POST`
+carries one JSON-RPC message and gets `application/json` back, notifications
+get `202`, and no session id is issued. It binds the address you pass; use
+loopback unless a proxy authenticates in front of it. Requests with an `Origin`
+header naming another host are rejected with `403` (the DNS-rebinding case the
+spec asks local servers to block); clients that are not browsers send no
+`Origin` and work as usual. There is no server-initiated SSE stream: `GET` and
+`DELETE` return `405`.
 
 ## Durability
 

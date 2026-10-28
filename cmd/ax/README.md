@@ -269,11 +269,12 @@ ax mcp login sentry                        # browser authorization, PKCE
 ax mcp doctor                              # connect to everything, report failures
 ```
 
-`ax mcp serve` exposes the same `search`/`execute` catalog to any MCP host over
-stdio:
+`ax mcp serve` exposes the same `search`/`execute` catalog to any MCP host,
+over stdio or streamable HTTP:
 
 ```sh
-ax mcp serve
+ax mcp serve                          # stdio
+ax mcp serve --http 127.0.0.1:8710    # POST http://127.0.0.1:8710/
 ```
 
 See the [MCP catalog contract](../../docs/mcp.md) for the full behavior and
