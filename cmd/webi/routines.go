@@ -25,7 +25,9 @@ type routineView struct {
 	Last        *routine.RunResult `json:"last,omitempty"`
 }
 
-type routineTarget struct {
+// botTarget is one bot directory the UI can read: the bot root when no
+// channel is given, or one channel.
+type botTarget struct {
 	Paths       botdir.Paths
 	Channel     string
 	ChannelName string
@@ -37,37 +39,37 @@ func channelPaths(channel Channel) botdir.Paths {
 	return botdir.ResolveData(channel.Workdir, channel.Workdir)
 }
 
-func (s *Server) routineTarget(channelID string) (routineTarget, error) {
+func (s *Server) botTarget(channelID string) (botTarget, error) {
 	if channelID == "" || s.store == nil {
-		return routineTarget{Paths: botdir.Resolve(s.cfg.BotRoot)}, nil
+		return botTarget{Paths: botdir.Resolve(s.cfg.BotRoot)}, nil
 	}
 	channel, ok := s.store.Channel(channelID)
 	if !ok {
-		return routineTarget{}, errors.New("channel not found")
+		return botTarget{}, errors.New("channel not found")
 	}
-	return routineTarget{
+	return botTarget{
 		Paths:       channelPaths(channel),
 		Channel:     channel.ID,
 		ChannelName: channel.Name,
 	}, nil
 }
 
-func (s *Server) routineTargets(w http.ResponseWriter, req *http.Request) ([]routineTarget, bool) {
+func (s *Server) botTargets(w http.ResponseWriter, req *http.Request) ([]botTarget, bool) {
 	if id := req.URL.Query().Get("channel"); id != "" {
-		target, err := s.routineTarget(id)
+		target, err := s.botTarget(id)
 		if err != nil {
 			writeErr(w, http.StatusNotFound, err.Error())
 			return nil, false
 		}
-		return []routineTarget{target}, true
+		return []botTarget{target}, true
 	}
 	if s.store == nil {
-		target, _ := s.routineTarget("")
-		return []routineTarget{target}, true
+		target, _ := s.botTarget("")
+		return []botTarget{target}, true
 	}
-	var targets []routineTarget
+	var targets []botTarget
 	for _, channel := range s.store.Channels() {
-		targets = append(targets, routineTarget{
+		targets = append(targets, botTarget{
 			Paths:       channelPaths(channel),
 			Channel:     channel.ID,
 			ChannelName: channel.Name,
@@ -77,7 +79,7 @@ func (s *Server) routineTargets(w http.ResponseWriter, req *http.Request) ([]rou
 }
 
 func (s *Server) handleRoutines(w http.ResponseWriter, req *http.Request) {
-	targets, ok := s.routineTargets(w, req)
+	targets, ok := s.botTargets(w, req)
 	if !ok {
 		return
 	}
@@ -131,7 +133,7 @@ func (s *Server) publishRoutine(channel Channel, item routine.Routine, result ro
 }
 
 func (s *Server) handleRunRoutine(w http.ResponseWriter, req *http.Request) {
-	target, err := s.routineTarget(req.URL.Query().Get("channel"))
+	target, err := s.botTarget(req.URL.Query().Get("channel"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err.Error())
 		return
@@ -164,7 +166,7 @@ func (s *Server) handleRunRoutine(w http.ResponseWriter, req *http.Request) {
 }
 
 func (s *Server) handleRoutineLog(w http.ResponseWriter, req *http.Request) {
-	target, err := s.routineTarget(req.URL.Query().Get("channel"))
+	target, err := s.botTarget(req.URL.Query().Get("channel"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err.Error())
 		return
@@ -182,7 +184,7 @@ func (s *Server) handleRoutineLog(w http.ResponseWriter, req *http.Request) {
 }
 
 func (s *Server) handleRoutineRuns(w http.ResponseWriter, req *http.Request) {
-	target, err := s.routineTarget(req.URL.Query().Get("channel"))
+	target, err := s.botTarget(req.URL.Query().Get("channel"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err.Error())
 		return
@@ -206,7 +208,7 @@ func (s *Server) handleRoutineRuns(w http.ResponseWriter, req *http.Request) {
 }
 
 func (s *Server) handleRoutineRunLog(w http.ResponseWriter, req *http.Request) {
-	target, err := s.routineTarget(req.URL.Query().Get("channel"))
+	target, err := s.botTarget(req.URL.Query().Get("channel"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err.Error())
 		return
