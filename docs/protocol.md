@@ -30,6 +30,19 @@ call), appends it to the session log as a user message and echoes
 `{"type":"steer","text":"..."}`. A message that arrives after the final answer is
 ignored; nothing is queued for a later run.
 
+## Resuming an interrupted run
+
+`ax --resume --session FILE` continues a run whose process died. It requires a
+session log whose last `run_start` has no `run_end`; with a finished log it
+exits 2 and does nothing. ax appends a normal user turn that names the calls
+that never recorded a result, then runs as usual under a new `run_id`. The
+interrupted calls stay in the history as errors — ax reports them, it never
+replays them — and `flock` on the session file guarantees one runner at a time,
+so two hosts resuming the same session cannot race.
+
+Hosts (webi, slaxi, boti) own the policy: on startup and on a timer they look
+for open runs and call `ax --resume`.
+
 ## Output events
 
 ```json
@@ -43,6 +56,7 @@ ignored; nothing is queued for a later run.
 {"type":"usage","input":100,"output":20,"cached_input":0}
 {"type":"compaction","upto":42,"summary":"Goal: ... Decisions: ..."}
 {"type":"steer","text":"also update the changelog"}
+{"type":"resume","run":"r1","interrupted":["fsx.write"]}
 {"type":"message","message":{"Role":"assistant","Content":"done"}}
 {"type":"result","messages":[],"usage":{"input":100,"output":20,"cached_input":0}}
 {"type":"error","message":"provider error"}
