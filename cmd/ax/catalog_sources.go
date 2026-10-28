@@ -401,25 +401,45 @@ func configFingerprint(cfg mcp.ServerConfig) string {
 
 // buildSources assembles local providers and configured MCP servers.
 func buildSources(fc fileConfig, bot *botCtx, refresh bool) ([]catalog.Source, error) {
+	runtimes, err := openConnections(fc, bot, refresh)
+	if err != nil {
+		return nil, err
+	}
+	sources := make([]catalog.Source, 0, len(runtimes))
+	for _, runtime := range runtimes {
+		sources = append(sources, runtime.source)
+	}
+	return sources, nil
+}
+
+// connRuntime is one connection plus the source the catalog sees. Doctor keeps
+// both so it can compare what the connection declares with what it enables.
+type connRuntime struct {
+	conn   connection
+	inner  catalog.Source
+	source catalog.Source
+}
+
+func openConnections(fc fileConfig, bot *botCtx, refresh bool) ([]connRuntime, error) {
 	conns, err := resolveConnections(fc, bot.Workspace, mcpAuthDir(bot))
 	if err != nil {
 		return nil, err
 	}
 	cacheDir := filepath.Join(bot.DataRoot, "state", "ax", "mcp")
-	sources := make([]catalog.Source, 0, len(conns))
+	out := make([]connRuntime, 0, len(conns))
 	for _, conn := range conns {
-		var source catalog.Source
+		var inner catalog.Source
 		switch {
 		case conn.err != nil:
-			source = newUnavailableSource(conn.id, conn.err)
+			inner = newUnavailableSource(conn.id, conn.err)
 		case conn.kind == connMCP:
-			source = newMCPSource(conn.cfg, cacheDir, refresh)
+			inner = newMCPSource(conn.cfg, cacheDir, refresh)
 		default:
-			source = newLocalSource(conn.command, conn.id, bot.Workspace)
+			inner = newLocalSource(conn.command, conn.id, bot.Workspace)
 		}
-		sources = append(sources, newCappedSource(source, conn.id, conn.caps))
+		out = append(out, connRuntime{conn: conn, inner: inner, source: newConnSource(inner, conn)})
 	}
-	return sources, nil
+	return out, nil
 }
 
 // unavailableSource keeps a misconfigured server visible in the menu instead

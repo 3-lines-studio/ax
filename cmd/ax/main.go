@@ -120,6 +120,9 @@ func main() {
 		case "compact":
 			runCompactCommand(cfg, fc, bot, prompt[1:])
 			return
+		case "conn":
+			runConnCommand(fc, bot, prompt[1:])
+			return
 		case "mcp":
 			runMCPCommand(fc, bot, prompt[1:])
 			return
