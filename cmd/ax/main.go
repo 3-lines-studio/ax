@@ -326,8 +326,9 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 	}
 
 	var cancel atomic.Bool
+	steer := make(chan string, 8)
 	if !stdinIsTerminal() {
-		go readControls(&cancel)
+		go readControls(&cancel, steer)
 	}
 
 	provider := NewOpenAI(base, apiKey(fc, bot))
@@ -372,6 +373,7 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 		compactAt:     compactAt,
 		contextWindow: contextWindow,
 		compact:       compact,
+		steer:         steer,
 	}, history, &cancel, sink)
 
 	outcomeName := outcomeString(end.outcome)
@@ -795,17 +797,33 @@ func stdinIsTerminal() bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-func readControls(cancel *atomic.Bool) {
+// readControls consumes the JSONL control channel on stdin: cancel stops the
+// run at the next safe point, steer adds a user message at the next turn
+// boundary.
+func readControls(cancel *atomic.Bool, steer chan<- string) {
 	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		var control struct {
 			Type string `json:"type"`
+			Text string `json:"text"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &control); err != nil {
 			continue
 		}
-		if control.Type == "cancel" {
+		switch control.Type {
+		case "cancel":
 			cancel.Store(true)
+		case "steer":
+			if strings.TrimSpace(control.Text) == "" {
+				continue
+			}
+			select {
+			case steer <- control.Text:
+			default:
+				// The loop drains between turns; a burst past the buffer is
+				// better dropped than blocking the control reader.
+			}
 		}
 	}
 }
@@ -927,6 +945,13 @@ func (s *eventSink) toolDelta(call ToolCall, text string) {
 
 func (s *eventSink) toolResult(call ToolCall) {
 	s.emit(map[string]any{"type": axproto.TypeToolDone, "id": call.ID})
+}
+
+// steer records a message typed while the run was going. It belongs to the
+// same run, so the session log keeps it in order and a resume replays it.
+func (s *eventSink) steer(msg Message) {
+	s.append(sessionEntry{Type: entryMessage, Message: &msg})
+	s.emit(map[string]any{"type": axproto.TypeSteer, "text": msg.Content})
 }
 
 func (s *eventSink) tokens(input, output, cached int) {

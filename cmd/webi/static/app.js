@@ -1114,16 +1114,20 @@ function hasComposerContent() {
 function updateSendState() {
   const send = $('#send');
   if (!send) return;
-  send.disabled = S.running || S.uploads.length > 0 || !hasComposerContent();
-  send.title = S.uploads.length ? 'Uploading image…' : 'Send message';
+  // While a run is going the same button steers it: ax applies the message at
+  // the next turn boundary, so the composer never goes mute mid-run.
+  send.disabled = S.uploads.length > 0 || !hasComposerContent();
+  send.title = S.uploads.length ? 'Uploading image…' : (S.running ? 'Steer this run' : 'Send message');
 }
 
 function setComposerMode() {
   const send = $('#send');
   const stop = $('#stop');
   if (!send || !stop) return;
-  send.hidden = S.running;
+  send.hidden = false;
   stop.hidden = !S.running;
+  const input = $('#input');
+  if (input) input.placeholder = S.running ? 'Steer this run…' : 'Message pixi…';
   updateSendState();
 }
 

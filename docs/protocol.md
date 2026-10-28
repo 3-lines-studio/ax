@@ -20,7 +20,15 @@ While AX runs, stdin accepts JSONL controls:
 
 ```json
 {"type":"cancel"}
+{"type":"steer","text":"also update the changelog"}
 ```
+
+`cancel` stops the run at the next safe point and ends with `outcome:
+"cancelled"`. `steer` adds a user message to the same run: AX applies it at the
+next turn boundary (after the running tool batch finishes, before the next model
+call), appends it to the session log as a user message and echoes
+`{"type":"steer","text":"..."}`. A message that arrives after the final answer is
+ignored; nothing is queued for a later run.
 
 ## Output events
 
@@ -34,6 +42,7 @@ While AX runs, stdin accepts JSONL controls:
 {"type":"tool_done","id":"call_1"}
 {"type":"usage","input":100,"output":20,"cached_input":0}
 {"type":"compaction","upto":42,"summary":"Goal: ... Decisions: ..."}
+{"type":"steer","text":"also update the changelog"}
 {"type":"message","message":{"Role":"assistant","Content":"done"}}
 {"type":"result","messages":[],"usage":{"input":100,"output":20,"cached_input":0}}
 {"type":"error","message":"provider error"}

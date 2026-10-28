@@ -400,7 +400,21 @@ func (s *Server) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.running(thread.ID) {
-		writeErr(w, 409, "the thread is already running; stop it first")
+		// While ax is running, a message steers the run instead of starting a
+		// new one: it lands before the next model call of the same turn loop.
+		if len(req.Images) > 0 {
+			writeErr(w, 409, "images cannot be attached to a steering message; wait for the run to finish")
+			return
+		}
+		if err := s.steer(thread.ID, req.Text); err != nil {
+			writeErr(w, 409, err.Error())
+			return
+		}
+		s.store.Touch(thread.ID, "")
+		s.publish(map[string]any{"type": "message", "thread": thread.ID, "message": map[string]any{
+			"t": "user", "text": req.Text, "ts": time.Now().UTC(), "steer": true,
+		}})
+		writeJSON(w, 200, map[string]bool{"ok": true, "steered": true})
 		return
 	}
 	images, err := s.prepareImages(thread, req.Images)
@@ -473,7 +487,7 @@ func (s *Server) startRun(thread Thread, prompt string, images []string) error {
 	s.publish(map[string]any{"type": "run", "thread": thread.ID, "running": true})
 
 	go func() {
-		_, err := run.Wait()
+		result, err := run.Wait()
 		s.mu.Lock()
 		if s.runs[thread.ID] == run {
 			delete(s.runs, thread.ID)
@@ -486,6 +500,9 @@ func (s *Server) startRun(thread Thread, prompt string, images []string) error {
 			}})
 		}
 		s.store.Touch(thread.ID, "")
+		if err == nil && result.Text != "" && !thread.TitleGenerated {
+			go s.generateTitle(thread, prompt, result.Text)
+		}
 		s.publish(map[string]any{"type": "run", "thread": thread.ID, "running": false})
 		s.publish(map[string]any{"type": "state"})
 	}()
@@ -522,6 +539,19 @@ func (s *Server) running(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.runs[id] != nil
+}
+
+func (s *Server) steer(id, text string) error {
+	s.mu.Lock()
+	run := s.runs[id]
+	s.mu.Unlock()
+	if run == nil {
+		return fmt.Errorf("the run finished; send the message again")
+	}
+	if strings.TrimSpace(text) == "" {
+		return fmt.Errorf("empty message")
+	}
+	return run.Steer(text)
 }
 
 func (s *Server) stop(id string) bool {

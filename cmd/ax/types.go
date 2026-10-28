@@ -95,6 +95,8 @@ type runSink interface {
 	tokens(input, output, cached int)
 	assistant(turn int, msg Message, usage Usage)
 	tool(turn int, msg Message)
+	// steer records a user message that arrived while the run was going.
+	steer(msg Message)
 }
 
 type runOptions struct {
@@ -109,6 +111,11 @@ type runOptions struct {
 	compactAt     float64
 	contextWindow int
 	compact       func(ctx context.Context, history []Message, midRun bool) ([]Message, string, error)
+
+	// steer carries messages typed while the run is already going. The loop
+	// drains it at each turn boundary: after the tools of a batch finish and
+	// before the next model call, never in the middle of either.
+	steer <-chan string
 }
 
 type outcome int
