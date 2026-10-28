@@ -24,16 +24,19 @@ jobs:
       - run: go test ./...
       - run: scripts/package.sh --release all
 
+      - name: Smoke-test the installer
+        run: |
+          prefix="$RUNNER_TEMP/prefix"
+          INSTALL_BASE_URL="file://$PWD/dist" AX_PREFIX="$prefix" sh scripts/install.sh ax fsx
+          "$prefix/bin/ax" -h >/dev/null
+          "$prefix/bin/fsx" describe >/dev/null
+
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd dist
-          for artifact in *-linux-* *-darwin-*; do
-            case $artifact in *.sha256) continue ;; esac
-            sha256sum "$artifact"
-          done > SHA256SUMS
           cp "$GITHUB_WORKSPACE/scripts/install.sh" install.sh
           gh release create "$GITHUB_REF_NAME" \
-            *-linux-* *-darwin-* SHA256SUMS install.sh \
+            ax-*-*.tar.gz SHA256SUMS install.sh \
             --repo "$GITHUB_REPOSITORY" --generate-notes

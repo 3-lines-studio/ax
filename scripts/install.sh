@@ -1,35 +1,26 @@
 #!/bin/sh
+# Install AX programs. One download for the whole set: the release ships one
+# archive per platform, so asking for one program or all of them costs the same.
+#
+#   install.sh                 # every program in the release
+#   install.sh ax fsx bashx    # only these
+#   install.sh update          # re-install what is already here, if it changed
+#   install.sh uninstall ax    # remove these (no names: all installed programs)
+#
+# Environment:
+#   AX_PREFIX / PREFIX   install root; binaries go to <root>/bin (default ~/.local)
+#   VERSION              release tag to install (default: latest)
+#   INSTALL_BASE_URL     directory holding ax-<os>-<arch>.tar.gz and SHA256SUMS
 set -eu
 
 action=install
 case "${1:-}" in
     uninstall | update) action=$1; shift ;;
 esac
-default_set=false
-if [ "$#" -eq 0 ]; then
-    if [ "$action" = uninstall ]; then
-        echo "install: package name is required" >&2
-        exit 1
-    fi
-    set -- ax
-    default_set=true
-fi
 
 prefix="${AX_PREFIX:-${PREFIX:-$HOME/.local}}"
 bindir="$prefix/bin"
-if [ "$action" = uninstall ]; then
-    for package in "$@"; do
-        case $package in
-            '' | [!a-z]* | *[!a-z0-9-]*)
-                echo "install: invalid package name: $package" >&2
-                exit 1
-                ;;
-        esac
-        rm -f "$bindir/$package"
-        echo "removed $bindir/$package"
-    done
-    exit 0
-fi
+
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
 case $os in
     linux | darwin) ;;
@@ -41,6 +32,16 @@ case $arch in
     aarch64 | arm64) arch=aarch64 ;;
     *) echo "install: unsupported arch: $arch" >&2; exit 1 ;;
 esac
+archive="ax-$os-$arch.tar.gz"
+
+if [ -n "${INSTALL_BASE_URL:-}" ]; then
+    base="${INSTALL_BASE_URL%/}"
+elif [ -n "${VERSION:-}" ]; then
+    base="https://github.com/3-lines-studio/ax/releases/download/$VERSION"
+else
+    base="https://github.com/3-lines-studio/ax/releases/latest/download"
+fi
+
 download() {
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL "$1" -o "$2"
@@ -65,63 +66,88 @@ sha256() {
     fi
 }
 
-version_for() {
+valid_name() {
     case $1 in
-        ax) printf '%s' "${AX_VERSION:-${VERSION:-}}" ;;
-        *) printf '%s' "${VERSION:-}" ;;
+        '' | [!a-z]* | *[!a-z0-9-]*) return 1 ;;
     esac
 }
 
-umask 077
+umask 022
 tmp="${TMPDIR:-/tmp}/ax-install-$$"
-if ! mkdir "$tmp"; then
+if ! mkdir -p "$tmp"; then
     echo "install: cannot create temporary directory: $tmp" >&2
     exit 1
 fi
 trap 'rm -rf "$tmp"' 0 HUP INT TERM
 
+for package in "$@"; do
+    if ! valid_name "$package"; then
+        echo "install: invalid package name: $package" >&2
+        exit 1
+    fi
+done
+
+if [ "$action" = uninstall ]; then
+    if [ "$#" -eq 0 ]; then
+        echo "install: name the programs to remove (ax fsx ...)" >&2
+        exit 1
+    fi
+    for package in "$@"; do
+        rm -f "$bindir/$package"
+        echo "removed $bindir/$package"
+    done
+    exit 0
+fi
+
+echo "downloading $archive"
+download "$base/$archive" "$tmp/$archive" || {
+    echo "install: download failed: $base/$archive" >&2
+    exit 1
+}
+download "$base/SHA256SUMS" "$tmp/SHA256SUMS" || {
+    echo "install: checksum fetch failed: $base/SHA256SUMS" >&2
+    exit 1
+}
+want=$(awk -v name="$archive" '$2 == name { print $1 }' "$tmp/SHA256SUMS")
+if [ -z "$want" ]; then
+    echo "install: $archive is not listed in SHA256SUMS" >&2
+    exit 1
+fi
+if [ "$want" != "$(sha256 "$tmp/$archive")" ]; then
+    echo "install: checksum mismatch for $archive" >&2
+    exit 1
+fi
+
+mkdir -p "$tmp/unpack"
+tar -xzf "$tmp/$archive" -C "$tmp/unpack"
+
+if [ "$#" -eq 0 ]; then
+    if [ "$action" = update ]; then
+        # Update without names refreshes what is already in $bindir.
+        set -- $(for program in $(ls "$tmp/unpack" | sort); do
+            [ -f "$bindir/$program" ] && echo "$program"
+        done)
+        if [ "$#" -eq 0 ]; then
+            echo "install: nothing to update in $bindir" >&2
+            exit 0
+        fi
+    else
+        set -- $(ls "$tmp/unpack" | sort)
+    fi
+fi
+
 todo=
 for package in "$@"; do
-    case $package in
-        '' | [!a-z]* | *[!a-z0-9-]*)
-            echo "install: invalid package name: $package" >&2
-            exit 1
-            ;;
-    esac
-    version=$(version_for "$package")
-    if [ -n "${INSTALL_BASE_URL:-}" ]; then
-        base="${INSTALL_BASE_URL%/}"
-    elif [ -n "$version" ]; then
-        base="https://github.com/3-lines-studio/ax/releases/download/$version"
-    else
-        base="https://github.com/3-lines-studio/ax/releases/latest/download"
-    fi
-    artifact="$package-$os-$arch"
-    download "$base/$artifact.sha256" "$tmp/$package.sha256" || {
-        echo "install: checksum fetch failed: $base/$artifact.sha256" >&2
+    if [ ! -f "$tmp/unpack/$package" ]; then
+        echo "install: $package is not in $archive" >&2
         exit 1
-    }
-    want=$(awk '{print $1}' "$tmp/$package.sha256")
+    fi
+    if [ "$action" = update ] && cmp -s "$tmp/unpack/$package" "$bindir/$package"; then
+        echo "$package is up to date"
+        continue
+    fi
     if [ "$action" = update ]; then
-        if [ "$default_set" = true ] && [ ! -f "$bindir/$package" ]; then
-            continue
-        fi
-        if [ -f "$bindir/$package" ] && [ "$want" = "$(sha256 "$bindir/$package")" ]; then
-            echo "$package is up to date"
-            continue
-        fi
         echo "updating $package"
-    else
-        echo "downloading $artifact"
-    fi
-    download "$base/$artifact" "$tmp/$package" || {
-        echo "install: download failed: $base/$artifact" >&2
-        exit 1
-    }
-    got=$(sha256 "$tmp/$package")
-    if [ "$want" != "$got" ]; then
-        echo "install: checksum mismatch for $package" >&2
-        exit 1
     fi
     todo="$todo $package"
 done
@@ -133,7 +159,7 @@ fi
 mkdir -p "$bindir"
 for package in $todo; do
     staged="$bindir/.$package.new.$$"
-    cp "$tmp/$package" "$staged"
+    cp "$tmp/unpack/$package" "$staged"
     chmod 0755 "$staged"
     mv "$staged" "$bindir/$package"
     echo "installed $package to $bindir/$package"
