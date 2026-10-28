@@ -102,11 +102,10 @@ type runSink interface {
 }
 
 type runOptions struct {
-	model     string
-	system    string
-	tools     []Tool
-	maxTurns  int
-	toolLimit int
+	model    string
+	system   string
+	tools    []Tool
+	maxTurns int
 
 	// Context compaction. compactAt is a fraction of contextWindow; zero
 	// disables it. compact rewrites the history and the system prompt.
