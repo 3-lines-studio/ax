@@ -15,7 +15,10 @@ Open `http://127.0.0.1:8377`. Flags: `-ax` (binary), `-state` (default
 ## How it works
 
 - `internal/axrun` starts `ax --events --session <thread>/session.jsonl -C
-  <channel workdir>` and forwards the NDJSON events.
+  <channel workdir>` and forwards the NDJSON events. The run gets
+  `BOT_DATA=<channel workdir>`, so a channel is an independent bot: its tools
+  work there and its `workspace/`, `skills/` and `secrets/` are its own. The
+  host's `BOT_DATA` only holds webi's state (channels, threads, vault).
 - The UI (pixi's static app) gets `delta`, `message`, `run`, `step`, `compact`
   and `state` events over `/api/stream`.
 - History is read straight from the ax session log, so a thread survives a

@@ -497,7 +497,13 @@ func (s *Server) launch(thread Thread, job axrun.Job, prompt string) error {
 	cfg.BotRoot = channel.Workdir
 	cfg.Model = firstNonEmpty(settings.Model, cfg.Model)
 	cfg.BaseURL = firstNonEmpty(settings.BaseURL, cfg.BaseURL)
-	env := []string{"AX_WEB_THREAD=" + thread.ID, "AX_WEB_CHANNEL=" + channel.ID}
+	// A channel is a bot: its runtime data lives at its root, not at the
+	// host's BOT_DATA. Without this every channel would share one workspace.
+	env := []string{
+		"AX_WEB_THREAD=" + thread.ID,
+		"AX_WEB_CHANNEL=" + channel.ID,
+		"BOT_DATA=" + channel.Workdir,
+	}
 	if channel.Prompt != "" {
 		env = append(env, "AX_WEB_PROMPT="+channel.Prompt)
 	}
