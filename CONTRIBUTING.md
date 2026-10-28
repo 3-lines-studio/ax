@@ -101,9 +101,11 @@ git push origin vX.Y.Z
 ```
 
 The release workflow cross-compiles every program for Linux x86-64/ARM64 and
-macOS ARM64 from one Linux runner, publishes `<program>-<os>-<arch>` plus
-checksums to a single GitHub release, and attaches `install.sh`. Never tag a
-single program separately: there are no per-program versions.
+macOS ARM64 from one Linux runner, packs each platform into one
+`ax-<os>-<arch>.tar.gz`, and publishes the three archives, `SHA256SUMS` and
+`install.sh` as a single GitHub release. Never tag a single program separately:
+there are no per-program versions, and no per-program assets to keep in sync
+with `install.sh`.
 
 ## CI cost
 

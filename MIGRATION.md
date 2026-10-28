@@ -123,6 +123,18 @@ The ax engine kept moving while the repositories were merged:
 
 ## Retiring the old repositories
 
-Once the first monorepo release is published, the sixteen imported
-repositories can be archived on GitHub with a note pointing here. Archiving
-keeps their tags and release assets readable, so old installs keep working.
+The fifteen imported repositories are **archived** on GitHub, with their
+description pointing here: `boti`, `slaxi`, `acpi`, `mcpx`, `fsx`, `bashx`,
+`attachx`, `browserx`, `wax`, `skillx`, `slackx`, `bqx`, `pgx`, `botdir` and
+`ax-ecosystem`. Archiving keeps their tags and release assets readable, so old
+installs keep working; development happens only in this repository.
+
+`3-lines-studio/ax` is not archived: the monorepo took over that name, and its
+earlier tags (`v0.4.10` and below) still resolve.
+
+## Installing after the merge
+
+A release is one archive per platform (`ax-linux-x86_64.tar.gz`,
+`ax-linux-aarch64.tar.gz`, `ax-darwin-aarch64.tar.gz`) plus `SHA256SUMS` and
+`install.sh`; the per-program `<program>-<os>-<arch>` assets are gone. Old
+release URLs keep serving them from the frozen tags.

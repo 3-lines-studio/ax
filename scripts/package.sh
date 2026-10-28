@@ -5,9 +5,11 @@
 #   scripts/package.sh ax fsx           # selected programs, current platform
 #   scripts/package.sh --release all    # every program, all release targets
 #
-# Writes dist/<program>-<os>-<arch> and .sha256 next to it. `--release` builds
-# linux/x86-64, linux/arm64 and darwin/arm64 from any host (CGO disabled), so
-# CI needs one Linux runner instead of a matrix.
+# Local runs write one loose binary per program into dist/ (plus its .sha256),
+# which is what scripts/check-size.sh and the harness use. `--release` builds
+# linux/x86-64, linux/arm64 and darwin/arm64 from any host (CGO disabled) and
+# packs them into one archive per platform, dist/ax-<os>-<arch>.tar.gz, plus
+# dist/SHA256SUMS. One tag, three downloads, no per-program assets.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -69,11 +71,18 @@ sha256() {
 }
 
 mkdir -p dist
+release_files=
 for target in $targets; do
     goos=${target%%:*}
     rest=${target#*:}
     goarch=${rest%%:*}
     arch=${rest#*:}
+    if [ "$release" = true ]; then
+        stage="dist/.stage-$goos-$arch"
+        rm -rf "$stage"
+        mkdir -p "$stage"
+    fi
+    binaries=
     for program in "$@"; do
         case $program in
         '' | [!a-z]* | *[!a-z0-9-]*)
@@ -85,11 +94,35 @@ for target in $targets; do
             echo "package: no such program: $program" >&2
             exit 1
         fi
-        out="dist/$program-$goos-$arch"
+        if [ "$release" = true ]; then
+            out="$stage/$program"
+        else
+            out="dist/$program-$goos-$arch"
+        fi
         CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build \
             -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
             -o "$out" "./cmd/$program"
-        printf '%s  %s\n' "$(sha256 "$out")" "$(basename "$out")" >"$out.sha256"
-        printf '%s\n' "$out"
+        if [ "$release" = true ]; then
+            binaries="$binaries $program"
+        else
+            printf '%s  %s\n' "$(sha256 "$out")" "$(basename "$out")" >"$out.sha256"
+            printf '%s\n' "$out"
+        fi
     done
+    if [ "$release" = true ]; then
+        archive="dist/ax-$goos-$arch.tar.gz"
+        # shellcheck disable=SC2086
+        tar -czf "$archive" -C "$stage" $binaries
+        rm -rf "$stage"
+        printf '%s\n' "$archive"
+        release_files="$release_files $(basename "$archive")"
+    fi
 done
+
+if [ "$release" = true ]; then
+    : >dist/SHA256SUMS
+    for name in $release_files; do
+        printf '%s  %s\n' "$(sha256 "dist/$name")" "$name" >>dist/SHA256SUMS
+    done
+    cat dist/SHA256SUMS
+fi

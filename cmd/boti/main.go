@@ -120,11 +120,11 @@ func install(root, installURL string) error {
 	}
 	defer func() { _ = os.Remove(installer) }()
 
-	for _, p := range missing {
-		fmt.Fprintf(os.Stderr, "boti: installing %s\n", p)
-		if err := runInstaller(installer, p); err != nil {
-			return fmt.Errorf("install %s: %w", p, err)
-		}
+	// One call: the release is one archive per platform, so naming every
+	// missing program still costs a single download.
+	fmt.Fprintf(os.Stderr, "boti: installing %s\n", strings.Join(missing, " "))
+	if err := runInstaller(installer, missing...); err != nil {
+		return fmt.Errorf("install %s: %w", strings.Join(missing, " "), err)
 	}
 	return nil
 }
@@ -226,8 +226,8 @@ func fetchInstaller(url string) (string, error) {
 	return f.Name(), nil
 }
 
-func runInstaller(script, pkg string) error {
-	cmd := exec.Command("sh", script, pkg)
+func runInstaller(script string, pkgs ...string) error {
+	cmd := exec.Command("sh", append([]string{script}, pkgs...)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
