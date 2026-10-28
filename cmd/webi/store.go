@@ -22,12 +22,15 @@ type Store struct {
 }
 
 type Channel struct {
-	ID      string    `json:"id"`
-	Name    string    `json:"name"`
-	Workdir string    `json:"workdir"`
-	Prompt  string    `json:"prompt,omitempty"`
-	Pinned  bool      `json:"pinned,omitempty"`
-	Created time.Time `json:"created"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Workdir string `json:"workdir"`
+	Prompt  string `json:"prompt,omitempty"`
+	Pinned  bool   `json:"pinned,omitempty"`
+	// VaultScope picks which secrets reach this channel's runs. Empty means
+	// the shared `global` scope.
+	VaultScope string    `json:"vault_scope,omitempty"`
+	Created    time.Time `json:"created"`
 }
 
 type Thread struct {

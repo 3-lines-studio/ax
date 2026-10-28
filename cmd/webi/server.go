@@ -31,6 +31,7 @@ type Server struct {
 	cfg      axrun.Config
 	static   http.Handler
 	settings string // path to settings.json
+	vault    *Vault
 	started  time.Time
 
 	mu   sync.Mutex
@@ -44,6 +45,7 @@ func NewServer(store *Store, cfg axrun.Config, stateDir string, static http.Hand
 		cfg:      cfg,
 		static:   static,
 		settings: filepath.Join(stateDir, "settings.json"),
+		vault:    NewVault(filepath.Join(stateDir, "vault.json")),
 		started:  time.Now(),
 		runs:     map[string]*axrun.Run{},
 		subs:     map[chan []byte]struct{}{},
@@ -58,12 +60,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("POST /api/settings", s.handlePostSettings)
 	mux.HandleFunc("GET /api/dirs", s.handleDirs)
-	mux.HandleFunc("GET /api/vault", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"exists": false, "locked": false, "items": []any{}})
-	})
-	mux.HandleFunc("POST /api/vault/{action}", func(w http.ResponseWriter, r *http.Request) {
-		writeErr(w, 400, "the vault is not available in webi; export secrets in the bot environment")
-	})
+	mux.HandleFunc("GET /api/vault", s.handleVaultState)
+	mux.HandleFunc("POST /api/vault/{action}", s.handleVaultAction)
 	mux.HandleFunc("POST /api/channels", s.handleCreateChannel)
 	mux.HandleFunc("PATCH /api/channels/{id}", s.handleUpdateChannel)
 	mux.HandleFunc("DELETE /api/channels/{id}", s.handleDeleteChannel)
@@ -158,14 +156,14 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 			"workdir":     channel.Workdir,
 			"prompt":      channel.Prompt,
 			"pinned":      channel.Pinned,
-			"vault_scope": "",
+			"vault_scope": normalizeScope(channel.VaultScope),
 			"threads":     threads,
 		})
 	}
 	config := map[string]any{
 		"model":       firstNonEmpty(settings.Model, s.cfg.Model, "deepseek-flash"),
 		"effort":      firstNonEmpty(settings.Effort, "max"),
-		"has_key":     os.Getenv("DEEPSEEK_API_KEY") != "" || os.Getenv("OPENAI_API_KEY") != "",
+		"has_key":     s.hasKey(),
 		"repo":        s.cfg.BotRoot,
 		"data_dir":    s.cfg.BotRoot,
 		"max_context": firstNonZero(settings.Context, 1_000_000),
@@ -176,7 +174,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 		"build":    "webi",
 		"version":  Version,
 		"uptime":   int(time.Since(s.started).Seconds()),
-		"vault":    map[string]any{"exists": false, "locked": false, "items": []any{}},
+		"vault":    s.vault.Status(),
 		"config":   config,
 		"channels": out,
 	})
@@ -455,6 +453,11 @@ func (s *Server) startRun(thread Thread, prompt string, images []string) error {
 	if channel.Prompt != "" {
 		env = append(env, "AX_WEB_PROMPT="+channel.Prompt)
 	}
+	vaultEnv, cleanupVault, err := s.vault.Env(channel.VaultScope)
+	if err != nil {
+		return err
+	}
+	env = append(env, vaultEnv...)
 	cfg.Env = append(cfg.Env, env...)
 
 	run, err := axrun.Start(context.Background(), cfg, axrun.Job{
@@ -474,6 +477,7 @@ func (s *Server) startRun(thread Thread, prompt string, images []string) error {
 
 	go func() {
 		_, err := run.Wait()
+		cleanupVault()
 		s.mu.Lock()
 		if s.runs[thread.ID] == run {
 			delete(s.runs, thread.ID)
