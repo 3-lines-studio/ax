@@ -9,8 +9,10 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -27,15 +29,17 @@ func main() {
 	baseURL := flag.String("base", "", "override the model endpoint for every run")
 	model := flag.String("model", "", "override the model for every run")
 	selftest := flag.Bool("selftest", false, "check the bot, state and ax binary, then exit")
+	open := flag.Bool("open", true, "open the token URL in a browser when run in a terminal")
 	flag.Parse()
 
-	root := *botRoot
-	if root == "" {
-		var err error
-		root, err = os.Getwd()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "error: working directory")
-			os.Exit(1)
+	root, fresh, err := resolveRoot(*botRoot)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	if fresh {
+		if err := writeStarter(root); err != nil {
+			slog.Warn("webi: starter bot", "err", err)
 		}
 	}
 	paths := botdir.Resolve(root)
@@ -45,6 +49,10 @@ func main() {
 	}
 	if *selftest {
 		os.Exit(runSelftest(root, state, *axPath, os.Stdout, os.Stderr))
+	}
+	if _, err := exec.LookPath(*axPath); err != nil {
+		fmt.Fprintf(os.Stderr, "webi: cannot find ax (%s); install it with `install.sh ax` or pass -ax\n", *axPath)
+		os.Exit(1)
 	}
 	store, err := NewStore(state)
 	if err != nil {
@@ -79,17 +87,22 @@ func main() {
 	srv.StartResumeLoop(resumeInterval)
 
 	server := &http.Server{
-		Addr:              *listen,
 		Handler:           srv.auth(srv.Handler()),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    64 << 10,
 	}
-	slog.Info("webi listening", "addr", "http://"+*listen, "bot", paths.Root, "state", state, "ax", *axPath)
+	listener, err := net.Listen("tcp", *listen)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	slog.Info("webi listening", "addr", "http://"+listener.Addr().String(), "bot", paths.Root, "state", state, "ax", *axPath)
 	if tokenPath != "" {
 		slog.Info("webi: first visit needs ?token= from", "file", tokenPath)
 	}
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	announce(listener, token, *open)
+	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}

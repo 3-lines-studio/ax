@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "pixi",
-  "short_name": "pixi",
+  "name": "ax",
+  "short_name": "ax",
   "description": "A small self-hosted AI assistant",
   "lang": "en",
   "dir": "ltr",
