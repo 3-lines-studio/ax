@@ -13,8 +13,14 @@ import (
 //go:embed static
 var staticFiles embed.FS
 
+// staticRoot is the embedded UI, so a selftest can stat its files without
+// building a handler.
+func staticRoot() (fs.FS, error) {
+	return fs.Sub(staticFiles, "static")
+}
+
 func staticHandler() http.Handler {
-	root, err := fs.Sub(staticFiles, "static")
+	root, err := staticRoot()
 	if err != nil {
 		return nil
 	}
