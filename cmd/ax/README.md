@@ -138,9 +138,9 @@ A connection declares an integration; its tools are discovered and indexed.
 `trust = "read"` keeps only the tools annotated read-only. `ax conn list` shows
 what is configured, `ax conn doctor` connects and reports declared vs enabled.
 
-A connection marked `compute = true` defines the bot's compute: its tools become
-the prompt cheat sheet (`core_tools` derived from the catalog, no hardcoded ids)
-and its `root` becomes the workspace for every source:
+A connection marked `compute = true` defines the bot's compute: its tool ids
+become the prompt cheat sheet (`core_tools` derived from the catalog, no
+hardcoded ids) and its `root` becomes the workspace for every source:
 
 ```toml
 [[connection]]
@@ -187,8 +187,13 @@ ax catalog --refresh           # bypass the MCP catalog cache
 ```
 
 `core_tools` (default: `fsx.read`, `fsx.write`, `fsx.edit`, `bashx.bash`)
-appear as a compact cheat sheet in the system prompt, so common file and shell
-work can call `execute` directly without paying for a `search` turn.
+appear in the system prompt as ids plus their argument names, so common file
+and shell work can call `execute` directly; the full schema is one `search`
+away.
+
+The prompt is deliberately small: identity, environment, safety and style.
+Tool mechanics belong in the tool descriptions, and long procedures belong in
+`skills/` or `bot.md`. The prompt is not a tool manual.
 
 ### MCP servers
 
