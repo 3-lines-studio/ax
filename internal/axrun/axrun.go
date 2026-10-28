@@ -274,6 +274,25 @@ func (r *Run) pump(onEvent func(Event)) {
 // than take a callback.
 func (r *Run) Events() <-chan Event { return r.events }
 
+// Steer adds a user message to the running conversation. ax applies it at the
+// next turn boundary and confirms with a "steer" event.
+func (r *Run) Steer(text string) error {
+	if strings.TrimSpace(text) == "" {
+		return errors.New("axrun: empty steer")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.done {
+		return errors.New("axrun: run already finished")
+	}
+	payload, err := json.Marshal(map[string]string{"type": "steer", "text": text})
+	if err != nil {
+		return err
+	}
+	_, err = r.stdin.Write(append(payload, '\n'))
+	return err
+}
+
 // Cancel asks ax to stop at the next safe point.
 func (r *Run) Cancel() error {
 	r.mu.Lock()

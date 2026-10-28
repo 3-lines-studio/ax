@@ -18,6 +18,7 @@ type recordingSink struct {
 	tok       []Usage
 	assist    []Message
 	tools     []Message
+	steered   []Message
 	flushCnt  int
 }
 
@@ -33,6 +34,7 @@ func (r *recordingSink) tokens(input, output, cached int) {
 func (r *recordingSink) shouldCompact(input, output int) bool      { return false }
 func (r *recordingSink) assistant(turn int, msg Message, us Usage) { r.assist = append(r.assist, msg) }
 func (r *recordingSink) tool(turn int, msg Message)                { r.tools = append(r.tools, msg) }
+func (r *recordingSink) steer(msg Message)                         { r.steered = append(r.steered, msg) }
 func (r *recordingSink) flush()                                    { r.flushCnt++ }
 
 type fakeProvider struct {
@@ -265,4 +267,82 @@ func TestRunStreamCancelImmediately(t *testing.T) {
 	if p.idx != 0 {
 		t.Errorf("provider should not be called, idx = %d", p.idx)
 	}
+}
+
+// A message typed while a tool runs lands in the conversation before the next
+// model call, and the sink records it for the session log.
+func TestRunStreamAcceptsSteeringBetweenTurns(t *testing.T) {
+	steer := make(chan string, 1)
+	var requests []*Request
+	tool := Tool{
+		Name: "bash", Description: "d", Parameters: json.RawMessage(`{}`),
+		Run: func(arguments string, progress func(string)) string {
+			// The user types while the tool is running.
+			steer <- "actually, do it differently"
+			return "tool-output"
+		},
+	}
+	c1 := ToolCall{ID: "call-1", Name: "bash", Arguments: "{}"}
+	turn0 := Response{Message: Message{Role: "assistant", ToolCalls: []ToolCall{c1}}, Usage: Usage{Input: 5, Output: 1}, StopReason: "tool_calls"}
+	turn1 := Response{Message: Message{Role: "assistant", Content: "final"}, Usage: Usage{Input: 7, Output: 3}, StopReason: "stop"}
+	provider := &recordingProvider{requests: &requests, handles: []*StreamHandle{
+		handleWithResponse(turn0, nil, StreamEvent{Kind: eventToolCall, Call: &c1}, StreamEvent{Kind: eventDone}),
+		handleWithResponse(turn1, nil, StreamEvent{Kind: eventContent, Text: "final"}, StreamEvent{Kind: eventDone}),
+	}}
+	sink := &recordingSink{}
+	end := runStream(context.Background(), provider, &runOptions{
+		model: "m", tools: []Tool{tool}, maxTurns: 4, steer: steer,
+	}, []Message{{Role: "user", Content: "hello"}}, &atomic.Bool{}, sink)
+
+	if end.outcome != outcomeDone {
+		t.Fatalf("outcome = %v", end.outcome)
+	}
+	if len(sink.steered) != 1 || sink.steered[0].Content != "actually, do it differently" {
+		t.Fatalf("steered = %+v", sink.steered)
+	}
+	second := requests[len(requests)-1]
+	var found bool
+	for _, msg := range second.Messages {
+		if msg.Role == "user" && msg.Content == "actually, do it differently" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("steered message missing from the second request: %+v", second.Messages)
+	}
+	if len(sink.steered) != 1 || sink.steered[0].Role != "user" {
+		t.Fatalf("steered = %+v", sink.steered)
+	}
+}
+
+// Steering that arrives with nothing running is dropped, not queued into the
+// next turn of an unrelated run.
+func TestDrainSteeringIgnoresEmptyAndClosed(t *testing.T) {
+	sink := &recordingSink{}
+	closed := make(chan string)
+	close(closed)
+	if got := drainSteering(closed, []Message{{Role: "user", Content: "x"}}, sink); len(got) != 1 {
+		t.Fatalf("closed channel added messages: %+v", got)
+	}
+	blank := make(chan string, 1)
+	blank <- "   "
+	if got := drainSteering(blank, nil, sink); len(got) != 0 {
+		t.Fatalf("blank steer added messages: %+v", got)
+	}
+	if len(sink.steered) != 0 {
+		t.Fatalf("steered = %+v", sink.steered)
+	}
+}
+
+type recordingProvider struct {
+	requests *[]*Request
+	handles  []*StreamHandle
+	idx      int
+}
+
+func (p *recordingProvider) stream(req *Request, cancel *atomic.Bool) *StreamHandle {
+	*p.requests = append(*p.requests, req)
+	handle := p.handles[p.idx]
+	p.idx++
+	return handle
 }

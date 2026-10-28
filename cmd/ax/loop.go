@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,6 +21,7 @@ func runStream(ctx context.Context, provider Provider, opts *runOptions, msgs []
 		if cancel.Load() {
 			return runEnd{messages: history, usage: usage, outcome: outcomeCancelled}
 		}
+		history = drainSteering(opts.steer, history, sink)
 		if opts.compact != nil && len(history) > compactedAt {
 			if threshold := compactThreshold(opts.compactAt, opts.contextWindow); threshold > 0 &&
 				(lastPrompt > threshold || estimateTokens(opts.system, history) > threshold) {
@@ -66,6 +68,31 @@ func runStream(ctx context.Context, provider Provider, opts *runOptions, msgs []
 		}
 	}
 	return runEnd{messages: history, usage: usage, outcome: outcomeMaxTurns}
+}
+
+// drainSteering appends every message typed while the previous turn ran. A
+// steered message is a normal user turn: it goes into the history the model
+// sees and into the session log through the sink.
+func drainSteering(steer <-chan string, history []Message, sink runSink) []Message {
+	if steer == nil {
+		return history
+	}
+	for {
+		select {
+		case text, ok := <-steer:
+			if !ok {
+				return history
+			}
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			message := Message{Role: "user", Content: text}
+			history = append(history, message)
+			sink.steer(message)
+		default:
+			return history
+		}
+	}
 }
 
 func requestStream(provider Provider, opts *runOptions, history []Message, cancel *atomic.Bool, sink runSink) (Response, []ToolCall, error) {

@@ -753,6 +753,31 @@ def oneshot_compute_root_must_exist(h, ax):
 
 
 @case
+def oneshot_steering(h, ax):
+    session = h.root / "steer.jsonl"
+    with h.mock(TOOL_SCENARIO) as srv:
+        p = h.oneshot(
+            ax,
+            ["--events", "--session", str(session), "use tools"],
+            base=srv.base_url,
+            stdin=b'{"type":"steer","text":"also mention the tests"}\n',
+            extra_env={"AX_TOOLS": str(bash_provider(h))},
+        )
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        events = read_events(p)
+        check(
+            any(e.get("type") == "steer" and "tests" in e.get("text", "") for e in events),
+            "no steer event: %s" % [e.get("type") for e in events],
+        )
+        users = [m["content"] for m in body_msg(srv, 1, "user")]
+        check(users == ["use tools", "also mention the tests"], "user turns = %s" % users)
+        check(events[-1] == {"type": "done", "outcome": "done"}, "bad final event")
+    entries = [json.loads(line) for line in session.read_text().splitlines() if line.strip()]
+    user_entries = [e["message"]["Content"] for e in entries if e["type"] == "message" and e["message"]["Role"] == "user"]
+    check(user_entries == ["use tools", "also mention the tests"], "session users = %s" % user_entries)
+
+
+@case
 def oneshot_auto_compaction(h, ax):
     session = h.root / "compact.jsonl"
     h.write_config("compact_at = 0.5\ncontext_window = 10000\n")
