@@ -304,12 +304,20 @@ make harness        # black-box end-to-end harness (scripts/harness.py)
 A real-provider eval lives in `scripts/eval.py`:
 
 ```sh
-# set DEEPSEEK_API_KEY, AX_BASE_URL, and AX_MODEL, then:
+# set DEEPSEEK_API_KEY (or DEEPSEEK_FLASH_KEY), then:
 make eval
+
+# three attempts per scenario, only the safety and bot-program cases:
+AX_EVAL_ATTEMPTS=3 AX_EVAL_ONLY=secret_guard,bot_instructions \
+  AX_EVAL_JSON=/tmp/eval.json make eval
 ```
 
+It defaults to `https://api.deepseek.com` and `deepseek-flash` in `catalog`
+mode; `AX_BASE_URL`, `AX_MODEL`, `AX_TOOL_MODE=direct` and `AX_BIN` override.
 It drives the real binary against a real provider through a real Botdir bot
-root and the real tool providers, asserting on observable artifacts. It skips
-cleanly until the three variables are set.
+root and the real tool providers, asserting on artifacts, session continuity,
+tool use and safety (no secret leaks, no over-deleting). It skips cleanly
+without a key. `AX_BIN` also compares prompts: build the baseline and the
+candidate, then run the same suite against each.
 
 See [CONTRIBUTING.md](../../CONTRIBUTING.md) for internals.
