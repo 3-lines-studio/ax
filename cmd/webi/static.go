@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// The UI is pixi's: same CSS, same app.js, same PWA shell. What changed is
-// where the data comes from.
+// The UI is a compact web shell: the CSS, app.js and PWA shell pixi used,
+// with the data coming from ax instead.
 //
 //go:embed static
 var staticFiles embed.FS
@@ -26,7 +26,7 @@ func staticHandler() http.Handler {
 	}
 	files := http.FileServer(http.FS(root))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The shell asks for /static/app.js, the convention pixi's UI uses;
+		// The shell asks for /static/app.js, the convention ax's UI uses;
 		// the embedded files live at the root of the sub-filesystem, so strip
 		// that one prefix before looking them up.
 		//

@@ -13,6 +13,9 @@ boti promote   # build this checkout and activate it when the bot is idle
 boti rollback  # switch back to the previous build
 ```
 
+A missing `bot.toml` is not an error: `boti -C ~/bots/me serve` serves the
+default webi (127.0.0.1:8377) for a first run.
+
 `boti run` replaces itself with the consumer (a container entrypoint).
 `boti serve` stays in front: it starts the transport from `[boti.serve]`, polls its
 health URL, restarts it when it exits and, after three failures in a minute,

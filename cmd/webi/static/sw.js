@@ -1,8 +1,8 @@
-/* pixi service worker: network-first for the shell so the last good UI is
+/* ax service worker: network-first for the shell so the last good UI is
    still available if a bad build breaks its assets. Never caches the API.
    The cache name stays v1 on purpose: installing the new worker refreshes the
    shell in place and never throws away the last good copy. */
-const CACHE = 'pixi-shell-v1';
+const CACHE = 'ax-shell-v1';
 const SHELL = ['/', '/static/app.js', '/static/app.css', '/static/icon-192.png', '/static/icon-512.png', '/static/fonts/geist-latin.woff2', '/static/fonts/geist-mono-latin.woff2'];
 
 self.addEventListener('install', (e) => {
@@ -72,7 +72,7 @@ self.addEventListener('notificationclick', (event) => {
     });
     if (client) {
       try { await client.focus(); } catch (err) {}
-      client.postMessage({ type: 'pixi-open', thread: data.thread || '', channel: data.channel || '' });
+      client.postMessage({ type: 'ax-open', thread: data.thread || '', channel: data.channel || '' });
       return;
     }
     if (self.clients.openWindow) {
