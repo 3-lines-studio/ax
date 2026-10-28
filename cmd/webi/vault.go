@@ -371,6 +371,48 @@ func (v *Vault) verify(pin string) error {
 	return nil
 }
 
+// Key returns a copy of the derived key, or nil while the vault is locked.
+func (v *Vault) Key() []byte {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return append([]byte(nil), v.key...)
+}
+
+// Adopt installs a key the host kept across restarts. The key is verified
+// against the file, so a stale one leaves the vault locked instead of
+// corrupting it on the next write.
+func (v *Vault) Adopt(key []byte) error {
+	if len(key) != vaultKeyLen {
+		return errWrongPIN
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if !v.exists {
+		return nil
+	}
+	file, err := readVaultFile(v.path)
+	if err != nil {
+		return err
+	}
+	plain, err := decrypt(file, key)
+	if err != nil {
+		return errWrongPIN
+	}
+	var data vaultData
+	if err := json.Unmarshal(plain, &data); err != nil {
+		return err
+	}
+	if data.Items == nil {
+		data.Items = map[string]map[string]string{}
+	}
+	if data.LastUsed == nil {
+		data.LastUsed = map[string]int64{}
+	}
+	v.key = append([]byte(nil), key...)
+	v.data = data
+	return nil
+}
+
 // loadLocked decrypts the file into memory and returns the key, so Unlock does
 // not have to derive it twice.
 func (v *Vault) loadLocked(pin string) ([]byte, error) {
