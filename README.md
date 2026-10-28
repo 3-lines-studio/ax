@@ -41,7 +41,24 @@ make build          # bin/<program> for all programs
 make install        # ~/.local/bin, override with PREFIX=/usr/local
 ```
 
-## Quick start
+## Start with the UI
+
+```sh
+curl -fsSL https://github.com/3-lines-studio/ax/releases/latest/download/install.sh | sh
+webi -C ~/bots/me
+```
+
+The first run creates `~/bots/me` with a starter `bot.toml`, prints a token
+URL and opens it in your browser. The page asks for a vault PIN (8+
+characters) and a DeepSeek API key (any OpenAI-compatible endpoint works via
+Settings), once, and then you are chatting. For a phone or another computer,
+start it with `-listen 0.0.0.0:8377` and open the "Other devices" URL the
+terminal prints. Running `webi` from your home directory uses `~/bots/default`;
+`-C` accepts `~/`. To keep it running under the supervisor, use
+`boti -C ~/bots/me serve` (a systemd unit is in
+[docs/deploy.md](docs/deploy.md)).
+
+## CLI quick start
 
 ```sh
 DEEPSEEK_API_KEY=... ax "explain this repository"

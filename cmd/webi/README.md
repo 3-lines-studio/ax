@@ -6,13 +6,16 @@ directory (`bot.toml`, `workspace/`, `skills/`); a thread is an ax session log.
 
 ```sh
 ax mcp add sentry             # whatever the bot needs
-webi -C ~/bots/team -listen 127.0.0.1:8377
+webi -C ~/bots/team
 ```
 
-Open `http://127.0.0.1:8377/?token=<token>` once; the token is in
-`<state>/token` (created on first run, 0600). The visit sets a cookie and
-redirects the token out of the URL. Flags: `-ax` (binary), `-state` (default
-`<BOT_DATA>/state/webi`), `-base`/`-model` overrides.
+If `~/bots/team` does not exist, webi creates it with a starter `bot.toml`.
+In a terminal it prints a token URL (`?token=...`) and opens it; the visit
+sets a cookie and redirects the token out of the URL. On another device use
+the "Other devices" URL, or `?token=` from `<state>/token` (created on first
+run, 0600). Flags: `-ax` (binary), `-state` (default
+`<BOT_DATA>/state/webi`), `-base`/`-model` overrides, `-open=false` to skip
+the browser.
 
 ## Access
 
@@ -33,7 +36,7 @@ only, no inline script), `nosniff` and no referrer.
   `BOT_DATA=<channel workdir>`, so a channel is an independent bot: its tools
   work there and its `workspace/`, `skills/` and `secrets/` are its own. The
   host's `BOT_DATA` only holds webi's state (channels, threads, vault).
-- The UI (pixi's static app) gets `delta`, `message`, `run`, `step`, `compact`
+- The UI (the embedded static app) gets `delta`, `message`, `run`, `step`, `compact`
   and `state` events over `/api/stream`.
 - History is read straight from the ax session log, so a thread survives a
   restart and `slaxi` can read the same conversation format.
@@ -112,5 +115,5 @@ build should not be activated.
 
 ## Not here yet
 
-Slack-specific formatting and pixi's supervisor. Threads compact themselves in
+Slack-specific formatting and ax's supervisor. Threads compact themselves in
 ax (`compact_at`), and a compaction shows up as a divider in the UI.

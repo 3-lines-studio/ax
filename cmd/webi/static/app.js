@@ -1,7 +1,7 @@
 'use strict';
 
 /* ===========================================================================
-   pixi UI — vanilla JS, no build step, no dependencies.
+   ax UI — vanilla JS, no build step, no dependencies.
    =========================================================================== */
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -112,9 +112,9 @@ function maybeReloadCode() {
   const ae = document.activeElement;
   if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
   let seen = '';
-  try { seen = sessionStorage.getItem('pixi.reload') || ''; } catch (e) {}
+  try { seen = sessionStorage.getItem('ax.reload') || ''; } catch (e) {}
   if (seen === S.newBuild) return;
-  try { sessionStorage.setItem('pixi.reload', S.newBuild); } catch (e) {}
+  try { sessionStorage.setItem('ax.reload', S.newBuild); } catch (e) {}
   location.reload();
 }
 
@@ -178,7 +178,7 @@ async function boot() {
   try {
     await refreshState();
   } catch (e) {
-    $('#main').innerHTML = '<div class="boot">cannot reach pixi: ' + esc(e.message) + '</div>';
+    $('#main').innerHTML = '<div class="boot">cannot reach ax: ' + esc(e.message) + '</div>';
   }
   await route();
   connectSSE();
@@ -249,7 +249,7 @@ function scheduleStateRefresh() {
 
 /* ---------------------------------------------------------------- routing */
 
-const ROUTE_KEY = 'pixi.route';
+const ROUTE_KEY = 'ax.route';
 
 /* A killed and relaunched PWA starts at "/" and would forget the open thread.
    Remember the last hash and put it back before the first route, without
@@ -351,7 +351,7 @@ function keyBannerHTML() {
   // banner already explains how to fix that.
   const v = S.state.vault;
   if (!v || !v.exists || v.locked) return '';
-  return '<div class="banner key"><div class="grow">No DeepSeek API key yet. Add one to start chatting.</div>' +
+  return '<div class="banner key"><div class="grow">Add your DeepSeek API key to start chatting. It stays in the vault. <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">Get a key</a>.</div>' +
     '<button class="btn" data-action="add-key">Add key</button></div>';
 }
 
@@ -362,7 +362,7 @@ function emptyHTML(title, sub) {
 function emptyThreadHTML() {
   return '<div class="empty thread-empty">' +
     '<span class="logo empty-logo" aria-hidden="true"></span>' +
-    '<strong>Ask pixi anything</strong>' +
+    '<strong>Ask ax anything</strong>' +
     '<span>Message below, or attach an image.</span></div>';
 }
 
@@ -371,7 +371,7 @@ function emptyThreadHTML() {
 function vaultBannerHTML() {
   const v = S.state && S.state.vault;
   if (!v || !v.exists) {
-    return '<div class="banner vault"><div class="grow">No vault yet. Secrets stay encrypted on disk.</div>' +
+    return '<div class="banner vault"><div class="grow">Create a vault to keep your API key encrypted on disk. You choose a PIN of 8+ characters.</div>' +
       '<button class="btn" data-action="vault-create">Create vault</button></div>';
   }
   if (!v.locked) return '';
@@ -389,7 +389,7 @@ function secretBannerHTML() {
   const s = currentSecret();
   if (!s) return '';
   const what = s.description ? ' — ' + esc(s.description) : '';
-  return '<div class="banner secret"><div class="grow">pixi needs <strong>' + esc(s.name) + '</strong> (' + esc(s.scope) + ')' + what + '</div>' +
+  return '<div class="banner secret"><div class="grow">ax needs <strong>' + esc(s.name) + '</strong> (' + esc(s.scope) + ')' + what + '</div>' +
     '<textarea id="secret-value" rows="2" spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" placeholder="value or file content" aria-label="' + esc(s.name) + '" title="Ctrl+Enter saves"></textarea>' +
     '<button class="btn primary" data-action="secret-save">Save</button>' +
     '<button class="btn" data-action="secret-skip">Skip</button></div>';
@@ -853,7 +853,7 @@ function renderHome() {
   const chans = (S.state && S.state.channels) || [];
   $('#main').innerHTML =
     '<header class="topbar"><button class="icon-btn menu-btn" data-action="drawer" aria-label="Channels" aria-expanded="false">' + ico('list') + '</button>' +
-    '<div class="titles"><h1>pixi</h1><p>a small self-hosted assistant</p></div>' +
+    '<div class="titles"><h1>ax</h1><p>a small self-hosted assistant</p></div>' +
     '<div class="actions"><button class="btn primary" data-action="new-channel">New channel</button></div></header>' +
     keyBannerHTML() + vaultBannerHTML() +
     '<div class="scroll"><div class="pad">' +
@@ -890,7 +890,7 @@ function renderChannelView() {
     '<div class="scroll"><div class="pad">' +
     (threads.length
       ? '<div class="thread-list">' + threads.map(threadItemHTML).join('') + '</div>'
-      : emptyHTML('No threads yet', 'Start one and ask pixi anything.')) +
+      : emptyHTML('No threads yet', 'Start one and ask ax anything.')) +
     '</div></div>';
 }
 
@@ -904,7 +904,7 @@ function renderThreadShell() {
     '<div class="composer-wrap">' + jumpLatestHTML() + '<div class="pending" id="pending"></div>' +
     '<div class="composer" id="composer" data-thread="">' +
     '<button class="icon-btn" data-action="attach" title="Attach image" aria-label="Attach image">' + ico('paperclip') + '</button>' +
-    '<textarea id="input" rows="1" placeholder="Message pixi…" autocomplete="off" autocapitalize="sentences" aria-label="Message"></textarea>' +
+    '<textarea id="input" rows="1" placeholder="Message ax…" autocomplete="off" autocapitalize="sentences" aria-label="Message"></textarea>' +
     '<button class="send" id="send" data-action="send" title="Send" aria-label="Send message">' + ico('paper-plane-tilt') + '</button>' +
     '<button class="stop" id="stop" data-action="stop" title="Stop" aria-label="Stop" hidden>' + ico('stop') + '</button>' +
     '</div><div class="hint">Enter to send · Shift+Enter for a new line · Ctrl+K to search</div></div>';
@@ -946,7 +946,7 @@ function renderThreadView() {
     '<div class="composer-wrap">' + jumpLatestHTML() + '<div class="pending" id="pending"></div>' +
     '<div class="composer" id="composer" data-thread="' + esc(th.id) + '">' +
     '<button class="icon-btn" data-action="attach" title="Attach image" aria-label="Attach image">' + ico('paperclip') + '</button>' +
-    '<textarea id="input" rows="1" placeholder="Message pixi…" autocomplete="off" autocapitalize="sentences" aria-label="Message"></textarea>' +
+    '<textarea id="input" rows="1" placeholder="Message ax…" autocomplete="off" autocapitalize="sentences" aria-label="Message"></textarea>' +
     '<button class="send" id="send" data-action="send" title="Send" aria-label="Send message">' + ico('paper-plane-tilt') + '</button>' +
     '<button class="stop" id="stop" data-action="stop" title="Stop" aria-label="Stop" hidden>' + ico('stop') + '</button>' +
     '</div><div class="hint">Enter to send · Shift+Enter for a new line · Ctrl+K to search</div></div>';
@@ -1013,7 +1013,7 @@ function messageHTML(m) {
       '<div class="body">' + esc(m.text) + '</div></div></div>';
   }
   const isUser = m.t === 'user';
-  const name = isUser ? (m.author || (S.state ? S.state.user : 'you')) : 'pixi';
+  const name = isUser ? (m.author || (S.state ? S.state.user : 'you')) : 'ax';
   const body = (isUser ? '<p>' + esc(m.text).replace(/\n/g, '<br>') + '</p>' : md(m.text));
   return bubbleShell(isUser ? 'user' : 'assistant', name, m.ts, imagesHTML(m.images) + body);
 }
@@ -1021,7 +1021,7 @@ function messageHTML(m) {
 function liveHTML(id, text) {
   return '<div class="msg assistant live" id="live-' + esc(id) + '">' +
     '<div class="avatar">p</div><div class="body-wrap">' +
-    '<div class="head"><span class="who">pixi</span><span class="time"></span></div>' +
+    '<div class="head"><span class="who">ax</span><span class="time"></span></div>' +
     '<div class="body">' + md(text) + '<span class="caret"></span></div></div></div>';
 }
 
@@ -1053,7 +1053,7 @@ function renderWorking() {
       el = document.createElement('div');
       el.id = 'working';
       el.className = 'working';
-      el.innerHTML = '<span class="pulse-dot"></span><span>pixi is working…</span>';
+      el.innerHTML = '<span class="pulse-dot"></span><span>ax is working…</span>';
       box.appendChild(el);
     }
   } else if (el) {
@@ -1076,7 +1076,7 @@ function renderPending() {
 
 /* --------------------------------------------------------------- drafts */
 
-const DRAFT_PREFIX = 'pixi.draft.';
+const DRAFT_PREFIX = 'ax.draft.';
 const draftTimers = {};
 
 function getDraft(id) {
@@ -1130,7 +1130,7 @@ function setComposerMode() {
   send.hidden = false;
   stop.hidden = !S.running;
   const input = $('#input');
-  if (input) input.placeholder = S.running ? 'Steer this run…' : 'Message pixi…';
+  if (input) input.placeholder = S.running ? 'Steer this run…' : 'Message ax…';
   updateSendState();
 }
 
@@ -1356,7 +1356,7 @@ function handleEvent(ev) {
       if (ev.thread === S.threadId) loadThread(S.threadId);
       break;
     case 'secret':
-      if (ev.thread !== S.threadId && ev.secret) toast('pixi needs ' + ev.secret.name);
+      if (ev.thread !== S.threadId && ev.secret) toast('ax needs ' + ev.secret.name);
       refreshState().catch(() => {});
       break;
     case 'step':
@@ -1969,8 +1969,8 @@ async function newChannel() {
     submit: 'Create',
     fields: [
       { name: 'name', label: 'Name', placeholder: 'my-project' },
-      { name: 'workdir', label: 'Working directory', dir: true, placeholder: '/home/me/code/project', note: 'Where pixi runs tools in this channel.' },
-      { name: 'prompt', label: 'Channel instructions (optional)', textarea: true, placeholder: 'Extra instructions for pixi in this channel…' },
+      { name: 'workdir', label: 'Working directory', dir: true, placeholder: '/home/me/code/project', note: 'Where ax runs tools in this channel.' },
+      { name: 'prompt', label: 'Channel instructions (optional)', textarea: true, placeholder: 'Extra instructions for ax in this channel…' },
     ],
   });
   if (!v || !v.name.trim()) return;
@@ -2139,7 +2139,7 @@ function openDrawer() {
   document.body.classList.add('drawer');
   document.querySelectorAll('[data-action="drawer"]').forEach((b) => b.setAttribute('aria-expanded', 'true'));
   try {
-    history.pushState({ pixiDrawer: true }, '');
+    history.pushState({ axDrawer: true }, '');
     drawerOnHistory = true;
   } catch (e) { /* history can be unavailable in some webviews */ }
 }
@@ -2404,7 +2404,7 @@ function wireEvents() {
 /* Local notifications only: they fire while the app is alive (foreground or
    backgrounded tab/PWA). No push server, no VAPID, nothing to wake a closed
    app. Permission is requested from an explicit click, never on load. */
-const NOTIFY_PREF = 'pixi.notify';
+const NOTIFY_PREF = 'ax.notify';
 const NOTIFY_LONG_RUN = 10000;
 const NOTIFY = { started: new Map(), done: new Set() };
 
@@ -2445,7 +2445,7 @@ async function toggleNotify() {
   if (!notifySupported()) { toast('this browser cannot show notifications'); return; }
   if (notifyPermission() === 'denied') {
     // Never ask again once blocked; the browser would ignore it anyway.
-    toast('notifications are blocked for pixi. Allow them in the site settings (Android: app info → Notifications), then reload.', true);
+    toast('notifications are blocked for ax. Allow them in the site settings (Android: app info → Notifications), then reload.', true);
     return;
   }
   if (notifyActive()) {
@@ -2525,13 +2525,13 @@ async function notifyRunDone(threadId, err) {
     if (!text) text = lastAssistantText(S.messages);
   }
   const body = err ? 'falló: ' + clipText(err, 110) : (clipText(text, 120) || 'terminó');
-  await showRunNotification(title || 'pixi', body, threadId, channel);
+  await showRunNotification(title || 'ax', body, threadId, channel);
 }
 
 async function showRunNotification(title, body, threadId, channel) {
   const opts = {
     body: body,
-    tag: threadId || 'pixi-run',
+    tag: threadId || 'ax-run',
     renotify: true,
     icon: '/static/icon-192.png',
     badge: '/static/icon-192.png',
@@ -2587,7 +2587,7 @@ function registerSW() {
   if (!('serviceWorker' in navigator)) return;
   navigator.serviceWorker.addEventListener('message', (e) => {
     const d = e.data;
-    if (!d || d.type !== 'pixi-open') return;
+    if (!d || d.type !== 'ax-open') return;
     try { window.focus(); } catch (err) {}
     openFromNotification(d);
   });
