@@ -190,6 +190,11 @@ ax catalog --refresh           # bypass the MCP catalog cache
 appear as a compact cheat sheet in the system prompt, so common file and shell
 work can call `execute` directly without paying for a `search` turn.
 
+`memoryx` is the optional personal-memory provider. It keeps one JSON file per
+fact under `state/memory/` and exposes `search`, `get`, `verify`, `upsert` and
+`delete`; add it to `tools` when the bot should remember preferences across
+sessions. The data is readable and exportable; see [docs/memory.md](../../docs/memory.md).
+
 ### MCP servers
 
 ```toml

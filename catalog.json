@@ -117,6 +117,15 @@
       "doc": "cmd/skillx/README.md"
     },
     {
+      "name": "memoryx",
+      "kind": "provider",
+      "role": "Personal memory",
+      "description": "Durable personal facts as readable JSON files under state/memory, exposed as search/get/verify/upsert/delete tools for ax.",
+      "protocol": "describe/run",
+      "depends_on": [],
+      "doc": "cmd/memoryx/README.md"
+    },
+    {
       "name": "attachx",
       "kind": "provider",
       "role": "Conversation attachment tool",
