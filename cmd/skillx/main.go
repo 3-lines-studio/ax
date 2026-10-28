@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/3-lines-studio/ax/internal/skill"
 )
 
 const maxInput = 16 * 1024
@@ -21,12 +23,6 @@ var descriptors = []string{
 
 type arguments struct {
 	Name string `json:"name"`
-}
-
-type skill struct {
-	name        string
-	description string
-	content     string
 }
 
 type store struct {
@@ -91,31 +87,14 @@ func pathExists(path string) bool {
 }
 
 func openStore() (*store, error) {
-	if root := os.Getenv("BOT_ROOT"); root != "" {
-		if skillsDir := filepath.Join(root, "skills"); pathExists(skillsDir) {
-			open, err := os.OpenRoot(skillsDir)
-			if err != nil {
-				return nil, err
-			}
-			return &store{roots: []*os.Root{open}}, nil
-		}
-	}
-	projectPaths := []string{filepath.Join("skills"), filepath.Join(".agents", "skills")}
-	var paths []string
-	for _, path := range projectPaths {
-		if pathExists(path) {
-			paths = append(paths, path)
-			break
-		}
-	}
-	if home, err := os.UserHomeDir(); err != nil {
+	home, err := os.UserHomeDir()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: resolve home directory: %v\n", err)
-	} else {
-		paths = append(paths, filepath.Join(home, ".agents", "skills"))
+		home = ""
 	}
 	skills := &store{}
 	seen := make(map[string]struct{})
-	for _, path := range paths {
+	for _, path := range skill.Roots(os.Getenv("BOT_ROOT"), ".", home) {
 		absolute, err := filepath.Abs(path)
 		if err != nil {
 			skills.close()
@@ -156,120 +135,50 @@ func decode(input []byte, value any) {
 }
 
 func (skills *store) list() (string, error) {
-	items := make([]skill, 0)
+	items := make([]skill.Skill, 0)
 	seen := make(map[string]struct{})
-	for _, skillRoot := range skills.roots {
-		root, err := skillRoot.Open(".")
+	for _, root := range skills.roots {
+		found, err := skill.List(root)
 		if err != nil {
 			return "", err
 		}
-		entries, err := root.ReadDir(-1)
-		_ = root.Close()
-		if err != nil {
-			return "", err
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() || validateName(entry.Name()) != nil {
+		for _, item := range found {
+			if item.Error != "" {
 				continue
 			}
-			if _, exists := seen[entry.Name()]; exists {
+			if _, exists := seen[item.Name]; exists {
 				continue
 			}
-			item, err := load(skillRoot, entry.Name())
-			if err != nil || strings.TrimSpace(item.description) == "" {
-				continue
-			}
-			seen[item.name] = struct{}{}
+			seen[item.Name] = struct{}{}
 			items = append(items, item)
 		}
 	}
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].name < items[j].name
-	})
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 	if len(items) == 0 {
 		return "No skills installed.", nil
 	}
 	var result strings.Builder
 	for _, item := range items {
-		fmt.Fprintf(&result, "- %s: %s\n", item.name, item.description)
+		fmt.Fprintf(&result, "- %s: %s\n", item.Name, item.Description)
 	}
 	return result.String(), nil
 }
 
 func (skills *store) read(name string) (string, error) {
-	if err := validateName(name); err != nil {
+	if err := skill.ValidName(name); err != nil {
 		return "", err
 	}
 	for _, root := range skills.roots {
-		item, err := load(root, name)
-		if err != nil || strings.TrimSpace(item.description) == "" {
+		item, err := skill.Read(root, name)
+		if err != nil || item.Error != "" {
 			continue
 		}
-		if item.content == "" {
+		if item.Body == "" {
 			return "Skill is empty.", nil
 		}
-		return item.content, nil
+		return item.Body, nil
 	}
 	return "", fmt.Errorf("skill not found: %s", name)
-}
-
-func load(root *os.Root, name string) (skill, error) {
-	content, err := root.ReadFile(filepath.Join(name, "SKILL.md"))
-	if err != nil {
-		return skill{}, err
-	}
-	description, body := parse(string(content))
-	return skill{name: name, description: description, content: body}, nil
-}
-
-func parse(content string) (string, string) {
-	if strings.HasPrefix(content, "---") {
-		rest := strings.TrimPrefix(content, "---")
-		if end := strings.Index(rest, "\n---"); end >= 0 {
-			frontmatter := rest[:end]
-			body := strings.TrimLeft(rest[end+4:], "\n")
-			description := ""
-			for _, line := range strings.Split(frontmatter, "\n") {
-				key, value, found := strings.Cut(line, ":")
-				if found && strings.TrimSpace(key) == "description" {
-					description = strings.TrimSpace(value)
-				}
-			}
-			if description == "" {
-				description = firstLine(body)
-			}
-			return description, body
-		}
-	}
-	return firstLine(content), content
-}
-
-func firstLine(content string) string {
-	for _, line := range strings.Split(content, "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			return line
-		}
-	}
-	return ""
-}
-
-func validateName(name string) error {
-	if len(name) == 0 || len(name) > 64 {
-		return errors.New("invalid skill name")
-	}
-	if name[0] == '-' || name[len(name)-1] == '-' || strings.Contains(name, "--") {
-		return errors.New("invalid skill name")
-	}
-	for _, character := range name {
-		if character < 'a' || character > 'z' {
-			if character < '0' || character > '9' {
-				if character != '-' {
-					return errors.New("invalid skill name")
-				}
-			}
-		}
-	}
-	return nil
 }
 
 func fail(status int, message string) {

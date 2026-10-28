@@ -1006,3 +1006,52 @@ dialog.wide-dialog .field.grow textarea { flex: 1 1 auto; min-height: 220px; res
 }
 .routine-channel { color: var(--faint); font-size: 11px; font-weight: 400; }
 .routine-runid { color: var(--faint); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 2px; }
+
+/* ------------------------------------------------------------------ memory */
+.memory-dialog .modal-body { max-height: 58vh; overflow-y: auto; }
+.memory-search { padding: 0 18px 12px; }
+.memory-search input {
+  width: 100%; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--text); font: inherit;
+}
+.memory-search input:focus { outline: none; border-color: var(--muted); }
+.memory-row {
+  display: flex; gap: 12px; justify-content: space-between; align-items: flex-start;
+  padding: 12px 0; border-bottom: 1px solid var(--line-soft);
+}
+.memory-row:last-child { border-bottom: 0; }
+.memory-main { min-width: 0; }
+.memory-main p { margin: 4px 0 0; color: var(--muted); }
+.memory-subject { font-weight: 600; }
+.memory-meta { color: var(--faint); font-size: 12px; margin-top: 4px; }
+.memory-detail p { margin: 10px 0; }
+.memory-body {
+  margin: 10px 0; padding: 10px 12px; border-radius: 9px; background: var(--panel-2);
+  border: 1px solid var(--line-soft); white-space: pre-wrap; overflow-wrap: anywhere;
+  font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text);
+}
+.memory-sources { margin: 10px 0; font-size: 12px; overflow-wrap: anywhere; }
+.memory-actions { margin-top: 14px; }
+@media (max-width: 640px) {
+  .memory-row { flex-direction: column; gap: 8px; }
+  .memory-row .routine-actions { width: 100%; }
+}
+
+/* ------------------------------------------------------------------ skills */
+.skills-dialog .modal-body { max-height: 58vh; overflow-y: auto; }
+.skill-detail .memory-meta { margin-bottom: 12px; }
+.skill-body { font-size: 14.5px; line-height: 1.55; overflow-wrap: anywhere; }
+.skill-body > :first-child { margin-top: 0; }
+.skill-body p { margin: 0 0 10px; }
+.skill-body h1, .skill-body h2, .skill-body h3, .skill-body h4 { margin: 16px 0 7px; font-size: 15px; line-height: 1.35; letter-spacing: -.01em; }
+.skill-body ul, .skill-body ol { margin: 0 0 10px; padding-left: 22px; }
+.skill-body li { margin: 2px 0; }
+.skill-body blockquote { margin: 0 0 10px; padding: 2px 0 2px 12px; border-left: 2px solid #2c343c; color: var(--muted); }
+.skill-body code {
+  font-family: var(--mono); font-size: 13px; color: #bfe9cf;
+  background: #101619; border: 1px solid #1f2a25;
+  border-radius: var(--r-pill); padding: 1px 6px;
+}
+.skill-body pre { margin: 0 0 10px; padding: 11px 12px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.55; }
+.skill-body pre code { background: none; border: 0; padding: 0; font-size: inherit; color: var(--text); }
+.skill-error { color: var(--danger); }

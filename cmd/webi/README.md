@@ -146,6 +146,24 @@ The sidebar's **Routines** view lists them with their channel, **Run now**,
 view stays current and the PWA can notify on failures. See
 [docs/routines.md](../../docs/routines.md).
 
+## Memory and skills
+
+The sidebar's **Memory** view reads the current channel's store
+(`state/memory/`): search, open one, or forget it (a soft delete; the file stays
+until you remove it). The **Skills** view lists the directories skillx would
+give the agent — the bot's `skills/`, or the workspace and user fallbacks —
+shows each `SKILL.md`, and flags what the agent ignores: a missing file, no
+description, or a directory whose name is not lowercase-dashes. Both use the
+same token as the rest of the API:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/memory?channel=<id>&q=&limit=` | active memories, or search |
+| `GET /api/memory/<id>?channel=<id>` | one memory |
+| `DELETE /api/memory/<id>?channel=<id>&force=1` | soft delete, or remove |
+| `GET /api/skills?channel=<id>` | skills with their source and errors |
+| `GET /api/skills/<name>?channel=<id>` | one skill's body |
+
 ## Not here yet
 
 Slack-specific formatting and ax's supervisor. Threads compact themselves in
