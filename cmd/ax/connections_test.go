@@ -196,9 +196,9 @@ func TestConnectionAndLegacyToolsShareTheNamespace(t *testing.T) {
 	}
 }
 
-func TestCappedSourceForwardsAuthState(t *testing.T) {
+func TestConnSourceForwardsAuthState(t *testing.T) {
 	inner := &authSource{}
-	source := newCappedSource(inner, "x", []string{"x.echo"})
+	source := newConnSource(inner, connection{id: "x", trust: trustAuto, caps: []string{"x.echo"}})
 	status, ok := source.(catalog.AuthStatus)
 	if !ok || !status.RequiresAuth() {
 		t.Fatal("capped source lost the login hint")
@@ -208,3 +208,100 @@ func TestCappedSourceForwardsAuthState(t *testing.T) {
 type authSource struct{ testSource }
 
 func (s *authSource) RequiresAuth() bool { return true }
+
+const mockReadWrite = `#!/bin/sh
+if [ "$1" = "describe" ]; then
+  printf '%s\n' '{"name":"list","description":"List things","parameters":{"type":"object"},"read_only":true}'
+  printf '%s\n' '{"name":"delete","description":"Delete a thing","parameters":{"type":"object"}}'
+  exit 0
+fi
+if [ "$1" = "run" ]; then printf 'ran %s' "$2"; exit 0; fi
+exit 2
+`
+
+func TestConnectionTrustReadKeepsReadOnlyTools(t *testing.T) {
+	bin := writeMockTool(t, mockReadWrite)
+	fc := fileConfig{connections: []connectionEntry{{ID: "repo", Kind: "local", Command: bin, Trust: "read"}}}
+	sources, err := buildSources(fc, resolveBotCtx(t.TempDir()), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := sources[0].List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 1 || tools[0].Name != "list" {
+		t.Fatalf("tools = %+v", tools)
+	}
+	if _, err := sources[0].Call(context.Background(), "delete", nil); err == nil ||
+		!strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("write through a read-only connection: err = %v", err)
+	}
+	if _, err := sources[0].Call(context.Background(), "list", nil); err != nil {
+		t.Fatalf("read through a read-only connection: %v", err)
+	}
+}
+
+func TestConnectionTrustAutoKeepsEverything(t *testing.T) {
+	bin := writeMockTool(t, mockReadWrite)
+	for _, trust := range []string{"", "auto", "full"} {
+		fc := fileConfig{connections: []connectionEntry{{ID: "repo", Kind: "local", Command: bin, Trust: trust}}}
+		sources, err := buildSources(fc, resolveBotCtx(t.TempDir()), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tools, err := sources[0].List(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(tools) != 2 {
+			t.Fatalf("trust %q: tools = %+v", trust, tools)
+		}
+	}
+}
+
+func TestConnectionTrustValidation(t *testing.T) {
+	bin := writeMockTool(t, mockReadWrite)
+	fc := fileConfig{connections: []connectionEntry{{ID: "repo", Kind: "local", Command: bin, Trust: "rw"}}}
+	if _, err := buildSources(fc, resolveBotCtx(t.TempDir()), true); err == nil ||
+		!strings.Contains(err.Error(), "unknown trust") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestConnListJSON(t *testing.T) {
+	bin := writeMockTool(t, mockReadWrite)
+	fc := fileConfig{
+		tools: bin,
+		connections: []connectionEntry{{ID: "web", Kind: "local", Command: bin,
+			Trust: "read", Capabilities: []string{"web.list", "web.delete"}}},
+	}
+	out := captureStdout(t, func() { connListCommand(fc, resolveBotCtx(t.TempDir()), []string{"--json"}) })
+	var listed []map[string]string
+	if err := json.Unmarshal([]byte(out), &listed); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("listed = %+v", listed)
+	}
+	first := listed[0]
+	if first["id"] != "web" || first["trust"] != "read" || first["capabilities"] != "2" || first["status"] != "ready" {
+		t.Fatalf("web = %+v", first)
+	}
+	if listed[1]["id"] != "mocktool" || listed[1]["trust"] != "auto" || listed[1]["capabilities"] != "all" {
+		t.Fatalf("legacy = %+v", listed[1])
+	}
+}
+
+func TestConnDoctorReportsDeclaredAndEnabled(t *testing.T) {
+	bin := writeMockTool(t, mockReadWrite)
+	fc := fileConfig{connections: []connectionEntry{{ID: "repo", Kind: "local", Command: bin,
+		Trust: "read", Capabilities: []string{"repo.list"}}}}
+	out := captureStdout(t, func() { connDoctorCommand(fc, resolveBotCtx(t.TempDir()), nil) })
+	if !strings.Contains(out, "2 declared, 1 on") {
+		t.Fatalf("doctor = %s", out)
+	}
+	if !strings.Contains(out, "repo") || !strings.Contains(out, "ready") {
+		t.Fatalf("doctor = %s", out)
+	}
+}
