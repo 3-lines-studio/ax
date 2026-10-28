@@ -19,13 +19,21 @@ import (
 const defaultInstallURL = "https://github.com/3-lines-studio/ax/releases/latest/download/install.sh"
 
 type botConfig struct {
-	Model    string            `toml:"model"`
-	BaseURL  string            `toml:"base_url"`
-	Tools    []string          `toml:"tools"`
-	Consumer string            `toml:"consumer"`
-	Env      map[string]string `toml:"env"`
-	PreRun   []preRunHook      `toml:"pre_run"`
-	Boti     botiConfig        `toml:"boti"`
+	Model       string            `toml:"model"`
+	BaseURL     string            `toml:"base_url"`
+	Tools       []string          `toml:"tools"`
+	Consumer    string            `toml:"consumer"`
+	Env         map[string]string `toml:"env"`
+	PreRun      []preRunHook      `toml:"pre_run"`
+	Boti        botiConfig        `toml:"boti"`
+	Connections []connectionEntry `toml:"connection"`
+}
+
+// connectionEntry is only what the host needs from a [[connection]]: where the
+// provider lives and how to start it. The engine owns the rest.
+type connectionEntry struct {
+	Kind    string `toml:"kind"`
+	Command string `toml:"command"`
 }
 
 // botiConfig is bot.toml's [boti] table, the host's own configuration. Botdir
@@ -335,6 +343,15 @@ func botPackages(root string) ([]string, error) {
 	}
 	if len(bc.Boti.Serve.Command) > 0 {
 		add(bc.Boti.Serve.Command[0])
+	}
+	// Connections are the unit: a local provider is a program the host has to
+	// install and check, exactly like a legacy tools entry.
+	for _, connection := range bc.Connections {
+		kind := strings.ToLower(strings.TrimSpace(connection.Kind))
+		if kind != "" && kind != "local" {
+			continue
+		}
+		add(connection.Command)
 	}
 	for _, t := range bc.Tools {
 		add(t)
