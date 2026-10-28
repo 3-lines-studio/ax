@@ -28,6 +28,7 @@ const (
 	TypeUsage          = "usage"
 	TypeCompaction     = "compaction"
 	TypeSteer          = "steer"
+	TypeResume         = "resume"
 	TypeMessage        = "message"
 	TypeResult         = "result"
 	TypeError          = "error"

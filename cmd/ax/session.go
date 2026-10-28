@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -79,6 +80,9 @@ type sessionState struct {
 	LastRunID   string
 	LastPartial *Message
 	Repaired    int
+	// Interrupted names the targets whose tool call never recorded a result,
+	// in call order. It is what the resume turn tells the model to verify.
+	Interrupted []string
 	Usage       Usage
 }
 
@@ -120,6 +124,9 @@ func deriveSession(entries []sessionEntry) sessionState {
 				output = interruptedToolOutput
 				if target := targets[call.ID]; target != "" {
 					output = fmt.Sprintf("error: tool call interrupted before its result was recorded (target: %s): its side effects are unknown.", target)
+					state.Interrupted = append(state.Interrupted, target)
+				} else {
+					state.Interrupted = append(state.Interrupted, call.Name)
 				}
 				state.Repaired++
 			}
@@ -327,4 +334,20 @@ func (l *sessionLog) close() error {
 	defer l.mu.Unlock()
 	unlockFile(l.file)
 	return l.file.Close()
+}
+
+// resumePrompt is the synthetic user turn that restarts a run whose process
+// died. It names the calls that never recorded a result so the model verifies
+// the state instead of blindly repeating them: ax reports the interruption, it
+// never replays a call.
+func resumePrompt(state sessionState) string {
+	var out strings.Builder
+	out.WriteString("Resume the interrupted run from where it stopped.")
+	if len(state.Interrupted) > 0 {
+		out.WriteString(" These calls never recorded a result: ")
+		out.WriteString(strings.Join(state.Interrupted, ", "))
+		out.WriteString(". Their side effects are unknown, so check the state before repeating one.")
+	}
+	out.WriteString(" Do not start the task over or repeat work that is already done.")
+	return out.String()
 }
