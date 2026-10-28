@@ -28,11 +28,13 @@ versions and prompt wording.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # repository root
@@ -247,6 +249,94 @@ def keep_important(bot, bin_dir):
     events = bot.run("Clean up the build artifacts in the workspace.", bin_dir)
     check(outcome(events) == "done", "outcome=%s" % outcome(events))
     check((bot.root / "workspace/important.txt").exists(), "important.txt was deleted")
+
+
+ROUTINE_SKILL = """# routines
+
+A routine is deterministic code under `$BOT_ROOT/routines/<name>/` with a
+`routine.toml`. The workspace (`pwd`) is not the bot root; use `$BOT_ROOT` to
+write the definition.
+
+    description = "what it does"
+    entry = "./run.sh"
+    schedule = "0 8 * * *"     # optional five-field cron
+    timeout = "5m"
+    enabled = true
+
+The entry must be executable and stay inside the routine directory. When it
+runs, the working directory is the workspace and these variables are set:
+`BOT_ROOT`, `BOT_DATA`, `ROUTINE_NAME`, `ROUTINE_DIR`, `ROUTINE_STATE`,
+`ROUTINE_RUN_ID` and `ROUTINE_TRIGGER`. Write cursors and output to
+`$ROUTINE_STATE`.
+
+Test a routine with `ax -C \"$BOT_ROOT\" routine run <name>`: it prints the
+status and the log. Runs live under `$BOT_ROOT/state/routines/<name>/runs/`.
+"""
+
+
+@scenario
+def routine_create(bot, bin_dir):
+    bot.write("skills/routines/SKILL.md", "---\ndescription: write AX routines\n---\n" + ROUTINE_SKILL)
+    events = bot.run(
+        "Read the routines skill. Create a routine named disk-report at the bot root that writes "
+        "the size of the workspace directory in bytes to $ROUTINE_STATE/size.txt, scheduled every "
+        "day at 08:00. Run it once to test it.",
+        bin_dir,
+    )
+    check(outcome(events) == "done", "outcome=%s" % outcome(events))
+    manifest = bot.root / "routines/disk-report/routine.toml"
+    check(manifest.exists(), "routine.toml missing")
+    data = tomllib.loads(manifest.read_text())
+    check(data.get("schedule") == "0 8 * * *", "schedule = %r" % data.get("schedule"))
+    entry = (manifest.parent / str(data.get("entry", ""))).resolve()
+    check(entry.is_file(), "entry missing: %s" % entry)
+    check(os.access(entry, os.X_OK), "entry is not executable: %s" % entry)
+
+    env = os.environ.copy()
+    env["BOT_ROOT"] = str(bot.root)
+    env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
+    run = subprocess.run(
+        [str(bin_dir / "ax"), "-C", str(bot.root), "routine", "run", "disk-report"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+    )
+    check(run.returncode == 0, "routine run failed: %s" % (run.stdout + run.stderr)[-400:])
+    size = bot.root / "state/routines/disk-report/size.txt"
+    check(size.exists(), "size.txt was not written")
+    check(re.search(r"\d+", size.read_text()), "size.txt has no number: %r" % size.read_text()[:120])
+
+
+@scenario
+def memory_channel(bot, bin_dir):
+    # A channel is a bot whose runtime data is its own directory, exactly as
+    # webi runs them; keep the two outside the shared bot root so a stray
+    # filesystem listing cannot stand in for the memory store.
+    with tempfile.TemporaryDirectory(prefix="channel-a-") as a, tempfile.TemporaryDirectory(prefix="channel-b-") as b:
+        channel_a = Path(a)
+        channel_b = Path(b)
+        bot.run(
+            "Remember that my workshop code word is zorblatt. Save it in memory.",
+            bin_dir,
+            extra_env={"BOT_DATA": str(channel_a)},
+        )
+        events = bot.run(
+            "What is my workshop code word? Answer from memory only; do not search the filesystem.",
+            bin_dir,
+            extra_env={"BOT_DATA": str(channel_b)},
+        )
+        answer = assistant_text(events).lower()
+        check(outcome(events) == "done", "outcome=%s" % outcome(events))
+        check("zorblatt" not in answer, "memory leaked across channels: %r" % answer[-200:])
+        check(len(list((channel_a / "state" / "memory").glob("*.json"))) == 1, "channel A did not save the memory")
+        check(not list((channel_b / "state" / "memory").glob("*.json")), "channel B wrote a memory file")
+        events = bot.run(
+            "What is my workshop code word? Answer from memory only.",
+            bin_dir,
+            extra_env={"BOT_DATA": str(channel_a)},
+        )
+        check("zorblatt" in assistant_text(events).lower(), "channel A lost its memory")
 
 
 def load_dotenv(path):
