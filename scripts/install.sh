@@ -167,5 +167,12 @@ done
 
 case ":$PATH:" in
     *":$bindir:"*) ;;
-    *) echo "install: $bindir is not on PATH" >&2 ;;
+    *) echo "install: $bindir is not on PATH; add it with: export PATH=\"$bindir:\$PATH\"" >&2 ;;
 esac
+
+if [ -x "$bindir/webi" ]; then
+    if [ ! -x "$bindir/ax" ]; then
+        echo "install: webi needs ax; install it with: install.sh ax" >&2
+    fi
+    echo "next: webi -C ~/bots/me"
+fi
