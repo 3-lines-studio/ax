@@ -51,8 +51,12 @@ boti -C ~/bots/example logs -n 50
 boti -C ~/bots/example restart
 ```
 
-`webi` binds `127.0.0.1` on purpose. To reach it from outside, put something in
-front (next section); do not open the port.
+`webi` binds `127.0.0.1` by default. Every request except `/healthz` and
+`/readyz` needs the API token, so a public listener is not an open door, but
+still put TLS in front (next section). The first visit is
+`http://host:8377/?token=$(cat <data>/state/webi/token)`; it sets a cookie.
+Set `WEBI_TOKEN` to pin the token from a unit file instead. If the bot uses
+`[boti.serve].idle`, point it at `/readyz`, which needs no token.
 
 ## Container
 

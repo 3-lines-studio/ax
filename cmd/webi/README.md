@@ -9,8 +9,22 @@ ax mcp add sentry             # whatever the bot needs
 webi -C ~/bots/team -listen 127.0.0.1:8377
 ```
 
-Open `http://127.0.0.1:8377`. Flags: `-ax` (binary), `-state` (default
+Open `http://127.0.0.1:8377/?token=<token>` once; the token is in
+`<state>/token` (created on first run, 0600). The visit sets a cookie and
+redirects the token out of the URL. Flags: `-ax` (binary), `-state` (default
 `<BOT_DATA>/state/webi`), `-base`/`-model` overrides.
+
+## Access
+
+Every request needs the token except `/healthz` and `/readyz`: a browser gets
+it from the `?token=` link, scripts send `Authorization: Bearer <token>`.
+`WEBI_TOKEN` pins the token from the environment instead of the file. The
+check does not trust loopback, because a page in the same browser can be
+pointed at `127.0.0.1` by DNS rebinding.
+
+Wrong PINs on unlock, check and reveal are counted per client: after five the
+client waits 30 s, doubling to 15 minutes. Responses carry a strict CSP (`self`
+only, no inline script), `nosniff` and no referrer.
 
 ## How it works
 
@@ -75,6 +89,8 @@ the vault is unlocked.
   the derived key to the supervisor over the control socket, and the next
   process adopts it from fd 3 (`AX_VAULT_FD`) without asking. Locking tells the
   supervisor to forget it; restarting the supervisor itself does too.
+- Five wrong PINs wait 30 seconds, then double up to 15 minutes. The counter is
+  per client and resets on a good PIN.
 
 Revealing a value asks for the PIN again on every request: anything running as
 the same user can reach loopback, so an unlocked session is not a license to
@@ -82,11 +98,12 @@ print secrets.
 
 ## Health, build and selftest
 
-`GET /healthz` answers `{"ok":"1","build":"<id>","uptime":<s>}`. The build id
+`GET /healthz` answers `{"ok":"1","build":"<id>","uptime":<s>}`; `GET
+/readyz` adds `running` and stays open so a host can wait for idle without the
+token. The build id
 comes from `AX_BUILD`, which the host that supervises a build sets (`boti
 serve` does); a plain checkout reports `dev`. `/api/state` carries the same id
-plus `running`, the number of threads with a live ax process, so a host can
-wait for idle before restarting.
+plus `running`, the number of threads with a live ax process.
 
 `webi -selftest` checks the binary against a bot without binding a port or
 calling the model: the embedded UI, the state directory, the vault header and

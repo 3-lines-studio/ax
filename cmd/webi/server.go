@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -35,11 +36,14 @@ type Server struct {
 	resume   resumeState
 	started  time.Time
 	build    string
+	token    string
 
-	mu      sync.Mutex
-	runs    map[string]*axrun.Run
-	subs    map[chan []byte]struct{}
-	pending map[string]pendingSecret
+	mu       sync.Mutex
+	runs     map[string]*axrun.Run
+	starting map[string]bool
+	subs     map[chan []byte]struct{}
+	pending  map[string]pendingSecret
+	pins     *pinGuard
 }
 
 func NewServer(store *Store, cfg axrun.Config, stateDir string, static http.Handler, build string) *Server {
@@ -52,8 +56,10 @@ func NewServer(store *Store, cfg axrun.Config, stateDir string, static http.Hand
 		started:  time.Now(),
 		build:    build,
 		runs:     map[string]*axrun.Run{},
+		starting: map[string]bool{},
 		resume:   resumeState{marks: map[string]sessionMark{}},
 		subs:     map[chan []byte]struct{}{},
+		pins:     newPinGuard(),
 	}
 }
 
@@ -65,6 +71,9 @@ func (s *Server) Handler() http.Handler {
 			"build":  s.build,
 			"uptime": int(time.Since(s.started).Seconds()),
 		})
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"ok": "1", "build": s.build, "running": s.runningCount()})
 	})
 	mux.HandleFunc("GET /api/stream", s.handleStream)
 	mux.HandleFunc("GET /api/state", s.handleState)
@@ -86,7 +95,27 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/blobs", s.handleUpload)
 	mux.HandleFunc("GET /api/blobs/{id}", s.handleBlob)
 	mux.HandleFunc("GET /", s.handleStatic)
-	return mux
+	return securityHeaders(mux)
+}
+
+var errThreadRunning = errors.New("the thread is already running")
+
+// reserveRun closes the gap between "is it running?" and "start it": two
+// messages arriving together must not spawn two ax processes on one session.
+func (s *Server) reserveRun(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runs[id] != nil || s.starting[id] {
+		return false
+	}
+	s.starting[id] = true
+	return true
+}
+
+func (s *Server) releaseRun(id string) {
+	s.mu.Lock()
+	delete(s.starting, id)
+	s.mu.Unlock()
 }
 
 // --- SSE -------------------------------------------------------------------
@@ -225,7 +254,7 @@ func (s *Server) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data, _ := json.MarshalIndent(req, "", "  ")
-	if err := writeFileAtomic(s.settings, data, 0o644); err != nil {
+	if err := writeFileAtomic(s.settings, data, 0o600); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
@@ -337,6 +366,7 @@ func (s *Server) handleCreateThread(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Title string `json:"title"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	thread, err := s.store.CreateThread(r.PathValue("id"), req.Title)
 	if err != nil {
@@ -436,14 +466,20 @@ func (s *Server) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	// Start first: if another request won the race there is no run, and the
+	// message should not appear in the thread.
+	if err := s.startRun(thread, req.Text, images); err != nil {
+		if errors.Is(err, errThreadRunning) {
+			writeErr(w, 409, err.Error())
+			return
+		}
+		writeErr(w, 500, err.Error())
+		return
+	}
 	s.store.Touch(thread.ID, req.Text)
 	s.publish(map[string]any{"type": "message", "thread": thread.ID, "message": map[string]any{
 		"t": "user", "text": req.Text, "ts": time.Now().UTC(),
 	}})
-	if err := s.startRun(thread, req.Text, images); err != nil {
-		writeErr(w, 500, err.Error())
-		return
-	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -460,7 +496,7 @@ func (s *Server) prepareImages(thread Thread, ids []string) ([]string, error) {
 		}
 		ext := filepath.Ext(source)
 		target := filepath.Join(s.store.Blobs(thread), strings.TrimSuffix(filepath.Base(source), ext)+".img"+ext)
-		if err := writeFileAtomic(target, data, 0o644); err != nil {
+		if err := writeFileAtomic(target, data, 0o600); err != nil {
 			return nil, err
 		}
 		paths = append(paths, target)
@@ -488,8 +524,12 @@ func (s *Server) startResume(thread Thread) error {
 }
 
 func (s *Server) launch(thread Thread, job axrun.Job, prompt string) error {
+	if !s.reserveRun(thread.ID) {
+		return errThreadRunning
+	}
 	channel, ok := s.store.Channel(thread.Channel)
 	if !ok {
+		s.releaseRun(thread.ID)
 		return fmt.Errorf("unknown channel %s", thread.Channel)
 	}
 	settings := s.loadSettings()
@@ -509,6 +549,7 @@ func (s *Server) launch(thread Thread, job axrun.Job, prompt string) error {
 	}
 	vaultEnv, cleanupVault, err := s.vault.Env(channel.VaultScope)
 	if err != nil {
+		s.releaseRun(thread.ID)
 		return err
 	}
 	env = append(env, vaultEnv...)
@@ -518,10 +559,12 @@ func (s *Server) launch(thread Thread, job axrun.Job, prompt string) error {
 		s.forwardEvent(thread.ID, event)
 	})
 	if err != nil {
+		s.releaseRun(thread.ID)
 		return err
 	}
 	s.mu.Lock()
 	s.runs[thread.ID] = run
+	delete(s.starting, thread.ID)
 	s.mu.Unlock()
 	s.publish(map[string]any{"type": "run", "thread": thread.ID, "running": true})
 
@@ -577,6 +620,12 @@ func (s *Server) forwardEvent(threadID string, event axrun.Event) {
 	}
 }
 
+func (s *Server) runningCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.runs)
+}
+
 func (s *Server) running(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -621,7 +670,11 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "the thread is running")
 		return
 	}
-	channel, _ := s.store.Channel(thread.Channel)
+	channel, ok := s.store.Channel(thread.Channel)
+	if !ok {
+		writeErr(w, 404, "unknown channel")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Minute)
 	defer cancel()
 	_, err = axrun.Compact(ctx, axrun.Config{
