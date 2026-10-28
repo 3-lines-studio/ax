@@ -444,7 +444,7 @@ func TestCoreEditHintFollowsTheConnectionID(t *testing.T) {
 		{Name: "edit", Description: "Edit a file"},
 	}}})
 	cat.Load(context.Background())
-	prompt := buildCatalogSystemPrompt([]Tool{{Name: "search"}, {Name: "execute"}}, "/w", resolveBotCtx(t.TempDir()), cat, []string{"fs.read", "fs.edit"})
+	prompt := buildCatalogSystemPrompt("/w", resolveBotCtx(t.TempDir()), cat, []string{"fs.read", "fs.edit"})
 	if !strings.Contains(prompt, "Use fs.edit for precise file changes") {
 		t.Fatalf("prompt = %s", prompt)
 	}
