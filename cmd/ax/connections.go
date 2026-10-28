@@ -26,6 +26,7 @@ import (
 const (
 	connLocal = "local"
 	connMCP   = "mcp"
+	connSSH   = "ssh"
 )
 
 // connectionKindNormal maps every accepted [[connection]] kind to the two
@@ -38,8 +39,10 @@ func connectionKindNormal(kind string) (string, error) {
 		return connLocal, nil
 	case "mcp", "mcp-stdio", "mcp-http":
 		return connMCP, nil
+	case "ssh":
+		return connSSH, nil
 	default:
-		return "", fmt.Errorf("unknown kind %q (use local, mcp-stdio or mcp-http)", kind)
+		return "", fmt.Errorf("unknown kind %q (use local, ssh, mcp-stdio or mcp-http)", kind)
 	}
 }
 
@@ -52,6 +55,9 @@ type connectionEntry struct {
 	Root            string            `toml:"root"`
 	Capabilities    []string          `toml:"capabilities"`
 	Command         string            `toml:"command"`
+	Host            string            `toml:"host"`
+	Key             string            `toml:"key"`
+	KnownHosts      string            `toml:"known_hosts"`
 	Args            []string          `toml:"args"`
 	PassEnv         []string          `toml:"pass_env"`
 	Env             map[string]string `toml:"env"`
@@ -114,6 +120,8 @@ type connection struct {
 	trust   string
 	compute bool
 	command string
+	workdir string   // local directory the provider process runs in
+	env     []string // nil inherits the parent environment
 	cfg     mcp.ServerConfig
 	entry   connectionEntry // as written in bot.toml, for ax conn list
 	caps    []string
@@ -124,7 +132,7 @@ type connection struct {
 // tools/AX_TOOLS list and [[mcp]] tables. Explicit ids win, legacy ids keep the
 // names they had before (a provider named after its binary), so catalog ids and
 // stored sessions stay valid.
-func resolveConnections(fc fileConfig, workdir, authDir string) ([]connection, error) {
+func resolveConnections(fc fileConfig, botRoot, workdir, authDir string) ([]connection, error) {
 	var out []connection
 	used := map[string]bool{}
 
@@ -153,10 +161,7 @@ func resolveConnections(fc fileConfig, workdir, authDir string) ([]connection, e
 		if err != nil {
 			return nil, fmt.Errorf("connection %q: %w", id, err)
 		}
-		if entry.Root != "" && !entry.Compute {
-			return nil, fmt.Errorf("connection %q: root only applies to compute = true", id)
-		}
-		conn := connection{id: id, kind: kind, trust: trust, compute: entry.Compute, entry: entry, caps: caps}
+		conn := connection{id: id, kind: kind, trust: trust, compute: entry.Compute, entry: entry, caps: caps, workdir: workdir}
 		switch kind {
 		case connLocal:
 			if entry.Command == "" {
@@ -169,6 +174,48 @@ func resolveConnections(fc fileConfig, workdir, authDir string) ([]connection, e
 				return nil, fmt.Errorf("connection %q: local providers take no args; wrap the command in a script", id)
 			}
 			conn.command = entry.Command
+			if entry.Root != "" {
+				root, err := resolveLocalRoot(entry.Root, botRoot)
+				if err != nil {
+					return nil, fmt.Errorf("connection %q: %w", id, err)
+				}
+				conn.workdir = root
+			}
+			conn.env = connectionEnv(entry, nil)
+		case connSSH:
+			if entry.Host == "" {
+				return nil, fmt.Errorf("connection %q: kind ssh needs a host (user@host or user@host:port)", id)
+			}
+			if entry.URL != "" {
+				return nil, fmt.Errorf("connection %q: kind ssh cannot use url (use kind mcp-http)", id)
+			}
+			if len(entry.Args) > 0 {
+				return nil, fmt.Errorf("connection %q: kind ssh takes no args", id)
+			}
+			if entry.KnownHosts == "" {
+				return nil, fmt.Errorf("connection %q: kind ssh needs known_hosts; a connection that accepts any host key is a MITM with a shell", id)
+			}
+			knownHosts, err := resolveBotPath(entry.KnownHosts, botRoot)
+			if err != nil {
+				return nil, fmt.Errorf("connection %q: known_hosts: %w", id, err)
+			}
+			extra := map[string]string{
+				"SSHX_HOST":        entry.Host,
+				"SSHX_KNOWN_HOSTS": knownHosts,
+				"SSHX_ROOT":        entry.Root,
+			}
+			if entry.Key != "" {
+				key, err := resolveBotPath(entry.Key, botRoot)
+				if err != nil {
+					return nil, fmt.Errorf("connection %q: key: %w", id, err)
+				}
+				extra["SSHX_KEY_FILE"] = key
+			}
+			conn.command = "sshx"
+			if entry.Command != "" {
+				conn.command = entry.Command
+			}
+			conn.env = connectionEnv(entry, extra)
 		case connMCP:
 			mapped := entry.mcpEntry(id)
 			if (mapped.Command == "") == (mapped.URL == "") {
@@ -190,7 +237,7 @@ func resolveConnections(fc fileConfig, workdir, authDir string) ([]connection, e
 
 	for _, command := range localCommands(fc) {
 		name := localSourceName(command, used)
-		out = append(out, connection{id: name, kind: connLocal, trust: trustAuto, command: command})
+		out = append(out, connection{id: name, kind: connLocal, trust: trustAuto, command: command, workdir: workdir})
 	}
 
 	var legacy []mcpEntry
@@ -215,6 +262,64 @@ func resolveConnections(fc fileConfig, workdir, authDir string) ([]connection, e
 	return out, nil
 }
 
+// resolveLocalRoot turns a connection root into the local directory its
+// provider runs in. Relative paths are relative to the bot root, and a root that
+// does not exist is an error: a connection that silently runs somewhere else is
+// worse than one that refuses to start.
+func resolveLocalRoot(root, botRoot string) (string, error) {
+	if !filepath.IsAbs(root) {
+		root = filepath.Join(botRoot, root)
+	}
+	root = filepath.Clean(root)
+	info, err := os.Stat(root)
+	if err != nil {
+		return "", fmt.Errorf("root %s: %w", root, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("root %s is not a directory", root)
+	}
+	return root, nil
+}
+
+// resolveBotPath resolves a file that lives in the bot: secrets, keys, known
+// hosts. It must exist.
+func resolveBotPath(path, botRoot string) (string, error) {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(botRoot, path)
+	}
+	path = filepath.Clean(path)
+	if _, err := os.Stat(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// connectionEnv builds the environment for a provider process. A connection
+// with no env of its own inherits the parent environment (nil); one that sets
+// anything gets exactly what it declared plus pass_env and the transport
+// variables, so a remote workspace cannot read host secrets it never asked for.
+func connectionEnv(entry connectionEntry, extra map[string]string) []string {
+	if len(entry.Env) == 0 && len(entry.PassEnv) == 0 && len(extra) == 0 {
+		return nil
+	}
+	env := make([]string, 0, len(entry.Env)+len(entry.PassEnv)+len(extra))
+	for name, value := range entry.Env {
+		env = append(env, name+"="+value)
+	}
+	for _, name := range entry.PassEnv {
+		if value, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+value)
+		}
+	}
+	for name, value := range extra {
+		if value != "" {
+			env = append(env, name+"="+value)
+		}
+	}
+	sort.Strings(env)
+	return env
+}
+
 // computeConfig is the bot's compute role: the connections whose tools become
 // the default core tools, and the directory they run in. It is the seam where a
 // local workspace becomes a remote one later: `root` is a path on whichever
@@ -232,9 +337,6 @@ func resolveCompute(fc fileConfig, botRoot string) (computeConfig, error) {
 	for _, entry := range fc.connections {
 		id := strings.ToLower(strings.TrimSpace(entry.ID))
 		if !entry.Compute {
-			if strings.TrimSpace(entry.Root) != "" {
-				return computeConfig{}, fmt.Errorf("connection %q: root only applies to compute = true", id)
-			}
 			continue
 		}
 		if id == "" {
@@ -245,19 +347,21 @@ func resolveCompute(fc fileConfig, botRoot string) (computeConfig, error) {
 			continue
 		}
 		root := strings.TrimSpace(entry.Root)
-		if !filepath.IsAbs(root) {
-			root = filepath.Join(botRoot, root)
+		kind, err := connectionKindNormal(entry.Kind)
+		if err != nil {
+			return computeConfig{}, fmt.Errorf("connection %q: %w", id, err)
 		}
-		root = filepath.Clean(root)
+		if kind != connSSH {
+			// A remote root is a path on the other machine: it is passed to the
+			// connection, not stat'ed here.
+			resolved, err := resolveLocalRoot(root, botRoot)
+			if err != nil {
+				return computeConfig{}, fmt.Errorf("connection %q: %w", id, err)
+			}
+			root = resolved
+		}
 		if out.root != "" && out.root != root {
 			return computeConfig{}, fmt.Errorf("connection %q: root %s disagrees with another compute connection", id, root)
-		}
-		info, err := os.Stat(root)
-		if err != nil {
-			return computeConfig{}, fmt.Errorf("connection %q: root %s: %w", id, root, err)
-		}
-		if !info.IsDir() {
-			return computeConfig{}, fmt.Errorf("connection %q: root %s is not a directory", id, root)
 		}
 		out.root = root
 	}

@@ -242,7 +242,7 @@ func TestTryExternalToolsCommandNotFound(t *testing.T) {
 
 func TestRunExternalToolSuccess(t *testing.T) {
 	path := writeMockTool(t, mockGreetTool)
-	got := runExternalTool(context.Background(), path, "greet", "world", t.TempDir(), 5)
+	got := runExternalTool(context.Background(), path, "greet", "world", t.TempDir(), 5, nil)
 	if got != "hello world" {
 		t.Errorf("run = %q", got)
 	}
@@ -250,7 +250,7 @@ func TestRunExternalToolSuccess(t *testing.T) {
 
 func TestRunExternalToolStderrOnFailure(t *testing.T) {
 	path := writeMockTool(t, mockGreetTool)
-	got := runExternalTool(context.Background(), path, "other", "x", t.TempDir(), 5)
+	got := runExternalTool(context.Background(), path, "other", "x", t.TempDir(), 5, nil)
 	if !strings.Contains(got, "unknown tool other") {
 		t.Errorf("run = %q", got)
 	}
@@ -258,14 +258,14 @@ func TestRunExternalToolStderrOnFailure(t *testing.T) {
 
 func TestRunExternalToolNoOutput(t *testing.T) {
 	path := writeMockTool(t, mockEmptyRunOut)
-	got := runExternalTool(context.Background(), path, "greet", "", t.TempDir(), 5)
+	got := runExternalTool(context.Background(), path, "greet", "", t.TempDir(), 5, nil)
 	if !strings.Contains(got, "returned no output") {
 		t.Errorf("run = %q", got)
 	}
 }
 
 func TestRunExternalToolMissingCommand(t *testing.T) {
-	got := runExternalTool(context.Background(), "/no/such/binary", "greet", "", t.TempDir(), 1)
+	got := runExternalTool(context.Background(), "/no/such/binary", "greet", "", t.TempDir(), 1, nil)
 	if !strings.HasPrefix(got, "error:") {
 		t.Errorf("run = %q", got)
 	}
@@ -367,7 +367,7 @@ func TestRunToolRejectsInvalidArguments(t *testing.T) {
 func TestRunExternalToolTimeout(t *testing.T) {
 	path := writeMockTool(t, "#!/bin/sh\nsleep 5\necho done\n")
 	start := time.Now()
-	got := runExternalTool(context.Background(), path, "x", "{}", t.TempDir(), 1)
+	got := runExternalTool(context.Background(), path, "x", "{}", t.TempDir(), 1, nil)
 	if !strings.Contains(got, "timed out") {
 		t.Errorf("run = %q", got)
 	}
@@ -384,7 +384,7 @@ func TestRunExternalToolCancellation(t *testing.T) {
 		cancel()
 	}()
 	start := time.Now()
-	got := runExternalTool(ctx, path, "x", "{}", t.TempDir(), 10)
+	got := runExternalTool(ctx, path, "x", "{}", t.TempDir(), 10, nil)
 	if !strings.Contains(got, "cancelled") {
 		t.Errorf("run = %q", got)
 	}
@@ -395,7 +395,7 @@ func TestRunExternalToolCancellation(t *testing.T) {
 
 func TestRunExternalToolBoundsOutput(t *testing.T) {
 	path := writeMockTool(t, "#!/bin/sh\nhead -c 100000 /dev/zero | tr '\\0' x\necho END\n")
-	got := runExternalTool(context.Background(), path, "x", "{}", t.TempDir(), 5)
+	got := runExternalTool(context.Background(), path, "x", "{}", t.TempDir(), 5, nil)
 	if len(got) > maxOutput {
 		t.Errorf("output length = %d, want <= %d", len(got), maxOutput)
 	}
