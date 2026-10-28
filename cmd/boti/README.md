@@ -121,6 +121,11 @@ When `builds/current` exists, the host prepends its `bin/` to `PATH` and sets
 `AX_BUILD` to the build id, so `webi`, `ax` and every tool come from the same
 build. Without one it reports `dev` and uses the host's `PATH`.
 
+The vault key webi derives from its PIN is kept in memory, never on disk, and
+handed to each child on fd 3 (`AX_VAULT_FD`), so a promotion or a restart does
+not ask for the PIN again. Locking the vault, or restarting the supervisor,
+forgets it.
+
 A child that exits is restarted; three exits in a minute with a `previous`
 build recorded switch `current` back to it and record why. A build that is
 healthy for one start clears the failure counter, so a later promotion can

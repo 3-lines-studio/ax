@@ -39,7 +39,9 @@ systemctl --user enable --now ax-webi
 ```
 
 `boti serve` reads `[boti.serve]` from the bot, starts the transport, polls its
-health URL and restarts it when it exits. Three exits in a minute switch
+health URL and restarts it when it exits. It also keeps the vault key in memory
+after an unlock and gives it to each new process, so a restart or a promotion
+does not ask for the PIN; restarting the supervisor itself does. Three exits in a minute switch
 `builds/current` back to the previous build and record the reason, which is
 the rollback systemd alone cannot do.
 

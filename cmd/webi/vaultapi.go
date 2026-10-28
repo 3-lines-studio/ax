@@ -70,15 +70,18 @@ func (s *Server) handleVaultAction(w http.ResponseWriter, r *http.Request) {
 		}
 		// move_key is accepted for the UI's sake; webi never stored the key in
 		// a file, so there is nothing to move.
+		s.shareVaultKey(false)
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	case "unlock":
 		if err := s.vault.Unlock(req.PIN); err != nil {
 			writeErr(w, 400, err.Error())
 			return
 		}
+		s.shareVaultKey(false)
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	case "lock":
 		s.vault.Lock()
+		s.shareVaultKey(true)
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	case "check":
 		if err := s.vault.Check(req.PIN); err != nil {
