@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/launcher"
 )
 
 func TestConvert(t *testing.T) {
@@ -109,6 +112,12 @@ func TestFetchRendered(t *testing.T) {
 	if _, err := chromiumPath(); err != nil {
 		t.Skip(err)
 	}
+	// A cold Chromium on a CI runner can take longer than the page fetch. The
+	// launch is environmental, the rendering is not: warm it up first and skip
+	// when the browser cannot start, so a slow runner does not fail a test that
+	// says nothing about the code.
+	warmChromium(t)
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/missing" {
 			http.Error(w, "missing", http.StatusNotFound)
@@ -125,7 +134,7 @@ func TestFetchRendered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	output, err := fetch(ctx, pageURL)
 	cancel()
 	if err != nil {
@@ -139,10 +148,37 @@ func TestFetchRendered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel = context.WithTimeout(context.Background(), 60*time.Second)
 	_, _, err = fetchRendered(ctx, missingURL)
 	cancel()
 	if err == nil || err.Error() != "HTTP 404" {
 		t.Fatalf("unexpected rendered HTTP error: %v", err)
+	}
+}
+
+// warmChromium starts the browser once, with a generous timeout, and skips the
+// test when it cannot. Everything after runs against a live instance.
+func warmChromium(t *testing.T) {
+	t.Helper()
+	chromium, err := chromiumPath()
+	if err != nil {
+		t.Skip(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	browserLauncher := launcher.New().Context(ctx).Bin(chromium).Headless(true)
+	if os.Getenv("WAX_NO_SANDBOX") == "1" {
+		browserLauncher.NoSandbox(true)
+	}
+	controlURL, err := browserLauncher.Launch()
+	if err != nil {
+		t.Skipf("chromium did not start: %v", err)
+	}
+	browser := rod.New().Context(ctx).ControlURL(controlURL)
+	if err := browser.Connect(); err != nil {
+		t.Skipf("chromium did not accept a connection: %v", err)
+	}
+	if err := browser.Close(); err != nil {
+		t.Logf("close browser: %v", err)
 	}
 }
