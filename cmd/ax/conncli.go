@@ -87,6 +87,8 @@ func connListCommand(fc fileConfig, bot *botCtx, args []string) {
 		ID           string `json:"id"`
 		Kind         string `json:"kind"`
 		Trust        string `json:"trust"`
+		Role         string `json:"role,omitempty"`
+		Root         string `json:"root,omitempty"`
 		Target       string `json:"target"`
 		Capabilities string `json:"capabilities"`
 		Auth         string `json:"auth,omitempty"`
@@ -103,6 +105,9 @@ func connListCommand(fc fileConfig, bot *botCtx, args []string) {
 			Capabilities: connCapabilityLabel(conn),
 			Auth:         connAuthState(conn),
 			Status:       "ready",
+		}
+		if conn.compute {
+			item.Role = "compute"
 		}
 		if conn.err != nil {
 			item.Status = "error"
@@ -123,13 +128,20 @@ func connListCommand(fc fileConfig, bot *botCtx, args []string) {
 		fmt.Println("No connections configured. Add a [[connection]] to bot.toml.")
 		return
 	}
-	fmt.Printf("%-20s %-9s %-6s %-7s %-12s %s\n", "ID", "KIND", "TRUST", "CAPS", "STATUS", "TARGET")
+	fmt.Printf("%-20s %-9s %-8s %-6s %-7s %-12s %s\n", "ID", "KIND", "ROLE", "TRUST", "CAPS", "STATUS", "TARGET")
 	for _, item := range out {
 		status := item.Status
 		if item.Error != "" {
 			status += ": " + oneLineText(item.Error, 60)
 		}
-		fmt.Printf("%-20s %-9s %-6s %-7s %-12s %s\n", item.ID, item.Kind, item.Trust, item.Capabilities, status, oneLineText(item.Target, 60))
+		fmt.Printf("%-20s %-9s %-8s %-6s %-7s %-12s %s\n", item.ID, item.Kind, item.Role, item.Trust, item.Capabilities, status, oneLineText(item.Target, 60))
+	}
+	if root, err := resolveCompute(fc, bot.Root); err == nil {
+		if root.root != "" {
+			fmt.Printf("\nworkspace: %s (from the compute connections)\n", root.root)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "\nwarning: %v\n", err)
 	}
 }
 
@@ -195,6 +207,14 @@ func connDoctorCommand(fc fileConfig, bot *botCtx, args []string) {
 		}
 		fmt.Printf("%-20s %-9s %-6s %-17s %s\n", runtime.conn.id, runtime.conn.kind, runtime.conn.trust,
 			fmt.Sprintf("%d declared, %d on", len(declared), len(enabled)), status)
+	}
+	if root, err := resolveCompute(fc, bot.Root); err == nil {
+		if root.root != "" {
+			fmt.Printf("\nworkspace: %s (from the compute connections)\n", root.root)
+		}
+	} else {
+		failures++
+		fmt.Fprintf(os.Stderr, "\nerror: %v\n", err)
 	}
 	if failures > 0 {
 		os.Exit(1)

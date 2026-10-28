@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -46,6 +48,8 @@ type connectionEntry struct {
 	ID              string            `toml:"id"`
 	Kind            string            `toml:"kind"`
 	Trust           string            `toml:"trust"`
+	Compute         bool              `toml:"compute"`
+	Root            string            `toml:"root"`
 	Capabilities    []string          `toml:"capabilities"`
 	Command         string            `toml:"command"`
 	Args            []string          `toml:"args"`
@@ -108,6 +112,7 @@ type connection struct {
 	id      string
 	kind    string
 	trust   string
+	compute bool
 	command string
 	cfg     mcp.ServerConfig
 	entry   connectionEntry // as written in bot.toml, for ax conn list
@@ -148,7 +153,10 @@ func resolveConnections(fc fileConfig, workdir, authDir string) ([]connection, e
 		if err != nil {
 			return nil, fmt.Errorf("connection %q: %w", id, err)
 		}
-		conn := connection{id: id, kind: kind, trust: trust, entry: entry, caps: caps}
+		if entry.Root != "" && !entry.Compute {
+			return nil, fmt.Errorf("connection %q: root only applies to compute = true", id)
+		}
+		conn := connection{id: id, kind: kind, trust: trust, compute: entry.Compute, entry: entry, caps: caps}
 		switch kind {
 		case connLocal:
 			if entry.Command == "" {
@@ -203,6 +211,55 @@ func resolveConnections(fc fileConfig, workdir, authDir string) ([]connection, e
 		}
 		used[server.name] = true
 		out = append(out, connection{id: server.name, kind: connMCP, trust: trustAuto, cfg: server.cfg, err: server.err})
+	}
+	return out, nil
+}
+
+// computeConfig is the bot's compute role: the connections whose tools become
+// the default core tools, and the directory they run in. It is the seam where a
+// local workspace becomes a remote one later: `root` is a path on whichever
+// backend the connection reaches, so nothing else in the engine has to change.
+type computeConfig struct {
+	ids  []string
+	root string
+}
+
+// resolveCompute validates the [[connection]] tables marked compute = true.
+// Several are allowed (fsx for files, bashx for the shell), but they must agree
+// on where the workspace lives.
+func resolveCompute(fc fileConfig, botRoot string) (computeConfig, error) {
+	var out computeConfig
+	for _, entry := range fc.connections {
+		id := strings.ToLower(strings.TrimSpace(entry.ID))
+		if !entry.Compute {
+			if strings.TrimSpace(entry.Root) != "" {
+				return computeConfig{}, fmt.Errorf("connection %q: root only applies to compute = true", id)
+			}
+			continue
+		}
+		if id == "" {
+			return computeConfig{}, fmt.Errorf("connection: a compute connection needs an id")
+		}
+		out.ids = append(out.ids, id)
+		if strings.TrimSpace(entry.Root) == "" {
+			continue
+		}
+		root := strings.TrimSpace(entry.Root)
+		if !filepath.IsAbs(root) {
+			root = filepath.Join(botRoot, root)
+		}
+		root = filepath.Clean(root)
+		if out.root != "" && out.root != root {
+			return computeConfig{}, fmt.Errorf("connection %q: root %s disagrees with another compute connection", id, root)
+		}
+		info, err := os.Stat(root)
+		if err != nil {
+			return computeConfig{}, fmt.Errorf("connection %q: root %s: %w", id, root, err)
+		}
+		if !info.IsDir() {
+			return computeConfig{}, fmt.Errorf("connection %q: root %s is not a directory", id, root)
+		}
+		out.root = root
 	}
 	return out, nil
 }

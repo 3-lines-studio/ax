@@ -715,6 +715,44 @@ def oneshot_connection_id_reaches_the_model(h, ax):
 
 
 @case
+def oneshot_compute_connection_sets_the_workspace(h, ax):
+    provider = bash_provider(h)
+    ws = h.work / "vol"
+    ws.mkdir()
+    h.write_config(
+        "[[connection]]\n"
+        'id = "shell"\n'
+        'kind = "local"\n'
+        'compute = true\n'
+        'root = "vol"\n'
+        'command = "%s"\n' % provider
+    )
+    with h.mock(CONNECTION_SCENARIO) as srv:
+        p = h.oneshot(ax, ["--events", "run something"], base=srv.base_url)
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        system = body_msg(srv, 0, "system")[0]["content"]
+        check("Current working directory: %s" % ws in system, "workspace not applied: %s" % system[-800:])
+        check("shell.bash" in system, "compute tools missing from the prompt: %s" % system[-800:])
+        check("fsx.read" not in system, "default core tools leaked into the prompt")
+        check((ws / "conn.txt").read_text().strip() == "via-connection", "tool did not run in the compute root")
+        check(not (h.work / "workspace" / "conn.txt").exists(), "tool ran in the default workspace")
+
+
+@case
+def oneshot_compute_root_must_exist(h, ax):
+    h.write_config(
+        "[[connection]]\n"
+        'id = "shell"\n'
+        'compute = true\n'
+        'root = "missing"\n'
+        'command = "%s"\n' % bash_provider(h)
+    )
+    p = h.oneshot(ax, ["hello"], stdin=b"")
+    check(p.returncode != 0, "a missing compute root must fail")
+    check("root" in p.stderr and "missing" in p.stderr, "stderr = %s" % p.stderr)
+
+
+@case
 def oneshot_auto_compaction(h, ax):
     session = h.root / "compact.jsonl"
     h.write_config("compact_at = 0.5\ncontext_window = 10000\n")

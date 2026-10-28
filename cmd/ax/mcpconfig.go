@@ -31,13 +31,6 @@ type mcpEntry struct {
 
 var defaultCoreTools = []string{"fsx.read", "fsx.write", "fsx.edit", "bashx.bash"}
 
-func coreTools(fc fileConfig) []string {
-	if len(fc.coreTools) > 0 {
-		return fc.coreTools
-	}
-	return defaultCoreTools
-}
-
 func validateToolMode(cfg cliConfig, fc fileConfig) error {
 	switch strings.ToLower(firstNonEmpty(cfg.toolMode, fc.toolMode, "catalog")) {
 	case "catalog", "direct":
