@@ -1,8 +1,11 @@
 # Deploying AX
 
 AX is a set of processes, not a service: something has to keep them running.
-This document is that "something", in three shapes. None of them is built into
-`ax` — the engine only knows how to run one conversation.
+`ax` only knows how to run one conversation; `webi` and `slaxi` are the
+long-lived transports in front of it. `boti serve` is the host that ships with
+the ecosystem: it starts the transport, checks it, restarts it and rolls back a
+build that crash-loops. This document also covers the cases where the host is
+something else.
 
 ## What a host needs
 
@@ -25,7 +28,7 @@ connection is a failure, because every run would hit it.
 
 ## systemd (a VM or a small server)
 
-One unit per bot, running the transport you use. See
+One unit per bot, running `boti serve`. See
 [`packaging/ax-webi.service`](../packaging/ax-webi.service):
 
 ```sh
@@ -33,6 +36,17 @@ mkdir -p ~/.config/systemd/user
 cp packaging/ax-webi.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now ax-webi
+```
+
+`boti serve` reads `[boti.serve]` from the bot, starts the transport, polls its
+health URL and restarts it when it exits. Three exits in a minute switch
+`builds/current` back to the previous build and record the reason, which is
+the rollback systemd alone cannot do.
+
+```sh
+boti -C ~/bots/example status    # running?, build, child, last error
+boti -C ~/bots/example logs -n 50
+boti -C ~/bots/example restart
 ```
 
 `webi` binds `127.0.0.1` on purpose. To reach it from outside, put something in
