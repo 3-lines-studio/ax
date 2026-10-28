@@ -98,11 +98,11 @@ keep their ids.
 ```toml
 [[connection]]
 id           = "web"
-kind         = "local"          # local | mcp-stdio | mcp-http
+kind         = "local"          # local | ssh | mcp-stdio | mcp-http
 command      = "wax"
 trust        = "auto"           # auto | read
 compute      = false            # true: defines the bot's workspace and core tools
-root         = "vol"            # compute only; relative to the bot root
+root         = "vol"            # workdir; relative to the bot root (remote path for ssh)
 capabilities = ["web.search"]   # optional allowlist
 ```
 

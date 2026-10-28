@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -132,7 +133,7 @@ func TestConnectionIDIsLowercased(t *testing.T) {
 	bin := writeMockTool(t, mockTwoTools)
 	conns, err := resolveConnections(fileConfig{connections: []connectionEntry{
 		{ID: "Web", Kind: "local", Command: bin},
-	}}, t.TempDir(), t.TempDir())
+	}}, t.TempDir(), t.TempDir(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +149,7 @@ func TestConnectionMCPHTTPResolves(t *testing.T) {
 		URL:     "https://example.com/mcp",
 		Headers: map[string]string{"X-Test": "1"},
 	}}}
-	conns, err := resolveConnections(fc, t.TempDir(), t.TempDir())
+	conns, err := resolveConnections(fc, t.TempDir(), t.TempDir(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +166,7 @@ func TestConnectionMCPHTTPResolves(t *testing.T) {
 func TestLegacyToolsKeepTheirSourceName(t *testing.T) {
 	bin := writeMockTool(t, mockGreetTool)
 	fc := fileConfig{tools: bin}
-	conns, err := resolveConnections(fc, t.TempDir(), t.TempDir())
+	conns, err := resolveConnections(fc, t.TempDir(), t.TempDir(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +184,7 @@ func TestConnectionAndLegacyToolsShareTheNamespace(t *testing.T) {
 		tools:       bin,
 		connections: []connectionEntry{{ID: "mocktool", Kind: "local", Command: bin}},
 	}
-	conns, err := resolveConnections(fc, t.TempDir(), t.TempDir())
+	conns, err := resolveConnections(fc, t.TempDir(), t.TempDir(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,9 +352,9 @@ func TestResolveCompute(t *testing.T) {
 			ids:  "fs",
 		},
 		{
-			name: "root without compute",
-			fc:   fileConfig{connections: []connectionEntry{{ID: "fs", Root: "shared"}}},
-			want: "root only applies to compute",
+			name: "root without compute is just a workdir",
+			fc:   fileConfig{connections: []connectionEntry{{ID: "fs", Kind: "local", Command: "fsx", Root: "shared"}}},
+			ids:  "",
 		},
 		{
 			name: "two roots",
@@ -449,5 +450,104 @@ func TestCoreEditHintFollowsTheConnectionID(t *testing.T) {
 	}
 	if strings.Contains(prompt, "fsx.edit") {
 		t.Fatalf("legacy edit hint leaked: %s", prompt)
+	}
+}
+
+func TestSSHConnectionBuildsTheProviderEnvironment(t *testing.T) {
+	botRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(botRoot, "secrets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(botRoot, "secrets", "known_hosts"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(botRoot, "secrets", "id_ed25519"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fc := fileConfig{connections: []connectionEntry{{
+		ID:         "remote",
+		Kind:       "ssh",
+		Host:       "builder@10.0.0.5:22",
+		Root:       "/srv/app",
+		Key:        "secrets/id_ed25519",
+		KnownHosts: "secrets/known_hosts",
+		Compute:    true,
+	}}}
+	conns, err := resolveConnections(fc, botRoot, "/local/workspace", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := conns[0]
+	if conn.command != "sshx" {
+		t.Errorf("command = %q", conn.command)
+	}
+	if conn.workdir != "/local/workspace" {
+		t.Errorf("workdir = %q", conn.workdir)
+	}
+	want := map[string]string{
+		"SSHX_HOST":        "builder@10.0.0.5:22",
+		"SSHX_ROOT":        "/srv/app",
+		"SSHX_KNOWN_HOSTS": filepath.Join(botRoot, "secrets", "known_hosts"),
+		"SSHX_KEY_FILE":    filepath.Join(botRoot, "secrets", "id_ed25519"),
+	}
+	for name, value := range want {
+		if !slices.Contains(conn.env, name+"="+value) {
+			t.Errorf("env missing %s=%s: %v", name, value, conn.env)
+		}
+	}
+	// A remote root is a path on the other machine: it must not be stat'ed here.
+	compute, err := resolveCompute(fc, botRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compute.root != "/srv/app" {
+		t.Errorf("compute root = %q", compute.root)
+	}
+}
+
+func TestSSHConnectionRequiresAHostKey(t *testing.T) {
+	botRoot := t.TempDir()
+	cases := map[string]struct {
+		entry connectionEntry
+		want  string
+	}{
+		"no host":         {connectionEntry{ID: "r", Kind: "ssh", KnownHosts: "kh"}, "needs a host"},
+		"no known_hosts":  {connectionEntry{ID: "r", Kind: "ssh", Host: "h"}, "needs known_hosts"},
+		"missing file":    {connectionEntry{ID: "r", Kind: "ssh", Host: "h", KnownHosts: "nope"}, "no such file"},
+		"with args":       {connectionEntry{ID: "r", Kind: "ssh", Host: "h", KnownHosts: "kh", Args: []string{"-x"}}, "takes no args"},
+		"wrong transport": {connectionEntry{ID: "r", Kind: "ssh", Host: "h", KnownHosts: "kh", URL: "https://e"}, "cannot use url"},
+	}
+	if err := os.WriteFile(filepath.Join(botRoot, "kh"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			fc := fileConfig{connections: []connectionEntry{tc.entry}}
+			_, err := resolveConnections(fc, botRoot, t.TempDir(), t.TempDir())
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestConnectionEnvPassesOnlyWhatItDeclares(t *testing.T) {
+	bin := writeMockTool(t, mockTwoTools)
+	t.Setenv("SECRET_TOKEN", "from-parent")
+	fc := fileConfig{connections: []connectionEntry{{
+		ID: "x", Kind: "local", Command: bin,
+		Env:     map[string]string{"MODE": "remote"},
+		PassEnv: []string{"SECRET_TOKEN", "MISSING_VALUE"},
+	}}}
+	conns, err := resolveConnections(fc, t.TempDir(), t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := conns[0].env
+	if !slices.Contains(env, "MODE=remote") || !slices.Contains(env, "SECRET_TOKEN=from-parent") {
+		t.Fatalf("env = %v", env)
+	}
+	if slices.Contains(env, "MISSING_VALUE=") {
+		t.Fatalf("an unset pass_env must not appear: %v", env)
 	}
 }

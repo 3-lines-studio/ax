@@ -41,6 +41,13 @@ Connections come from [[connection]] tables in bot.toml. tools/AX_TOOLS and
 
 // connTarget is the human form of where a connection lives.
 func connTarget(conn connection) string {
+	if conn.kind == connSSH {
+		target := conn.entry.Host
+		if root := strings.TrimSpace(conn.entry.Root); root != "" {
+			target += ":" + root
+		}
+		return target
+	}
 	if conn.kind == connMCP {
 		if conn.cfg.URL != "" {
 			return conn.cfg.URL
@@ -78,7 +85,7 @@ func connListCommand(fc fileConfig, bot *botCtx, args []string) {
 			os.Exit(2)
 		}
 	}
-	conns, err := resolveConnections(fc, bot.Workspace, mcpAuthDir(bot))
+	conns, err := resolveConnections(fc, bot.Root, bot.Workspace, mcpAuthDir(bot))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
