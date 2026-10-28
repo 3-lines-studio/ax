@@ -71,6 +71,10 @@ the vault is unlocked.
   quotes and comments; keys the text does not mention stay.
 - The key counts: if the vault holds `DEEPSEEK_API_KEY`, `has_key` is true and
   the UI stops asking for one.
+- The PIN survives a restart of webi: unlocking (or creating the vault) hands
+  the derived key to the supervisor over the control socket, and the next
+  process adopts it from fd 3 (`AX_VAULT_FD`) without asking. Locking tells the
+  supervisor to forget it; restarting the supervisor itself does too.
 
 Revealing a value asks for the PIN again on every request: anything running as
 the same user can reach loopback, so an unlocked session is not a license to

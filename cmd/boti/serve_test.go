@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,6 +27,20 @@ func TestServeChildHelper(t *testing.T) {
 	}
 	if os.Getenv("BOTI_CHILD_FAIL") == "1" {
 		os.Exit(1)
+	}
+	if record := os.Getenv("BOTI_CHILD_KEY_RECORD"); record != "" {
+		outcome := "none"
+		if os.Getenv("AX_VAULT_FD") == "3" {
+			file := os.NewFile(3, "vault-key")
+			key := make([]byte, 32)
+			if _, err := io.ReadFull(file, key); err != nil {
+				outcome = "error: " + err.Error()
+			} else {
+				outcome = hex.EncodeToString(key)
+			}
+			_ = file.Close()
+		}
+		_ = os.WriteFile(record, []byte(outcome), 0o644)
 	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -349,4 +364,68 @@ host = "user@example.com"
 			t.Fatalf("unexpected %q in %v", unwanted, pkgs)
 		}
 	}
+}
+
+func waitFile(t *testing.T, path string, timeout time.Duration, ok func(string) bool) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(path); err == nil && ok(string(data)) {
+			return string(data)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	data, err := os.ReadFile(path)
+	t.Fatalf("file %s = %q, %v", path, data, err)
+	return ""
+}
+
+func TestServePassesVaultKey(t *testing.T) {
+	root, data := t.TempDir(), t.TempDir()
+	t.Setenv("BOT_DATA", data)
+	addr := freeAddr(t)
+	writeServeBot(t, root, addr)
+	record := filepath.Join(t.TempDir(), "key")
+	file, err := os.OpenFile(filepath.Join(root, "bot.toml"), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("BOTI_CHILD_KEY_RECORD = \"" + record + "\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = file.Close()
+	paths := newHostPaths(root)
+
+	cancel, done := startServe(t, root)
+	defer stopServe(t, cancel, done)
+	first := waitState(t, paths.state, 10*time.Second, func(s hostState) bool { return s.Child.Healthy })
+	waitFile(t, record, 5*time.Second, func(s string) bool { return s == "none" })
+
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i)
+	}
+	want := hex.EncodeToString(key)
+	body, _ := json.Marshal(map[string]string{"key": want})
+	if _, err := controlDo(paths.sock, "PUT", "/vault-key", body); err != nil {
+		t.Fatal(err)
+	}
+	if err := restart(root); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, paths.state, 10*time.Second, func(s hostState) bool {
+		return s.Child.Healthy && s.Child.PID != first.Child.PID
+	})
+	waitFile(t, record, 5*time.Second, func(s string) bool { return s == want })
+
+	if _, err := controlDo(paths.sock, "DELETE", "/vault-key", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := restart(root); err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, record, 5*time.Second, func(s string) bool { return s == "none" })
 }
