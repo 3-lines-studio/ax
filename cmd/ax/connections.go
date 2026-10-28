@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/3-lines-studio/ax/internal/catalog"
 	"github.com/3-lines-studio/ax/internal/mcp"
@@ -44,6 +45,7 @@ func connectionKindNormal(kind string) (string, error) {
 type connectionEntry struct {
 	ID              string            `toml:"id"`
 	Kind            string            `toml:"kind"`
+	Trust           string            `toml:"trust"`
 	Capabilities    []string          `toml:"capabilities"`
 	Command         string            `toml:"command"`
 	Args            []string          `toml:"args"`
@@ -79,14 +81,36 @@ func (e connectionEntry) mcpEntry(id string) mcpEntry {
 	}
 }
 
+// trust levels. "auto" is the default: the connection exposes every tool it
+// declares. "read" keeps only the tools annotated read-only, which is the safe
+// default for an integration whose writes are not wanted (a repository on a
+// shared account, a production database).
+const (
+	trustAuto = "auto"
+	trustRead = "read"
+)
+
+func normaliseTrust(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "auto", "full":
+		return trustAuto, nil
+	case "read", "readonly", "read-only":
+		return trustRead, nil
+	default:
+		return "", fmt.Errorf("unknown trust %q (use auto or read)", value)
+	}
+}
+
 // connection is a resolved source: either a local provider command or an MCP
 // server config. A per-connection error keeps the integration visible in the
 // menu instead of aborting every other source.
 type connection struct {
 	id      string
 	kind    string
+	trust   string
 	command string
 	cfg     mcp.ServerConfig
+	entry   connectionEntry // as written in bot.toml, for ax conn list
 	caps    []string
 	err     error
 }
@@ -120,7 +144,11 @@ func resolveConnections(fc fileConfig, workdir, authDir string) ([]connection, e
 		if err != nil {
 			return nil, fmt.Errorf("connection %q: %w", id, err)
 		}
-		conn := connection{id: id, kind: kind, caps: caps}
+		trust, err := normaliseTrust(entry.Trust)
+		if err != nil {
+			return nil, fmt.Errorf("connection %q: %w", id, err)
+		}
+		conn := connection{id: id, kind: kind, trust: trust, entry: entry, caps: caps}
 		switch kind {
 		case connLocal:
 			if entry.Command == "" {
@@ -154,7 +182,7 @@ func resolveConnections(fc fileConfig, workdir, authDir string) ([]connection, e
 
 	for _, command := range localCommands(fc) {
 		name := localSourceName(command, used)
-		out = append(out, connection{id: name, kind: connLocal, command: command})
+		out = append(out, connection{id: name, kind: connLocal, trust: trustAuto, command: command})
 	}
 
 	var legacy []mcpEntry
@@ -174,7 +202,7 @@ func resolveConnections(fc fileConfig, workdir, authDir string) ([]connection, e
 			return nil, fmt.Errorf("mcp: server name %q collides with another source", server.name)
 		}
 		used[server.name] = true
-		out = append(out, connection{id: server.name, kind: connMCP, cfg: server.cfg, err: server.err})
+		out = append(out, connection{id: server.name, kind: connMCP, trust: trustAuto, cfg: server.cfg, err: server.err})
 	}
 	return out, nil
 }
@@ -207,72 +235,120 @@ func normaliseCapabilities(caps []string) ([]string, error) {
 	return out, nil
 }
 
-// cappedSource narrows a source to the capabilities its connection enables.
-// The menu only lists the enabled tools and a call to a disabled one is
-// rejected with the list that is available.
-type cappedSource struct {
-	inner catalog.Source
-	id    string
-	caps  map[string]bool
+// connSource narrows a source to what its connection enables: the
+// `capabilities` allowlist, the `trust` level, or both. The menu only lists the
+// enabled tools and a call to a disabled one names the reason.
+type connSource struct {
+	inner    catalog.Source
+	id       string
+	trust    string
+	caps     map[string]bool
+	mu       sync.Mutex
+	enabled  map[string]bool // tool name -> allowed, filled by List
+	declared int
 }
 
-func newCappedSource(inner catalog.Source, id string, caps []string) catalog.Source {
-	if len(caps) == 0 {
+func newConnSource(inner catalog.Source, conn connection) catalog.Source {
+	if len(conn.caps) == 0 && conn.trust != trustRead {
 		return inner
 	}
-	allowed := make(map[string]bool, len(caps))
-	for _, cap := range caps {
+	allowed := make(map[string]bool, len(conn.caps))
+	for _, cap := range conn.caps {
 		allowed[strings.ToLower(cap)] = true
 	}
-	return &cappedSource{inner: inner, id: strings.ToLower(id), caps: allowed}
+	trust := conn.trust
+	if trust == "" {
+		trust = trustAuto
+	}
+	return &connSource{inner: inner, id: strings.ToLower(conn.id), trust: trust, caps: allowed}
 }
 
-func (s *cappedSource) Name() string        { return s.inner.Name() }
-func (s *cappedSource) Description() string { return s.inner.Description() }
-func (s *cappedSource) Close() error        { return s.inner.Close() }
+func (s *connSource) Name() string        { return s.inner.Name() }
+func (s *connSource) Description() string { return s.inner.Description() }
+func (s *connSource) Close() error        { return s.inner.Close() }
 
-// bare drops the connection prefix so both "search" and "web.search" reach
-// the inner source as the tool name it knows.
-func (s *cappedSource) bare(name string) string {
+// bare drops the connection prefix so both "search" and "web.search" reach the
+// inner source as the tool name it knows.
+func (s *connSource) bare(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	return strings.TrimPrefix(name, s.id+".")
 }
 
-func (s *cappedSource) allows(name string) bool {
-	bare := s.bare(name)
+// allowsCap reports whether the capabilities allowlist names this tool.
+func (s *connSource) allowsCap(bare string) bool {
+	if len(s.caps) == 0 {
+		return true
+	}
 	return s.caps[s.id+"."+bare] || s.caps[bare]
 }
 
-func (s *cappedSource) List(ctx context.Context) ([]catalog.Tool, error) {
+func (s *connSource) List(ctx context.Context) ([]catalog.Tool, error) {
 	tools, err := s.inner.List(ctx)
 	if err != nil {
 		return nil, err
 	}
+	enabled := make(map[string]bool, len(tools))
 	out := make([]catalog.Tool, 0, len(tools))
 	for _, tool := range tools {
-		if s.allows(tool.Name) {
-			out = append(out, tool)
+		bare := strings.ToLower(tool.Name)
+		if !s.allowsCap(bare) {
+			continue
 		}
+		if s.trust == trustRead && !tool.Annotations.ReadOnly {
+			continue
+		}
+		enabled[bare] = true
+		out = append(out, tool)
 	}
+	s.mu.Lock()
+	s.enabled = enabled
+	s.declared = len(tools)
+	s.mu.Unlock()
+	// The filtered tool list is what the catalog indexes, so it must carry the
+	// count the menu prints.
 	return out, nil
 }
 
-func (s *cappedSource) Call(ctx context.Context, name string, args json.RawMessage) (catalog.Result, error) {
-	if !s.allows(name) {
-		enabled := make([]string, 0, len(s.caps))
-		for cap := range s.caps {
-			enabled = append(enabled, cap)
+func (s *connSource) Call(ctx context.Context, name string, args json.RawMessage) (catalog.Result, error) {
+	bare := s.bare(name)
+	s.mu.Lock()
+	enabled := s.enabled
+	s.mu.Unlock()
+	if enabled == nil {
+		// A call before the catalog listed this source: list once so trust and
+		// capabilities are enforced the same way.
+		if _, err := s.List(ctx); err != nil {
+			return catalog.Result{}, err
 		}
-		sort.Strings(enabled)
-		return catalog.Result{}, fmt.Errorf("connection %q does not enable %q (enabled: %s)",
-			s.id, name, strings.Join(enabled, ", "))
+		s.mu.Lock()
+		enabled = s.enabled
+		s.mu.Unlock()
 	}
-	return s.inner.Call(ctx, s.bare(name), args)
+	if !enabled[bare] {
+		return catalog.Result{}, s.refusal(name)
+	}
+	return s.inner.Call(ctx, bare, args)
+}
+
+func (s *connSource) refusal(name string) error {
+	bare := s.bare(name)
+	if s.trust == trustRead {
+		if !s.allowsCap(bare) {
+			return fmt.Errorf("connection %q does not enable %q and is read-only", s.id, name)
+		}
+		return fmt.Errorf("connection %q is read-only: %q is not available", s.id, name)
+	}
+	enabled := make([]string, 0, len(s.enabled))
+	for tool := range s.enabled {
+		enabled = append(enabled, s.id+"."+tool)
+	}
+	sort.Strings(enabled)
+	return fmt.Errorf("connection %q does not enable %q (enabled: %s)", s.id, name, strings.Join(enabled, ", "))
 }
 
 // RequiresAuth forwards the MCP login state so the menu can still say
 // "login required".
-func (s *cappedSource) RequiresAuth() bool {
+func (s *connSource) RequiresAuth() bool {
 	if status, ok := s.inner.(catalog.AuthStatus); ok {
 		return status.RequiresAuth()
 	}

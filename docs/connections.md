@@ -21,6 +21,7 @@ This is a configuration model, not a new contract:
 id           = "web"          # the tool prefix the model sees: web.search
 kind         = "local"        # local | mcp-stdio | mcp-http
 command      = "wax"          # kind = local, mcp-stdio
+trust        = "auto"         # auto | read
 capabilities = ["web.search"] # optional allowlist; empty means every tool
 ```
 
@@ -41,6 +42,32 @@ unique across the whole bot.
 (`web.search`) or the bare tool name (`search`). A disabled tool does not appear
 in `search` and `execute` rejects it with the list of enabled ones. With no
 list, every tool the connection declares is available — the common case.
+
+`trust` is the coarse version of the same idea:
+
+| trust | exposes |
+| --- | --- |
+| `auto` (default) | every tool the connection declares |
+| `read` | only tools annotated read-only |
+
+`read` is for integrations whose writes are not wanted: a repository on a shared
+account, a production database, a provider whose destructive tools are one bad
+argument away. A tool without the read-only annotation counts as a writer and
+stays hidden, so a provider that forgets the annotation fails safe.
+
+## Inspecting
+
+```sh
+ax conn list              # id, kind, trust, capabilities, auth, target
+ax conn list --json       # the same, for scripts
+ax conn doctor            # connect everything: "12 declared, 3 on" + what breaks
+ax conn doctor --connection github
+```
+
+`doctor` always connects, bypassing the MCP tool cache, and exits non-zero when a
+connection fails. It reports declared vs enabled, so a `trust = "read"` or a
+narrow `capabilities` list is visible instead of looking like a broken
+integration.
 
 ## Legacy spellings
 

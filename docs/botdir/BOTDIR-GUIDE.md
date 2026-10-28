@@ -140,6 +140,7 @@ All keys are optional.
 id      = "web"
 kind    = "local"        # local | mcp-stdio | mcp-http
 command = "wax"
+trust   = "auto"         # auto | read
 ```
 
 A missing `bot.toml` or missing key means that the consumer applies its own default.

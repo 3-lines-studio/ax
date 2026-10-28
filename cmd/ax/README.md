@@ -133,7 +133,9 @@ command = "wax"
 ```
 
 A connection declares an integration; its tools are discovered and indexed.
-`capabilities` narrows the list when a bot wants only part of a provider. The
+`capabilities` narrows the list when a bot wants only part of a provider, and
+`trust = "read"` keeps only the tools annotated read-only. `ax conn list` shows
+what is configured, `ax conn doctor` connects and reports declared vs enabled. The
 older spellings still work and keep their ids: `tools`/`AX_TOOLS` become
 `kind = "local"` and `[[mcp]]` becomes `kind = "mcp-*"`.
 
