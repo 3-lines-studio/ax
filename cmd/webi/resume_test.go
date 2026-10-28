@@ -40,6 +40,7 @@ func TestResumeLoopPicksUpInterruptedThreads(t *testing.T) {
 	}
 
 	srv.resumeOpenRuns()
+	defer waitIdle(t, srv, thread.ID)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		data, err := os.ReadFile(record)

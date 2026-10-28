@@ -66,6 +66,7 @@ func TestSecretRequestRoundTrip(t *testing.T) {
 		t.Fatalf("request = %+v", request)
 	}
 
+	defer waitIdle(t, srv, thread.ID)
 	var answered struct {
 		OK bool `json:"ok"`
 	}
@@ -132,6 +133,7 @@ func TestSecretSkip(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	defer waitIdle(t, srv, thread.ID)
 	if code := call(t, srv, "POST", "/api/vault/secret", `{"id":"`+state.Pending[0].ID+`","skip":true}`, nil); code != 200 {
 		t.Fatalf("skip code=%d", code)
 	}
@@ -143,6 +145,27 @@ func TestSecretSkip(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("the skip never reached ax: %v %q", err, data)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// waitIdle blocks until the thread has no live run, so a test never ends while
+// the background goroutine is still writing into the thread directory (which
+// makes TempDir cleanup fail).
+func waitIdle(t *testing.T, srv *Server, threadID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var thread struct {
+			Running bool `json:"running"`
+		}
+		call(t, srv, "GET", "/api/threads/"+threadID, "", &thread)
+		if !thread.Running {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the run never finished")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
