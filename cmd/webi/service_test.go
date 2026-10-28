@@ -12,7 +12,8 @@ import (
 
 func TestServiceUnit(t *testing.T) {
 	t.Setenv("BOT_DATA", "")
-	unit := serviceUnit("/home/u/.local/bin/webi", "/home/u/.local/bin/ax", "/home/u/bots/me", "", "0.0.0.0:8377")
+	spec := serviceSpec{Webi: "/home/u/.local/bin/webi", Ax: "/home/u/.local/bin/ax", Root: "/home/u/bots/me", Listen: "0.0.0.0:8377"}
+	unit := serviceUnit(spec)
 	for _, want := range []string{
 		"WorkingDirectory=/home/u/bots/me",
 		"ExecStart=/home/u/.local/bin/webi -C /home/u/bots/me -listen 0.0.0.0:8377 -ax /home/u/.local/bin/ax -open=false",
@@ -23,9 +24,26 @@ func TestServiceUnit(t *testing.T) {
 			t.Fatalf("unit missing %q:\n%s", want, unit)
 		}
 	}
-	withState := serviceUnit("/w", "/a", "/r", "/s", "127.0.0.1:8377")
+	withState := serviceUnit(serviceSpec{Webi: "/w", Ax: "/a", Root: "/r", State: "/s", Listen: "127.0.0.1:8377"})
 	if !strings.Contains(withState, "-state /s") {
 		t.Fatalf("state flag missing:\n%s", withState)
+	}
+}
+
+func TestLaunchAgent(t *testing.T) {
+	t.Setenv("BOT_DATA", "")
+	plist := launchAgent(serviceSpec{Webi: "/w", Ax: "/a", Root: "/r", State: "/s", Listen: "127.0.0.1:8377"})
+	for _, want := range []string{
+		"<string>" + launchLabel + "</string>",
+		"<string>-C</string><string>/r</string>",
+		"<string>-listen</string><string>127.0.0.1:8377</string>",
+		"<key>RunAtLoad</key><true/>",
+		"<key>KeepAlive</key><true/>",
+		"<string>/s/webi.log</string>",
+	} {
+		if !strings.Contains(plist, want) {
+			t.Fatalf("plist missing %q:\n%s", want, plist)
+		}
 	}
 }
 

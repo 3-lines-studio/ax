@@ -861,7 +861,7 @@ function renderHome() {
       ? '<div class="thread-list">' + chans.map((c) =>
           '<a class="thread-item" href="#/c/' + c.id + '"><div class="ti-main">' +
           '<div class="ti-title"># ' + esc(c.name) + '</div>' +
-          '<div class="ti-preview">' + esc(c.workdir || 'no working directory') + '</div></div>' +
+          '<div class="ti-preview">' + (c.threads || []).length + ((c.threads || []).length === 1 ? ' thread' : ' threads') + '</div></div>' +
           '<div class="ti-meta"><span>' + (c.threads || []).length + ' threads</span></div></a>').join('') + '</div>'
       : emptyHTML('Nothing here yet', 'Create a channel to get started.')) +
     '</div></div>';
@@ -882,7 +882,7 @@ function renderChannelView() {
   $('#main').innerHTML =
     '<header class="topbar">' +
     '<button class="icon-btn menu-btn" data-action="drawer" aria-label="Channels" aria-expanded="false">' + ico('list') + '</button>' +
-    '<div class="titles" role="button" tabindex="0" aria-haspopup="menu" data-action="channel-menu" data-id="' + ch.id + '"><h1># ' + esc(ch.name) + '</h1><p>' + esc(ch.workdir || 'no working directory') + '</p></div>' +
+    '<div class="titles" role="button" tabindex="0" aria-haspopup="menu" data-action="channel-menu" data-id="' + ch.id + '"><h1># ' + esc(ch.name) + '</h1><p>' + threads.length + (threads.length === 1 ? ' thread' : ' threads') + '</p></div>' +
     '<div class="actions">' +
     '<button class="btn primary" data-action="new-thread">New thread</button>' +
     '</div></header>' +
@@ -941,7 +941,7 @@ function renderThreadView() {
     '<header class="topbar">' +
     '<button class="icon-btn back" data-action="back" aria-label="Back">' + ico('arrow-left') + '</button>' +
     '<div class="titles" role="button" tabindex="0" aria-haspopup="menu" data-action="thread-menu" data-id="' + th.id + '"><h1 id="thread-title">' + esc(th.title) + '</h1>' +
-    '<p id="thread-sub">#' + esc(ch ? ch.name : '') + (ch && ch.workdir ? ' · ' + esc(ch.workdir) : '') + ctxLabel() + '</p></div>' +
+    '<p id="thread-sub">#' + esc(ch ? ch.name : '') + ctxLabel() + '</p></div>' +
     '</header>' + keyBannerHTML() + vaultBannerHTML() + secretBannerHTML() +
     '<div class="scroll" id="messages-scroll"><div class="messages" id="messages"></div></div>' +
     '<div class="composer-wrap">' + jumpLatestHTML() + '<div class="pending" id="pending"></div>' +
@@ -1039,7 +1039,7 @@ function renderMessages(forceScroll) {
   const sub = $('#thread-sub');
   if (sub && S.thread) {
     const ch = findChannel(S.thread.channel);
-    sub.textContent = '#' + (ch ? ch.name : '') + (ch && ch.workdir ? ' · ' + ch.workdir : '') + ctxLabel();
+    sub.textContent = '#' + (ch ? ch.name : '') + ctxLabel();
   }
   if (stick) scrollToBottom(true);
   updateJumpLatest();
@@ -1623,7 +1623,7 @@ function switcherEntries() {
   const channels = chans.map((c) => ({
     kind: 'channel', id: c.id, channel: c.id,
     label: c.name,
-    sub: c.workdir || 'channel',
+    sub: 'channel',
     hay: (c.name + ' ' + (c.workdir || '') + ' channel').toLowerCase(),
   }));
   const threads = [];

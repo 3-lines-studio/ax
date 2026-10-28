@@ -6,28 +6,32 @@ directory (`bot.toml`, `workspace/`, `skills/`); a thread is an ax session log.
 
 ```sh
 ax mcp add sentry             # whatever the bot needs
-webi -C ~/bots/team
+webi setup
 ```
 
-If `~/bots/team` does not exist, webi creates it with a starter `bot.toml`.
-In a terminal it prints a token URL (`?token=...`) and opens it; the visit
-sets a cookie and redirects the token out of the URL. On another device use
-the "Other devices" URL, or `?token=` from `<state>/token` (created on first
-run, 0600). Flags: `-ax` (binary), `-state` (default
-`<BOT_DATA>/state/webi`), `-base`/`-model` overrides, `-open=false` to skip
-the browser.
+`setup` keeps the UI in your per-user data directory: `~/.local/share/ax` on
+Linux (or `$XDG_DATA_HOME/ax`), `~/Library/Application Support/ax` on macOS.
+No folder to choose. For a bot in a project directory, pass `-C ~/project`;
+the app directory is the default. In a terminal, webi prints a token URL
+(`?token=...`) and opens it; the visit sets a cookie and redirects the token
+out of the URL. `-listen` pins the address (setup asks whether other devices
+may connect), `-ax` points at the binary, `-state` moves the state (default
+`<BOT_DATA>/state/webi`), `-base`/`-model` override the model, and
+`-open=false` skips the browser.
 
 ## Run it as a service
 
 ```sh
-webi -C ~/bots/me -listen 0.0.0.0:8377 setup
+webi setup
 ```
 
-`setup` writes `~/.config/systemd/user/webi.service` with the same `-C`,
-`-listen` and `-state`, enables and starts it, and prints the token URL. It
-does not restart a running unit when the flags change; it prints the
-`systemctl --user restart webi` command instead. Without systemd, run webi in
-a terminal or add it to your login items.
+`setup` asks whether the UI should be reachable from other devices, then
+writes a systemd user unit (`~/.config/systemd/user/webi.service`) on Linux or
+a LaunchAgent (`~/Library/LaunchAgents/studio.3-lines.ax.webi.plist`) on
+macOS, starts it and prints the token URL. It uses the same `-C`, `-listen`
+and `-state` as the command. It does not restart a running unit when the
+settings change; it prints the restart command instead. Without systemd or
+launchd, run webi in a terminal or add it to your login items.
 
 A restart asks for the vault PIN again. `boti serve` (see
 [docs/deploy.md](../../docs/deploy.md)) keeps the key across restarts at the

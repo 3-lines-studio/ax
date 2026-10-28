@@ -174,6 +174,5 @@ if [ -x "$bindir/webi" ]; then
     if [ ! -x "$bindir/ax" ]; then
         echo "install: webi needs ax; install it with: install.sh ax" >&2
     fi
-    echo "next: webi -C ~/bots/me          # run it now"
-    echo "      webi -C ~/bots/me setup    # keep it running"
+    echo "next: webi setup"
 fi

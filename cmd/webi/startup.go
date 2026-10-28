@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 )
 
 // starterBot is written when webi creates a bot directory, so tools get a
@@ -17,57 +16,6 @@ const starterBot = `# A Botdir: bot.md adds context, skills/ adds procedures,
 # workspace/ is where tools work. Any OpenAI-compatible endpoint works.
 model = "deepseek-flash"
 `
-
-// resolveRoot picks the bot directory. Running from the home directory is the
-// common first case, and using $HOME as a workspace would be a bad surprise,
-// so that one case lands in ~/bots/default. Everything else is the current
-// directory, and an explicit -C always wins.
-func resolveRoot(explicit string) (root string, fresh bool, err error) {
-	if explicit == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", false, err
-		}
-		root = cwd
-		if home, err := os.UserHomeDir(); err == nil && filepath.Clean(cwd) == filepath.Clean(home) {
-			root = filepath.Join(home, "bots", "default")
-		}
-	} else {
-		root = expandHome(explicit)
-	}
-	root, err = filepath.Abs(root)
-	if err != nil {
-		return "", false, err
-	}
-	info, err := os.Stat(root)
-	if err == nil {
-		if !info.IsDir() {
-			return "", false, fmt.Errorf("%s is not a directory", root)
-		}
-		return root, false, nil
-	}
-	if !os.IsNotExist(err) {
-		return "", false, err
-	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return "", false, err
-	}
-	return root, true, nil
-}
-
-func expandHome(path string) string {
-	if path != "~" && !strings.HasPrefix(path, "~/") {
-		return path
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	if path == "~" {
-		return home
-	}
-	return filepath.Join(home, path[2:])
-}
 
 func writeStarter(root string) error {
 	return os.WriteFile(filepath.Join(root, "bot.toml"), []byte(starterBot), 0o644)
@@ -99,8 +47,10 @@ func printURLs(host string, port int, token string, open bool, tokenPath string)
 	localHost := host
 	all := false
 	if localHost == "" || localHost == "0.0.0.0" || localHost == "::" {
-		localHost = "127.0.0.1"
+		localHost = "localhost"
 		all = true
+	} else if localHost == "127.0.0.1" || localHost == "::1" {
+		localHost = "localhost"
 	}
 	local := "http://" + net.JoinHostPort(localHost, strconv.Itoa(port)) + "/?token=" + token
 	fmt.Fprintf(os.Stdout, "\n  webi is ready\n\n  This machine:  %s\n", local)
