@@ -61,7 +61,10 @@ func (c *Catalog) Menu() string {
 	return out.String()
 }
 
-// Brief renders the small catalog summary that goes into the system prompt.
+// Brief renders the tiny catalog summary that goes into the system prompt:
+// which servers exist, plus the ids and argument names of the tools worth
+// calling without a search. The descriptions and full schemas stay in the
+// catalog, one search away.
 func (c *Catalog) Brief(core []string) string {
 	var out strings.Builder
 	servers := c.Servers()
@@ -82,23 +85,48 @@ func (c *Catalog) Brief(core []string) string {
 	} else {
 		fmt.Fprintf(&out, "Catalog servers: %s.\n", strings.Join(parts, ", "))
 	}
-	out.WriteString("Use search to inspect a tool and execute to run one. Search with no arguments returns the whole catalog.\n")
-	if len(core) > 0 {
-		var lines []string
-		for _, id := range core {
-			tool, ok := c.Lookup(id)
-			if !ok {
-				continue
-			}
-			lines = append(lines, "- `"+tool.ID+"`: "+oneLine(tool.Description, 120)+" Args: "+schemaArgs(tool, 4))
+	var signatures []string
+	for _, id := range core {
+		tool, ok := c.Lookup(id)
+		if !ok {
+			continue
 		}
-		if len(lines) > 0 {
-			out.WriteString("\nCore tools you may call directly with execute:\n")
-			out.WriteString(strings.Join(lines, "\n"))
-			out.WriteString("\n")
-		}
+		signatures = append(signatures, "`"+tool.ID+"`"+schemaSignature(tool))
+	}
+	if len(signatures) > 0 {
+		out.WriteString("Core: " + strings.Join(signatures, ", ") + ".\n")
 	}
 	return out.String()
+}
+
+// schemaSignature names a tool's arguments for the prompt. The full types and
+// descriptions are in search({"tool":id}); the prompt only needs enough to call
+// a core tool directly.
+func schemaSignature(tool Tool) string {
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+		Required   []string                   `json:"required"`
+	}
+	if err := json.Unmarshal(tool.InputSchema, &schema); err != nil || len(schema.Properties) == 0 {
+		return ""
+	}
+	required := map[string]bool{}
+	for _, name := range schema.Required {
+		required[name] = true
+	}
+	names := make([]string, 0, len(schema.Properties))
+	for name := range schema.Properties {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		if !required[name] {
+			name += "?"
+		}
+		parts = append(parts, name)
+	}
+	return "(" + strings.Join(parts, ", ") + ")"
 }
 
 // Search handles the search tool: menu, ranking, one server, or one tool.
