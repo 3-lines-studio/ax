@@ -1,6 +1,6 @@
 # boti
 
-The [Botdir](../../docs/botdir/BOTDIR.md) host loader for the AX ecosystem. Given a bot root, it reads `bot.toml`, installs the consumer, engine, and every declared tool binary, wires the standard Botdir environment, runs the bot's `[[pre_run]]` hooks, then execs the declared consumer (default `slaxi`).
+The [Botdir](../../docs/botdir/BOTDIR.md) host loader for the AX ecosystem. Given a bot root, it reads `bot.toml`, installs the consumer, engine, transport and every local provider, wires the standard Botdir environment, runs the bot's `[[pre_run]]` hooks, then execs the declared consumer (default `slaxi`).
 
 ```sh
 boti install   # read bot.toml, install any missing binaries (build-time)
@@ -40,7 +40,8 @@ CMD ["boti"]
 ```
 
 `boti selftest` checks that every program in `bot.toml` (the engine, the
-consumer, the `[boti.serve]` command and every tool) is on `PATH` and that
+consumer, the `[boti.serve]` command, every local connection and every legacy
+tool) is on `PATH` and that
 the engine can parse the bot, resolve its connections and load its catalog —
 no model call. `boti update` backs up the installed binaries, installs the
 current release and runs that selftest; if the new engine fails it, the previous
@@ -52,6 +53,17 @@ binaries come back and the command exits non-zero.
 
 ```toml
 consumer = "slaxi"
+
+[[connection]]
+id = "fs"
+kind = "local"
+command = "fsx"
+compute = true
+
+[[connection]]
+id = "web"
+kind = "local"
+command = "wax"
 
 [env]
 WAX_NO_SANDBOX = "1"
@@ -68,6 +80,9 @@ repo = "/srv/ax"
 ```
 
 - `consumer` — executable resolved through `PATH`; the loader execs it.
+- `[[connection]]` — the integration unit. A `kind = "local"` (the default)
+  command is one program the host installs and checks; `tools` is the legacy
+  spelling of the same thing and still works.
 - `[env]` — literal environment variables exported; host env wins.
   `[boti.serve]` commands get the same environment plus `BOT_ROOT`, `BOT_DATA`
   and `AX_BUILD`.
