@@ -23,6 +23,7 @@ workspace layout, a bot is a plain directory the whole ecosystem agrees on:
 ├── bot.toml       # configuration
 ├── bot.md         # instructions
 ├── skills/        # Agent Skills
+├── routines/      # deterministic routines
 ├── resources/     # other read-only input
 ├── state/         # durable machine-managed data
 ├── workspace/     # durable user-visible work
@@ -36,7 +37,7 @@ variable is required. A host simply `cd`s into the bot and execs the consumer.
 A host MAY provide a separate **runtime data root** via the optional
 `BOT_DATA` environment variable. When set, `state/`, `workspace/`, and `run/`
 resolve there (so a single persistent volume can be mounted without shadowing
-the definition); the definition (`bot.toml`, `bot.md`, `skills/`,
+the definition); the definition (`bot.toml`, `bot.md`, `skills/`, `routines/`,
 `resources/`) stays at the bot root and secrets stay host-provided and
 volatile.
 

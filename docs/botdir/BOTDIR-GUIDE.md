@@ -64,11 +64,11 @@ Nested directories have no implicit bot meaning. A host selects bot roots explic
 
 A host MAY provide a separate **runtime data root** for the runtime paths. That location is communicated to consumers as the environment variable `BOT_DATA` (an absolute path). When `BOT_DATA` is unset, consumers resolve the runtime paths at the bot root.
 
-The definition paths — `bot.toml`, `bot.md`, `skills/`, and `resources/` — always live at the bot root.
+The definition paths — `bot.toml`, `bot.md`, `skills/`, `routines/`, and `resources/` — always live at the bot root.
 
 | Path | Class | Root |
 | --- | --- | --- |
-| `bot.toml`, `bot.md`, `skills/`, `resources/` | Definition | bot root |
+| `bot.toml`, `bot.md`, `skills/`, `routines/`, `resources/` | Definition | bot root |
 | `state/`, `workspace/`, `run/` | Runtime | `BOT_DATA` (default bot root) |
 | `secrets/` | Volatile | host-provided, never persisted |
 
@@ -83,6 +83,7 @@ This separates the immutable definition from the mutable per-instance data, so a
 ├── bot.toml
 ├── bot.md
 ├── skills/
+├── routines/
 ├── resources/
 ├── state/
 ├── workspace/
@@ -95,6 +96,7 @@ This separates the immutable definition from the mutable per-instance data, so a
 | `bot.toml` | Definition | Read-only | Portable |
 | `bot.md` | Definition | Read-only | Portable |
 | `skills/` | Definition | Read-only | Portable |
+| `routines/` | Definition | Read-only | Portable |
 | `resources/` | Definition | Read-only | Portable |
 | `state/` | Durable runtime data | Read/write | Persistent |
 | `workspace/` | Durable user data | Read/write | Persistent |
@@ -182,7 +184,13 @@ Consumers MUST NOT automatically add all resources to model context.
 
 `resources/` is definition input. `workspace/` is mutable instance data.
 
-## 9. `state/`
+## 9. `routines/`
+
+`routines/` is optional. Each `<name>/routine.toml` declares a deterministic
+routine; see [docs/routines.md](../routines.md). Loading a bot MUST NOT run a
+routine.
+
+## 10. `state/`
 
 `state/` is optional private, durable, machine-managed runtime data.
 
@@ -208,7 +216,7 @@ State MAY contain sensitive data and SHOULD be treated as private.
 
 State format and migration belong to the consumer runtime that owns the namespace.
 
-## 10. `workspace/`
+## 11. `workspace/`
 
 `workspace/` is optional private, durable, user-visible instance data.
 
@@ -224,7 +232,7 @@ Workspace data MAY be sensitive and SHOULD be treated as private.
 
 A consumer MAY start a child process in any readable bot directory appropriate for that command. The specification does not require workspace to be the child process working directory.
 
-## 11. `secrets/`
+## 12. `secrets/`
 
 `secrets/` is optional secret runtime input provided by the host or an explicitly authorized secret-management consumer.
 
@@ -254,7 +262,7 @@ Secrets are **volatile**: a host MUST NOT persist them in the runtime data root.
 
 Secret rotation during a run is not defined by this version.
 
-## 12. `run/`
+## 13. `run/`
 
 `run/` is optional private ephemeral data for one run.
 
@@ -276,7 +284,7 @@ Consumers MUST NOT require `run/` data to survive a stop, crash, or restart.
 
 Private scratch data that other bot processes do not need to discover MAY use the operating system's temporary-file facilities instead.
 
-## 13. Startup and shutdown
+## 14. Startup and shutdown
 
 A host starts a consumer by changing to the bot root and executing it using normal process semantics:
 
@@ -295,7 +303,7 @@ On POSIX systems, long-running consumers SHOULD handle `SIGTERM`, stop accepting
 
 Consumers MUST tolerate forced termination without leaving valid-looking partial durable files.
 
-## 14. Concurrency
+## 15. Concurrency
 
 Several consumers MAY operate one bot at the same time.
 
@@ -305,7 +313,7 @@ Consumers MUST NOT mutate another consumer's `state/` or `run/` namespace unless
 
 Sharing state or workspace between bot instances is permitted. The user or host owns the resulting coordination and isolation concerns.
 
-## 15. Validation and readiness
+## 16. Validation and readiness
 
 Structural validation MUST be local, deterministic, read-only, and free of external service calls.
 
@@ -317,7 +325,7 @@ Readiness is a separate consumer or host operation. It MAY resolve tools, check 
 
 A validator returns zero for a structurally valid bot and non-zero for an invalid bot. This version defines no diagnostic output format.
 
-## 16. Security
+## 17. Security
 
 The bot directory is an interface, not a security boundary.
 
@@ -331,7 +339,7 @@ On POSIX systems, hosts SHOULD restrict secret access to the bot owner or servic
 
 Hosts and consumers SHOULD expose each tool only to the secrets and capabilities it requires.
 
-## 17. Portability
+## 18. Portability
 
 Standard text files MUST use UTF-8. Consumers MUST accept LF and CRLF line endings. Writers SHOULD use LF.
 
@@ -341,7 +349,7 @@ Runtime data SHOULD store paths relative to the runtime data root (`BOT_DATA` or
 
 The specification defines required access behavior, not one permission model, filesystem, or storage implementation.
 
-## 18. Lifecycle
+## 19. Lifecycle
 
 A host MAY assemble standard paths from independent physical sources into one bot root. A host MAY keep the definition at the bot root and place the runtime paths at a separate `BOT_DATA` root, mounting one persistent volume there. In that layout, a host mounts `BOT_DATA` (not the bot root) so the definition stays immutable and secrets stay volatile.
 
@@ -353,7 +361,7 @@ Definition updates SHOULD occur between runs. Live updates and secret rotation a
 
 After a stop or crash, a host MUST preserve state and workspace data and MUST discard stale run data. Restart policy is outside this specification.
 
-## 19. Compatibility
+## 20. Compatibility
 
 Consumers MUST ignore unknown paths and unknown `bot.toml` keys.
 
@@ -367,7 +375,7 @@ A consumer runtime owns compatibility and migration for its state namespace. A m
 
 The written specification is versioned. A bot does not declare a specification version in this version of the contract.
 
-## 20. Conformance
+## 21. Conformance
 
 A conforming bot is a directory whose present standard paths follow this specification. An empty directory conforms.
 
@@ -391,7 +399,7 @@ A conforming host:
 
 Partial consumers such as editors and validators conform when they respect the paths they access.
 
-## 21. Version 1 acceptance
+## 22. Version 1 acceptance
 
 Version 1 should be frozen only after:
 
