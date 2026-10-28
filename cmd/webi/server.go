@@ -34,6 +34,7 @@ type Server struct {
 	vault    *Vault
 	resume   resumeState
 	started  time.Time
+	build    string
 
 	mu      sync.Mutex
 	runs    map[string]*axrun.Run
@@ -41,7 +42,7 @@ type Server struct {
 	pending map[string]pendingSecret
 }
 
-func NewServer(store *Store, cfg axrun.Config, stateDir string, static http.Handler) *Server {
+func NewServer(store *Store, cfg axrun.Config, stateDir string, static http.Handler, build string) *Server {
 	return &Server{
 		store:    store,
 		cfg:      cfg,
@@ -49,6 +50,7 @@ func NewServer(store *Store, cfg axrun.Config, stateDir string, static http.Hand
 		settings: filepath.Join(stateDir, "settings.json"),
 		vault:    NewVault(filepath.Join(stateDir, "vault.json")),
 		started:  time.Now(),
+		build:    build,
 		runs:     map[string]*axrun.Run{},
 		resume:   resumeState{marks: map[string]sessionMark{}},
 		subs:     map[chan []byte]struct{}{},
@@ -57,7 +59,13 @@ func NewServer(store *Store, cfg axrun.Config, stateDir string, static http.Hand
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"ok": "1"}) })
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{
+			"ok":     "1",
+			"build":  s.build,
+			"uptime": int(time.Since(s.started).Seconds()),
+		})
+	})
 	mux.HandleFunc("GET /api/stream", s.handleStream)
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
@@ -148,10 +156,14 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	settings := s.loadSettings()
 	channels := s.store.Channels()
 	out := make([]map[string]any, 0, len(channels))
+	running := 0
 	for _, channel := range channels {
 		threads := s.store.Threads(channel.ID)
 		for i := range threads {
 			threads[i].Running = s.running(threads[i].ID)
+			if threads[i].Running {
+				running++
+			}
 		}
 		out = append(out, map[string]any{
 			"id":          channel.ID,
@@ -174,8 +186,8 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{
 		"user":           "",
-		"build":          "webi",
-		"version":        Version,
+		"build":          s.build,
+		"running":        running,
 		"uptime":         int(time.Since(s.started).Seconds()),
 		"vault":          s.vault.Status(),
 		"pending_secret": s.pendingSecrets(),
