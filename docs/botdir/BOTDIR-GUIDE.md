@@ -188,7 +188,7 @@ Consumers MUST NOT automatically add all resources to model context.
 
 `routines/` is optional. Each `<name>/routine.toml` declares a deterministic
 routine; see [docs/routines.md](../routines.md). Loading a bot MUST NOT run a
-routine.
+routine. Runs, locks and logs belong to `state/routines/<name>/`, not here.
 
 ## 10. `state/`
 
