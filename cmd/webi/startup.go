@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -19,8 +20,20 @@ const starterBot = `# A Botdir: bot.md adds context, skills/ adds procedures,
 model = "deepseek-flash"
 `
 
+// starterProviders are the local tools a fresh bot gets when they are
+// installed: without them the first conversation has no hands.
+var starterProviders = []string{"fsx", "bashx", "skillx", "memoryx"}
+
 func writeStarter(root string) error {
-	return os.WriteFile(filepath.Join(root, "bot.toml"), []byte(starterBot), 0o644)
+	var starter strings.Builder
+	starter.WriteString(starterBot)
+	for _, name := range starterProviders {
+		if _, err := exec.LookPath(name); err != nil {
+			continue
+		}
+		fmt.Fprintf(&starter, "\n[[connection]]\nid = %q\nkind = \"local\"\ncommand = %q\n", name, name)
+	}
+	return os.WriteFile(filepath.Join(root, "bot.toml"), []byte(starter.String()), 0o644)
 }
 
 // announce prints the one link a first visit needs. It stays off the log: the
