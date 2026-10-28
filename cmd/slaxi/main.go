@@ -263,13 +263,15 @@ func serve(ctx context.Context, cfg config, jobs chan<- job, seen map[string]str
 	}
 }
 
+var slackClient = &http.Client{Timeout: 30 * time.Second}
+
 func openSocket(ctx context.Context, cfg config) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://slack.com/api/apps.connections.open", nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+cfg.appToken)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := slackClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("open socket: %w", err)
 	}
@@ -559,7 +561,7 @@ func slackAPI(cfg config, method string, form url.Values) (slackResponse, error)
 	}
 	req.Header.Set("Authorization", "Bearer "+cfg.botToken)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := slackClient.Do(req)
 	if err != nil {
 		return result, err
 	}
