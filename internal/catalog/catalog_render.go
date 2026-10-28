@@ -21,7 +21,7 @@ func (c *Catalog) Menu() string {
 	out.WriteString("# Catalog\n\n")
 	servers := c.Servers()
 	if len(servers) == 0 {
-		out.WriteString("No tool sources configured. Add `[[mcp]]` servers to bot.toml or providers to AX_TOOLS.\n")
+		out.WriteString("No tool sources configured. Add a `[[connection]]` (or `[[mcp]]`) to bot.toml, or providers to AX_TOOLS.\n")
 		return out.String()
 	}
 	out.WriteString("## Servers\n\n")

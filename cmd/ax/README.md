@@ -122,11 +122,20 @@ inlined as a data URL.
 
 ## Tool catalog
 
-`ax` has no built-in tools. Everything is a catalog source:
+`ax` has no built-in tools. Everything is a catalog source, and the unit of
+configuration is a **connection** ([docs/connections.md](../../docs/connections.md)):
 
-- **MCP servers** declared with `[[mcp]]` (stdio or Streamable HTTP).
-- **Local providers** declared with `tools`/`AX_TOOLS`; they keep the
-  `describe`/`run` convention and are indexed exactly like MCP servers.
+```toml
+[[connection]]
+id      = "web"        # the model calls web.search / web.fetch
+kind    = "local"       # local | mcp-stdio | mcp-http
+command = "wax"
+```
+
+A connection declares an integration; its tools are discovered and indexed.
+`capabilities` narrows the list when a bot wants only part of a provider. The
+older spellings still work and keep their ids: `tools`/`AX_TOOLS` become
+`kind = "local"` and `[[mcp]]` becomes `kind = "mcp-*"`.
 
 The model always sees two tools:
 
