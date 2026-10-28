@@ -101,8 +101,21 @@ func mcpServeCommand(fc fileConfig, bot *botCtx, args []string) {
 	}
 }
 
+// resolveAllMCP lists the MCP servers among the bot's connections, in either
+// spelling: [[connection]] with an MCP kind, or the legacy [[mcp]] table.
 func resolveAllMCP(fc fileConfig, bot *botCtx) ([]resolvedMCP, error) {
-	return resolveMCPEntries(fc.mcp, bot.Workspace, mcpAuthDir(bot))
+	conns, err := resolveConnections(fc, bot.Root, bot.Workspace, mcpAuthDir(bot))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]resolvedMCP, 0, len(conns))
+	for _, conn := range conns {
+		if conn.kind != connMCP {
+			continue
+		}
+		out = append(out, resolvedMCP{name: conn.id, cfg: conn.cfg, err: conn.err})
+	}
+	return out, nil
 }
 
 // serverAuthState describes how a server authenticates, in one phrase.
@@ -216,7 +229,16 @@ func mcpListCommand(fc fileConfig, bot *botCtx, args []string) {
 	_ = writer.Flush()
 }
 
+// mcpEntryForName returns the table as the bot wrote it, which is what the auth
+// helpers inspect. Connections win over the legacy table with the same id.
 func mcpEntryForName(fc fileConfig, name string) mcpEntry {
+	for _, entry := range fc.connections {
+		if strings.EqualFold(strings.TrimSpace(entry.ID), name) {
+			if kind, err := connectionKindNormal(entry.Kind); err == nil && kind == connMCP {
+				return entry.mcpEntry(strings.ToLower(strings.TrimSpace(entry.ID)))
+			}
+		}
+	}
 	for _, entry := range fc.mcp {
 		if strings.EqualFold(strings.TrimSpace(entry.Name), name) {
 			return entry
@@ -534,7 +556,7 @@ func mcpLoginCommand(fc fileConfig, bot *botCtx, args []string) {
 	}
 	entry := mcpEntryForName(fc, name)
 	if strings.TrimSpace(entry.Name) == "" {
-		fmt.Fprintf(os.Stderr, "error: no [[mcp]] server named %q in bot.toml\n", name)
+		fmt.Fprintf(os.Stderr, "error: no MCP server named %q in bot.toml ([[connection]] or [[mcp]])\n", name)
 		os.Exit(1)
 	}
 	if entry.URL == "" {
@@ -600,7 +622,7 @@ func mcpLogoutCommand(fc fileConfig, bot *botCtx, args []string) {
 		os.Exit(2)
 	}
 	if strings.TrimSpace(mcpEntryForName(fc, name).Name) == "" {
-		fmt.Fprintf(os.Stderr, "error: no [[mcp]] server named %q in bot.toml\n", name)
+		fmt.Fprintf(os.Stderr, "error: no MCP server named %q in bot.toml ([[connection]] or [[mcp]])\n", name)
 		os.Exit(1)
 	}
 	path := oauthTokenPath(mcpAuthDir(bot), strings.ToLower(name))
