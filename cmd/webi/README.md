@@ -92,7 +92,8 @@ only, no inline script), `nosniff` and no referrer.
 The API key is a vault secret: create the vault first, then add
 `DEEPSEEK_API_KEY` in the `global` scope (the "Add key" banner opens that form
 with the name already filled). The Settings dialog does not store a key; there
-is exactly one place for secrets.
+is exactly one place for secrets. It does store the model, effort, compaction,
+context window and the name shown next to your messages.
 
 The UI's vault panel works: secrets live in `state/webi/vault.json`, one
 AES-256-GCM blob whose key is derived from a PIN with scrypt (N=32768). The

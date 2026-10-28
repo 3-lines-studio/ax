@@ -361,14 +361,19 @@ function keyBannerHTML() {
 }
 
 function emptyHTML(title, sub) {
-  return '<div class="empty"><strong>' + esc(title) + '</strong>' + esc(sub || '') + '</div>';
+  return '<div class="empty"><strong>' + esc(title) + '</strong>' +
+    '<span class="empty-sub">' + esc(sub || '') + '</span></div>';
 }
 
 function emptyThreadHTML() {
+  const prompts = ['What can you do?', 'Explain this project', 'Write a routine for me'];
   return '<div class="empty thread-empty">' +
     '<span class="logo empty-logo" aria-hidden="true"></span>' +
     '<strong>Ask ax anything</strong>' +
-    '<span>Message below, or attach an image.</span></div>';
+    '<span class="empty-sub">Send a message below, or attach an image.</span>' +
+    '<div class="suggestions">' + prompts.map((text) =>
+      '<button type="button" class="suggestion" data-action="suggest" data-text="' + esc(text) + '">' + esc(text) + '</button>').join('') +
+    '</div></div>';
 }
 
 // The vault banner is the only UI the vault has: when it exists and is
@@ -895,7 +900,10 @@ function renderChannelView() {
     '<div class="scroll"><div class="pad">' +
     (threads.length
       ? '<div class="thread-list">' + threads.map(threadItemHTML).join('') + '</div>'
-      : '<div class="empty"><strong>No threads yet</strong><span>Ask ax anything to start.</span>' +
+      : '<div class="empty channel-empty">' +
+        '<span class="logo empty-logo" aria-hidden="true"></span>' +
+        '<strong>No threads yet</strong>' +
+        '<span class="empty-sub">Start a conversation in #' + esc(ch.name) + '.</span>' +
         '<button class="btn primary" data-action="new-thread">Start chatting</button></div>') +
     '</div></div>';
 }
@@ -995,6 +1003,13 @@ function avatarLetter(name) {
   return n ? n[0].toUpperCase() : '?';
 }
 
+// The person's name comes from Settings. Until it is set, "You" reads better
+// than an empty header and a "?" avatar.
+function authorName(m) {
+  const who = (m && m.author) || (S.state && S.state.user) || '';
+  return String(who).trim() || 'You';
+}
+
 function bubbleShell(kind, name, iso, bodyHTML, extraClass) {
   return '<div class="msg ' + kind + (extraClass ? ' ' + extraClass : '') + '">' +
     '<div class="avatar">' + esc(avatarLetter(name)) + '</div>' +
@@ -1019,14 +1034,14 @@ function messageHTML(m) {
       '<div class="body">' + esc(m.text) + '</div></div></div>';
   }
   const isUser = m.t === 'user';
-  const name = isUser ? (m.author || (S.state ? S.state.user : 'you')) : 'ax';
+  const name = isUser ? authorName(m) : 'ax';
   const body = (isUser ? '<p>' + esc(m.text).replace(/\n/g, '<br>') + '</p>' : md(m.text));
   return bubbleShell(isUser ? 'user' : 'assistant', name, m.ts, imagesHTML(m.images) + body);
 }
 
 function liveHTML(id, text) {
   return '<div class="msg assistant live" id="live-' + esc(id) + '">' +
-    '<div class="avatar">p</div><div class="body-wrap">' +
+    '<div class="avatar">' + esc(avatarLetter('ax')) + '</div><div class="body-wrap">' +
     '<div class="head"><span class="who">ax</span><span class="time"></span></div>' +
     '<div class="body">' + md(text) + '<span class="caret"></span></div></div></div>';
 }
@@ -1150,6 +1165,11 @@ function updateJumpLatest() {
 function scrollToBottom(force) {
   const el = $('#messages-scroll');
   if (!el) return;
+  // An empty thread has no bottom to stick to. With the keyboard open the
+  // hero can be taller than the viewport, so start at its top instead of
+  // hiding the logo above the fold.
+  const box = $('#messages');
+  if (box && box.classList.contains('is-empty')) { el.scrollTop = 0; return; }
   if (force || S.stick) el.scrollTop = el.scrollHeight;
 }
 
@@ -2108,6 +2128,7 @@ async function openSettings() {
     submit: 'Save',
     body: 'The DeepSeek API key lives in the vault, not here.',
     fields: [
+      { name: 'name', label: 'Your name', value: cfg.name || '', placeholder: 'You', note: 'Shown next to your messages. Leave empty to use “You”.' },
       { name: 'model', label: 'Model', value: cfg.model, options: [
         { value: 'deepseek-flash', label: 'deepseek-flash (1M ctx, vision)' },
         { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro (stronger, slower)' },
@@ -2124,14 +2145,18 @@ async function openSettings() {
   });
   if (!v) return;
   const payload = {
+    name: String(v.name || '').trim(),
     model: v.model,
     effort: v.effort,
     compact_at: Number(v.compact_at),
-    max_context: Number(v.max_context),
+    // The API stores this as context_window; max_context is only the UI name.
+    context_window: Number(v.max_context),
   };
   try {
     await api('/api/settings', { method: 'POST', body: JSON.stringify(payload) });
     await refreshState();
+    // The name is part of every user bubble, so repaint the open thread.
+    if (S.threadId) renderMessages(false);
     toast('Settings saved');
   } catch (e) { toast(e.message, true); }
 }
@@ -2722,6 +2747,16 @@ function wireEvents() {
       case 'jump-latest': S.stick = true; scrollToBottom(true); updateJumpLatest(); break;
       case 'stop': stopRun(); break;
       case 'attach': $('#file-input').click(); break;
+      case 'suggest': {
+        const input = $('#input');
+        if (!input) break;
+        input.value = a.dataset.text || '';
+        autosize(input);
+        updateSendState();
+        input.focus();
+        try { const end = input.value.length; input.setSelectionRange(end, end); } catch (e) {}
+        break;
+      }
       case 'vault-unlock': unlockVault(); break;
       case 'vault-create': createVault(); break;
       case 'secret-save': saveSecret(); break;
