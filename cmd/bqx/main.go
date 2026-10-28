@@ -132,9 +132,27 @@ func copyGCSObject(ctx context.Context, bucket, object, destination string) erro
 	return nil
 }
 
+// credentialsFromJSON validates the credential type before loading it: the
+// environment variable is ours, but an unexpected type should fail loudly.
+func credentialsFromJSON(ctx context.Context, data []byte, scopes ...string) (*google.Credentials, error) {
+	var header struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return nil, err
+	}
+	switch kind := google.CredentialsType(header.Type); kind {
+	case google.ServiceAccount, google.AuthorizedUser, google.ExternalAccount,
+		google.ExternalAccountAuthorizedUser, google.ImpersonatedServiceAccount, google.GDCHServiceAccount:
+		return google.CredentialsFromJSONWithTypeAndParams(ctx, data, kind, google.CredentialsParams{Scopes: scopes})
+	default:
+		return nil, fmt.Errorf("unsupported credential type %q", header.Type)
+	}
+}
+
 func googleHTTPClient(ctx context.Context) (*http.Client, error) {
 	if credentials := inlineCredentials(); credentials != "" {
-		googleCredentials, err := google.CredentialsFromJSON(ctx, []byte(credentials), "https://www.googleapis.com/auth/devstorage.read_only")
+		googleCredentials, err := credentialsFromJSON(ctx, []byte(credentials), "https://www.googleapis.com/auth/devstorage.read_only")
 		if err != nil {
 			return nil, err
 		}
