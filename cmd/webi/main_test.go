@@ -26,7 +26,7 @@ func newTestServer(t *testing.T, axPath string) (*Server, string) {
 	if err := store.PutChannel(channels[0]); err != nil {
 		t.Fatal(err)
 	}
-	srv := NewServer(store, axrun.Config{AXPath: axPath, BotRoot: botRoot}, state, nil)
+	srv := NewServer(store, axrun.Config{AXPath: axPath, BotRoot: botRoot}, state, nil, "test")
 	return srv, store.Channels()[0].ID
 }
 

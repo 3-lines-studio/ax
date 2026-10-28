@@ -2,7 +2,7 @@
 /dist/
 /ax
 .ax/
-ax-*
+/ax-*
 __pycache__/
 .env
 .DS_Store

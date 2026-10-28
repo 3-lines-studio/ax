@@ -19,9 +19,6 @@ import (
 	"github.com/3-lines-studio/ax/internal/botdir"
 )
 
-// Version is reported to the UI.
-const Version = "0.1.0"
-
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8377", "address to serve the UI on")
 	stateDir := flag.String("state", "", "state directory (default <BOT_DATA>/state/webi)")
@@ -29,6 +26,7 @@ func main() {
 	axPath := flag.String("ax", "ax", "path to the ax binary")
 	baseURL := flag.String("base", "", "override the model endpoint for every run")
 	model := flag.String("model", "", "override the model for every run")
+	selftest := flag.Bool("selftest", false, "check the bot, state and ax binary, then exit")
 	flag.Parse()
 
 	root := *botRoot
@@ -44,6 +42,9 @@ func main() {
 	state := *stateDir
 	if state == "" {
 		state = filepath.Join(paths.DataRoot, "state", "webi")
+	}
+	if *selftest {
+		os.Exit(runSelftest(root, state, *axPath, os.Stdout, os.Stderr))
 	}
 	store, err := NewStore(state)
 	if err != nil {
@@ -62,7 +63,7 @@ func main() {
 		BotRoot: paths.Root,
 		BaseURL: *baseURL,
 		Model:   *model,
-	}, state, staticHandler())
+	}, state, staticHandler(), buildID())
 
 	// A run that outlived the last process is picked up here, not by the user.
 	srv.StartResumeLoop(resumeInterval)
@@ -77,6 +78,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
+}
+
+// buildID labels the process for /healthz and the UI. The host that supervises
+// a build sets AX_BUILD (boti serve does); a plain checkout reports "dev".
+func buildID() string {
+	if v := strings.TrimSpace(os.Getenv("AX_BUILD")); v != "" {
+		return v
+	}
+	return "dev"
 }
 
 // readSession projects an ax session log into the events the UI renders. It

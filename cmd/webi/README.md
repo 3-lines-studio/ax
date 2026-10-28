@@ -68,6 +68,19 @@ Revealing a value asks for the PIN again on every request: anything running as
 the same user can reach loopback, so an unlocked session is not a license to
 print secrets.
 
+## Health, build and selftest
+
+`GET /healthz` answers `{"ok":"1","build":"<id>","uptime":<s>}`. The build id
+comes from `AX_BUILD`, which the host that supervises a build sets (`boti
+serve` does); a plain checkout reports `dev`. `/api/state` carries the same id
+plus `running`, the number of threads with a live ax process, so a host can
+wait for idle before restarting.
+
+`webi -selftest` checks the binary against a bot without binding a port or
+calling the model: the embedded UI, the state directory, the vault header and
+`ax selftest` with the engine this webi would spawn. Exit code 1 means the
+build should not be activated.
+
 ## Not here yet
 
 Slack-specific formatting and pixi's supervisor. Threads compact themselves in

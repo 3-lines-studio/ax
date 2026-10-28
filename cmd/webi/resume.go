@@ -10,6 +10,13 @@ import (
 	"time"
 )
 
+// isSessionBusy reports whether ax refused to resume because another process
+// still writes the log. The lock is the liveness signal: if it is held, the run
+// survived the restart and needs no resume.
+func isSessionBusy(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "already in use")
+}
+
 // A run whose ax process died leaves a `run_start` with no `run_end` in the
 // thread's session. ax can continue it (`--resume`); webi decides when: once at
 // startup and then on a timer, so a crash or a deploy does not strand work.
@@ -58,9 +65,17 @@ func (s *Server) resumeOpenRuns() {
 			if !open {
 				continue
 			}
-			slog.Info("webi: resuming interrupted run", "thread", thread.ID)
 			if err := s.startResume(thread); err != nil {
+				if isSessionBusy(err) {
+					// The previous process is still alive and holds the
+					// session flock; the next sweep looks again. Not a
+					// failure, and not worth a warning every 30 seconds.
+					slog.Debug("webi: run is alive, not resuming", "thread", thread.ID)
+					continue
+				}
 				slog.Warn("webi: resume", "thread", thread.ID, "error", err)
+			} else {
+				slog.Info("webi: resuming interrupted run", "thread", thread.ID)
 			}
 		}
 	}
