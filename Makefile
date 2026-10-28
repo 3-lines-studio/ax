@@ -50,7 +50,7 @@ harness: $(BIN)/ax
 	python3 scripts/harness.py --bin $(BIN)/ax
 
 eval: $(BIN)/ax
-	python3 scripts/eval.py
+	AX_BIN=$(or $(AX_BIN),$(BIN)/ax) python3 scripts/eval.py
 
 install: build
 	install -d "$(PREFIX)/bin"
