@@ -64,6 +64,9 @@ func main() {
 		Model:   *model,
 	}, state, staticHandler())
 
+	// A run that outlived the last process is picked up here, not by the user.
+	srv.StartResumeLoop(resumeInterval)
+
 	server := &http.Server{
 		Addr:              *listen,
 		Handler:           srv.Handler(),
@@ -102,6 +105,7 @@ func readSession(path string) ([]map[string]any, error) {
 			Message json.RawMessage `json:"message"`
 			Upto    int             `json:"upto"`
 			At      int64           `json:"at,omitempty"`
+			Resume  bool            `json:"resume,omitempty"`
 		}
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			continue
@@ -116,6 +120,11 @@ func readSession(path string) ([]map[string]any, error) {
 				continue
 			}
 			if strings.TrimSpace(msg.Content) == "" {
+				continue
+			}
+			if entry.Resume && msg.Role == "user" {
+				// The resume turn is ax talking to the model, not the user.
+				events = append(events, map[string]any{"t": "resume", "ts": eventTime(entry.At)})
 				continue
 			}
 			events = append(events, map[string]any{

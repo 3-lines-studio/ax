@@ -49,6 +49,9 @@ type sessionEntry struct {
 	Interrupted bool      `json:"interrupted,omitempty"`
 	Outcome     string    `json:"outcome,omitempty"`
 	Prompt      string    `json:"prompt,omitempty"`
+	// Resume marks the synthetic user turn that `ax --resume` appends, so a
+	// host can show it as a resume instead of something the user typed.
+	Resume bool `json:"resume,omitempty"`
 
 	// compaction: how many projected messages the summary replaces, and the
 	// summary itself. Older entries stay in the log; readers drop the prefix.

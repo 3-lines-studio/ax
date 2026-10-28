@@ -1004,6 +1004,7 @@ function imagesHTML(ids) {
 
 function messageHTML(m) {
   if (m.t === 'compaction') return '<div class="divider">context compacted</div>';
+  if (m.t === 'resume') return '<div class="divider">run resumed after an interruption</div>';
   if (m.t === 'error') {
     return '<div class="msg error"><div class="avatar">!</div><div class="body-wrap">' +
       '<div class="head"><span class="who">error</span><span class="time">' + fmtTime(m.ts) + '</span></div>' +
