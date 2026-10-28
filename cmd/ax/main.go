@@ -53,6 +53,8 @@ type fileConfig struct {
 	coreTools        []string
 	mcp              []mcpEntry
 	connections      []connectionEntry
+	computeIDs       []string
+	computeErr       error
 	compactAt        float64
 	compactAtSet     bool
 	contextWindow    int
@@ -103,6 +105,14 @@ func main() {
 	}
 	bot := resolveBotCtx(botRoot)
 	_ = os.Setenv("BOT_ROOT", bot.Root)
+	// A broken compute root must not hide `ax conn list`/`ax conn doctor`: the
+	// run path fails on it, the diagnostics report it.
+	compute, computeErr := resolveCompute(fc, bot.Root)
+	fc.computeIDs = compute.ids
+	fc.computeErr = computeErr
+	if compute.root != "" {
+		bot.Workspace = compute.root
+	}
 	promptFromStdin := len(prompt) == 0
 	if promptFromStdin {
 		data, err := io.ReadAll(os.Stdin)
@@ -222,6 +232,10 @@ func usage() {
 }
 
 func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
+	if fc.computeErr != nil {
+		fmt.Fprintln(os.Stderr, "error:", fc.computeErr)
+		os.Exit(1)
+	}
 	if err := validateModelOptions(cfg, fc); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(2)
@@ -279,7 +293,7 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 		}
 	}
 	defer closeCatalog()
-	system := resolveSystem(cfg, tools, bot, cat, coreTools(fc))
+	system := resolveSystem(cfg, tools, bot, cat, coreToolIDs(fc, cat))
 	baseSystem := system
 	if state.Summary != "" {
 		system += summarySection(state.Summary)
@@ -552,6 +566,37 @@ func toolsOrExit(config fileConfig, workdir string) []Tool {
 	return tools
 }
 
+// maxCoreTools caps the cheat sheet in the system prompt. A compute connection
+// that exposes twenty tools should not turn the prompt into a tool list.
+const maxCoreTools = 8
+
+// coreToolIDs is what the prompt suggests calling without a search: the
+// explicit core_tools, else every tool of the compute connection(s), else the
+// historical fsx/bashx ids.
+func coreToolIDs(fc fileConfig, cat *catalog.Catalog) []string {
+	if len(fc.coreTools) > 0 {
+		return fc.coreTools
+	}
+	if cat != nil && len(fc.computeIDs) > 0 {
+		ids := make([]string, 0, maxCoreTools)
+		for _, tool := range cat.Tools() {
+			for _, id := range fc.computeIDs {
+				if strings.EqualFold(tool.Server, id) {
+					ids = append(ids, tool.ID)
+					break
+				}
+			}
+			if len(ids) == maxCoreTools {
+				break
+			}
+		}
+		if len(ids) > 0 {
+			return ids
+		}
+	}
+	return defaultCoreTools
+}
+
 func apiKey(fc fileConfig, bot *botCtx) string {
 	if key := os.Getenv("DEEPSEEK_API_KEY"); key != "" {
 		return key
@@ -590,8 +635,8 @@ func buildCatalogSystemPrompt(tools []Tool, dir string, bot *botCtx, cat *catalo
 	out.WriteString("- If a tool returns an error, read it, fix the arguments and retry.\n")
 	out.WriteString("- Be concise in your responses.\n")
 	out.WriteString("- Show file paths clearly when working with files.\n")
-	if _, ok := cat.Lookup("fsx.edit"); ok {
-		out.WriteString("- Use fsx.edit for precise file changes; every edits[].oldText must match one unique region.\n")
+	if edit := coreEditTool(core, cat); edit != "" {
+		fmt.Fprintf(&out, "- Use %s for precise file changes; every edits[].oldText must match one unique region.\n", edit)
 	}
 	fmt.Fprintf(&out, "\nCurrent working directory: %s", dir)
 	if bot != nil && bot.Prompt != "" {
@@ -601,6 +646,19 @@ func buildCatalogSystemPrompt(tools []Tool, dir string, bot *botCtx, cat *catalo
 		out.WriteString("\n\n" + up)
 	}
 	return out.String()
+}
+
+// coreEditTool names the editor the prompt should recommend, so a connection
+// that renames fsx keeps the precise-edit hint.
+func coreEditTool(core []string, cat *catalog.Catalog) string {
+	for _, id := range core {
+		if strings.HasSuffix(id, ".edit") {
+			if _, ok := cat.Lookup(id); ok {
+				return id
+			}
+		}
+	}
+	return ""
 }
 
 func buildSystemPrompt(tools []Tool, dir string, bot *botCtx) string {

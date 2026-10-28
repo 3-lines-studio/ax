@@ -135,7 +135,23 @@ command = "wax"
 A connection declares an integration; its tools are discovered and indexed.
 `capabilities` narrows the list when a bot wants only part of a provider, and
 `trust = "read"` keeps only the tools annotated read-only. `ax conn list` shows
-what is configured, `ax conn doctor` connects and reports declared vs enabled. The
+what is configured, `ax conn doctor` connects and reports declared vs enabled.
+
+A connection marked `compute = true` defines the bot's compute: its tools become
+the prompt cheat sheet (`core_tools` derived from the catalog, no hardcoded ids)
+and its `root` becomes the workspace for every source:
+
+```toml
+[[connection]]
+id      = "fs"
+kind    = "local"
+command = "fsx"
+compute = true
+root    = "vol"     # relative to the bot root, must exist
+```
+
+`root` is a path on the backend, which is the seam for a remote workspace later:
+changing `kind` to `ssh` will not rename a single tool. The
 older spellings still work and keep their ids: `tools`/`AX_TOOLS` become
 `kind = "local"` and `[[mcp]]` becomes `kind = "mcp-*"`.
 
