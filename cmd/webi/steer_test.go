@@ -31,6 +31,7 @@ func TestMessageWhileRunningSteers(t *testing.T) {
 	if code := call(t, srv, "POST", "/api/threads/"+thread.ID+"/messages", `{"text":"move the fs"}`, nil); code != 200 {
 		t.Fatalf("first message code=%d", code)
 	}
+	defer waitIdle(t, srv, thread.ID)
 	var steer struct {
 		OK      bool `json:"ok"`
 		Steered bool `json:"steered"`

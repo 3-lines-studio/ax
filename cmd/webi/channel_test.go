@@ -44,6 +44,7 @@ printf '%s\n' '{"type":"message","message":{"Role":"assistant","Content":"ok"}}'
 	if code := call(t, srv, "POST", "/api/threads/"+thread.ID+"/messages", `{"text":"hi"}`, nil); code != 200 {
 		t.Fatalf("post message: %d", code)
 	}
+	defer waitIdle(t, srv, thread.ID)
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
