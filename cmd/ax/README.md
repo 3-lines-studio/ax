@@ -263,7 +263,9 @@ Available local providers: `fsx`, `bashx`, `wax`, `bqx`, `pgx`, `slackx`,
 
 `ax` emits a JSONL event stream on stdout: reasoning and assistant deltas,
 tool events, usage, errors, and one final `done`. Send `{"type":"cancel"}` on
-stdin to stop. See the [event protocol](../../docs/protocol.md).
+stdin to stop, `{"type":"steer","text":...}` to add a user turn mid-run, or
+`{"type":"secret","name":...,"value":...}` to answer a `secret_request` from a
+tool that needs a credential. See the [event protocol](../../docs/protocol.md).
 
 `--session FILE` makes the run durable and resumable:
 
