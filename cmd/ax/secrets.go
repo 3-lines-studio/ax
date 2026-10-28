@@ -38,13 +38,18 @@ type secretAnswer struct {
 type secretBroker struct {
 	mu      sync.Mutex
 	values  map[string]string
+	skipped map[string]bool
 	waiters map[string]chan secretAnswer
 	enabled bool
 	gone    bool
 }
 
 func newSecretBroker() *secretBroker {
-	return &secretBroker{values: map[string]string{}, waiters: map[string]chan secretAnswer{}}
+	return &secretBroker{
+		values:  map[string]string{},
+		skipped: map[string]bool{},
+		waiters: map[string]chan secretAnswer{},
+	}
 }
 
 // enable turns on the ask flow: the process has a control channel to ask
@@ -89,12 +94,14 @@ func (b *secretBroker) skip(name string) bool {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// A skip can arrive before the tool asks; remembering it means the answer
+	// is not lost to a scheduling race.
+	b.skipped[name] = true
 	if waiter, ok := b.waiters[name]; ok {
 		waiter <- secretAnswer{Skip: true}
 		delete(b.waiters, name)
-		return true
 	}
-	return false
+	return true
 }
 
 // env is the environment every provider call gets: the values collected so far.
@@ -127,6 +134,14 @@ func (b *secretBroker) wait(ctx context.Context, ask secretAsk) (string, string)
 	if value, ok := b.values[name]; ok {
 		b.mu.Unlock()
 		return value, ""
+	}
+	if b.skipped[name] {
+		b.mu.Unlock()
+		return "", fmt.Sprintf("error: the user declined to provide %s", name)
+	}
+	if b.gone {
+		b.mu.Unlock()
+		return "", fmt.Sprintf("error: no value was provided for %s: the control channel closed", name)
 	}
 	if !b.enabled {
 		b.mu.Unlock()
