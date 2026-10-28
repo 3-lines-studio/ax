@@ -178,19 +178,23 @@ func TestAppendMCPEntriesRoundTrip(t *testing.T) {
 	if err := botdir.LoadTOML(root, &config); err != nil {
 		t.Fatalf("parse written bot.toml: %v", err)
 	}
-	if len(config.MCP) != 3 {
-		t.Fatalf("entries = %+v", config.MCP)
+	// Servers are written as connections, not as the legacy [[mcp]] table.
+	if len(config.MCP) != 0 {
+		t.Fatalf("bot.toml still uses [[mcp]]: %+v", config.MCP)
 	}
-	github := config.MCP[0]
-	if github.Name != "github" || github.Headers["Authorization"] != "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}" {
+	if len(config.Connections) != 3 {
+		t.Fatalf("entries = %+v", config.Connections)
+	}
+	github := config.Connections[0]
+	if github.ID != "github" || github.Kind != "mcp-http" || github.Headers["Authorization"] != "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}" {
 		t.Errorf("github = %+v", github)
 	}
-	zoom := config.MCP[1]
-	if zoom.ClientID != "${ZOOM_CLIENT_ID}" || zoom.ClientSecretEnv != "ZOOM_CLIENT_SECRET" || len(zoom.Scopes) != 2 {
+	zoom := config.Connections[1]
+	if zoom.Kind != "mcp-http" || zoom.ClientID != "${ZOOM_CLIENT_ID}" || zoom.ClientSecretEnv != "ZOOM_CLIENT_SECRET" || len(zoom.Scopes) != 2 {
 		t.Errorf("zoom = %+v", zoom)
 	}
-	fs := config.MCP[2]
-	if fs.Command != "npx" || len(fs.Args) != 3 || fs.Env["LOG"] != "debug" || fs.Timeout != 15 {
+	fs := config.Connections[2]
+	if fs.Kind != "mcp-stdio" || fs.Command != "npx" || len(fs.Args) != 3 || fs.Env["LOG"] != "debug" || fs.Timeout != 15 {
 		t.Errorf("filesystem = %+v", fs)
 	}
 }
