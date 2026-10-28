@@ -8,10 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/3-lines-studio/ax/internal/axrun"
+	"github.com/3-lines-studio/ax/internal/routine"
 )
 
 func routineServer(t *testing.T) *Server {
@@ -123,6 +125,8 @@ func TestTailFileCapsOutput(t *testing.T) {
 func TestRoutinesAcrossChannelsAndHistory(t *testing.T) {
 	rootOne := t.TempDir()
 	rootTwo := t.TempDir()
+	hostData := t.TempDir()
+	t.Setenv("BOT_DATA", hostData)
 	writeRoutineAt(t, rootOne, "one", "entry = \"./run.sh\"\n", "#!/bin/sh\necho one\n")
 	writeRoutineAt(t, rootTwo, "two", "entry = \"./run.sh\"\n", "#!/bin/sh\necho two\n")
 
@@ -155,12 +159,40 @@ func TestRoutinesAcrossChannelsAndHistory(t *testing.T) {
 		t.Fatalf("routines = %+v", list.Routines)
 	}
 
+	events := srv.subscribe()
+	defer srv.unsubscribe(events)
 	req := httptest.NewRequest("POST", "/api/routines/two/run?channel=two", nil)
 	req.SetPathValue("name", "two")
 	rec = httptest.NewRecorder()
 	srv.handleRunRoutine(rec, req)
 	if rec.Code != 200 {
 		t.Fatalf("run channel two code=%d %s", rec.Code, rec.Body)
+	}
+	select {
+	case data := <-events:
+		var ev struct {
+			Type    string `json:"type"`
+			Routine struct {
+				Channel  string `json:"channel"`
+				Name     string `json:"name"`
+				Status   string `json:"status"`
+				ExitCode int    `json:"exit_code"`
+			} `json:"routine"`
+		}
+		if err := json.Unmarshal(data, &ev); err != nil {
+			t.Fatal(err)
+		}
+		if ev.Type != "routine" || ev.Routine.Channel != "two" || ev.Routine.Name != "two" || ev.Routine.Status != "ok" {
+			t.Fatalf("event = %+v", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no routine event was published")
+	}
+	if _, err := os.Stat(filepath.Join(rootTwo, "state", "routines", "two")); err != nil {
+		t.Fatalf("channel run state must live under the channel: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(hostData, "state", "routines")); err == nil {
+		t.Fatal("the host BOT_DATA must not receive a channel's routine state")
 	}
 
 	req = httptest.NewRequest("GET", "/api/routines/two/runs?channel=two", nil)
@@ -206,7 +238,13 @@ func TestRoutineSchedulerRunsEveryChannel(t *testing.T) {
 	if err := store.PutChannel(Channel{ID: "two", Name: "two", Workdir: rootTwo, Created: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}
-	sched := newRoutineScheduler(store)
+	var mu sync.Mutex
+	published := map[string]string{}
+	sched := newRoutineScheduler(store, func(channel Channel, item routine.Routine, result routine.RunResult) {
+		mu.Lock()
+		defer mu.Unlock()
+		published[channel.Name] = result.Status
+	})
 	sched.tick(context.Background(), time.Now())
 	for _, root := range []string{rootOne, rootTwo} {
 		state := filepath.Join(root, "state", "routines")
@@ -227,5 +265,18 @@ func TestRoutineSchedulerRunsEveryChannel(t *testing.T) {
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		mu.Lock()
+		got := len(published)
+		mu.Unlock()
+		if got == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("published = %v", published)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

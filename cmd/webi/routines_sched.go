@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/3-lines-studio/ax/internal/botdir"
 	"github.com/3-lines-studio/ax/internal/routine"
 )
 
@@ -15,13 +14,14 @@ import (
 // A channel is a bot directory, so each workdir gets its own scheduler and its
 // own per-minute dedupe state.
 type routineScheduler struct {
-	store  *Store
-	mu     sync.Mutex
-	scheds map[string]*routine.Scheduler
+	store   *Store
+	publish func(Channel, routine.Routine, routine.RunResult)
+	mu      sync.Mutex
+	scheds  map[string]*routine.Scheduler
 }
 
-func newRoutineScheduler(store *Store) *routineScheduler {
-	return &routineScheduler{store: store, scheds: map[string]*routine.Scheduler{}}
+func newRoutineScheduler(store *Store, publish func(Channel, routine.Routine, routine.RunResult)) *routineScheduler {
+	return &routineScheduler{store: store, publish: publish, scheds: map[string]*routine.Scheduler{}}
 }
 
 func (s *routineScheduler) Run(ctx context.Context) {
@@ -40,15 +40,20 @@ func (s *routineScheduler) Run(ctx context.Context) {
 
 func (s *routineScheduler) tick(ctx context.Context, now time.Time) {
 	for _, channel := range s.store.Channels() {
-		paths := botdir.Resolve(channel.Workdir)
+		paths := channelPaths(channel)
 		key := paths.Root
 		s.mu.Lock()
 		sched := s.scheds[key]
 		if sched == nil {
-			name := channel.Name
+			channel := channel
 			sched = routine.NewScheduler(paths)
 			sched.Logf = func(format string, args ...any) {
-				slog.Info("routine", "channel", name, "msg", fmt.Sprintf(format, args...))
+				slog.Info("routine", "channel", channel.Name, "msg", fmt.Sprintf(format, args...))
+			}
+			if s.publish != nil {
+				sched.OnRun = func(item routine.Routine, result routine.RunResult) {
+					s.publish(channel, item, result)
+				}
 			}
 			s.scheds[key] = sched
 		}

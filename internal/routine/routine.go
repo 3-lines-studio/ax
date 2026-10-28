@@ -35,6 +35,7 @@ type Manifest struct {
 	Schedule    string `toml:"schedule"`
 	Timezone    string `toml:"timezone"`
 	Timeout     string `toml:"timeout"`
+	KeepRuns    *int   `toml:"keep_runs"`
 	Enabled     bool   `toml:"enabled"`
 }
 
@@ -47,7 +48,9 @@ type Routine struct {
 	Schedule    *Schedule
 	Location    *time.Location
 	Timeout     time.Duration
-	Enabled     bool
+	// KeepRuns is how many run directories survive; 0 keeps every run.
+	KeepRuns int
+	Enabled  bool
 }
 
 // Set is the routines discovered under one bot root.
@@ -169,6 +172,7 @@ func (r *Runner) Run(ctx context.Context, item Routine, trigger string) (RunResu
 	runCtx, cancel := context.WithTimeout(ctx, item.Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, entry)
+	configureCommand(cmd)
 	cmd.Dir = r.workspace()
 	cmd.Env = envWith(os.Environ(),
 		"BOT_ROOT", r.Paths.Root,
@@ -205,7 +209,56 @@ func (r *Runner) Run(ctx context.Context, item Routine, trigger string) (RunResu
 		result.Error = waitErr.Error()
 	}
 	_ = r.writeResult(runDir, result)
+	r.prune(state, item.KeepRuns)
 	return result, nil
+}
+
+const (
+	defaultKeepRuns = 50
+	maxKeepRuns     = 1000
+)
+
+// prune deletes the oldest run directories beyond keep. It runs under the
+// routine lock, so it cannot race with another run.
+func (r *Runner) prune(state string, keep int) {
+	if keep <= 0 {
+		return
+	}
+	dir := filepath.Join(state, "runs")
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) <= keep {
+		return
+	}
+	type runEntry struct {
+		dir     string
+		id      string
+		started time.Time
+	}
+	runs := make([]runEntry, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() || !validRunID(entry.Name()) {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		result, err := readResult(path)
+		if err != nil {
+			// A directory without a record is a crash leftover: prune it first.
+			result = RunResult{ID: entry.Name()}
+		}
+		runs = append(runs, runEntry{dir: path, id: result.ID, started: result.StartedAt})
+	}
+	if len(runs) <= keep {
+		return
+	}
+	sort.Slice(runs, func(i, j int) bool {
+		if runs[i].started.Equal(runs[j].started) {
+			return runs[i].id > runs[j].id
+		}
+		return runs[i].started.After(runs[j].started)
+	})
+	for _, run := range runs[keep:] {
+		_ = os.RemoveAll(run.dir)
+	}
 }
 
 // reconcile marks runs left in the running state by a host that died as
@@ -367,6 +420,13 @@ func load(dir, name string) (Routine, error) {
 		strings.HasPrefix(filepath.Clean(manifest.Entry), ".."+string(os.PathSeparator)) {
 		return Routine{}, fmt.Errorf("routine %s: entry must stay inside the routine directory", name)
 	}
+	keepRuns := defaultKeepRuns
+	if manifest.KeepRuns != nil {
+		keepRuns = *manifest.KeepRuns
+		if keepRuns < 0 || keepRuns > maxKeepRuns {
+			return Routine{}, fmt.Errorf("routine %s: keep_runs must be between 0 and %d", name, maxKeepRuns)
+		}
+	}
 	timeout := 10 * time.Minute
 	if strings.TrimSpace(manifest.Timeout) != "" {
 		timeout, err = time.ParseDuration(strings.TrimSpace(manifest.Timeout))
@@ -397,6 +457,7 @@ func load(dir, name string) (Routine, error) {
 		Schedule:    schedule,
 		Location:    location,
 		Timeout:     timeout,
+		KeepRuns:    keepRuns,
 		Enabled:     manifest.Enabled,
 	}, nil
 }

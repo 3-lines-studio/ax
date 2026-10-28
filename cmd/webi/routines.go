@@ -31,6 +31,12 @@ type routineTarget struct {
 	ChannelName string
 }
 
+// channelPaths resolves a channel's bot paths. A channel is a bot whose
+// runtime data is its own root, so the host's BOT_DATA never leaks into it.
+func channelPaths(channel Channel) botdir.Paths {
+	return botdir.ResolveData(channel.Workdir, channel.Workdir)
+}
+
 func (s *Server) routineTarget(channelID string) (routineTarget, error) {
 	if channelID == "" || s.store == nil {
 		return routineTarget{Paths: botdir.Resolve(s.cfg.BotRoot)}, nil
@@ -40,7 +46,7 @@ func (s *Server) routineTarget(channelID string) (routineTarget, error) {
 		return routineTarget{}, errors.New("channel not found")
 	}
 	return routineTarget{
-		Paths:       botdir.Resolve(channel.Workdir),
+		Paths:       channelPaths(channel),
 		Channel:     channel.ID,
 		ChannelName: channel.Name,
 	}, nil
@@ -62,7 +68,7 @@ func (s *Server) routineTargets(w http.ResponseWriter, req *http.Request) ([]rou
 	var targets []routineTarget
 	for _, channel := range s.store.Channels() {
 		targets = append(targets, routineTarget{
-			Paths:       botdir.Resolve(channel.Workdir),
+			Paths:       channelPaths(channel),
 			Channel:     channel.ID,
 			ChannelName: channel.Name,
 		})
@@ -104,6 +110,26 @@ func (s *Server) handleRoutines(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"routines": views})
 }
 
+// publishRoutine pushes a finished run to every open UI. The client decides
+// whether to show a notification; the browser never polls for it.
+func (s *Server) publishRoutine(channel Channel, item routine.Routine, result routine.RunResult) {
+	s.publish(map[string]any{
+		"type": "routine",
+		"routine": map[string]any{
+			"channel":      channel.ID,
+			"channel_name": channel.Name,
+			"name":         item.Name,
+			"id":           result.ID,
+			"status":       result.Status,
+			"exit_code":    result.ExitCode,
+			"trigger":      result.Trigger,
+			"error":        result.Error,
+			"started_at":   result.StartedAt,
+			"ended_at":     result.EndedAt,
+		},
+	})
+}
+
 func (s *Server) handleRunRoutine(w http.ResponseWriter, req *http.Request) {
 	target, err := s.routineTarget(req.URL.Query().Get("channel"))
 	if err != nil {
@@ -128,6 +154,11 @@ func (s *Server) handleRunRoutine(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if target.Channel != "" {
+		if channel, ok := s.store.Channel(target.Channel); ok {
+			s.publishRoutine(channel, item, result)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"run": result, "log": tailFile(result.Log)})
 }
