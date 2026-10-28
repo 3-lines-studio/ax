@@ -13,7 +13,10 @@ budget() {
     # Context compaction, the MCP catalog and the OAuth client live in ax;
     # the extra megabyte keeps room for the transport in cmd/webi.
     ax) echo 8400000 ;;
-    boti) echo 7000000 ;;
+    # Host supervisor: net/http server for the control socket, state JSON and
+    # the serve loop. The engine and transports stay lean; this one pays for
+    # the supervisor.
+    boti) echo 8200000 ;;
     webi) echo 9500000 ;;
     slaxi) echo 8063000 ;;
     fsx) echo 2970000 ;;

@@ -1,0 +1,32 @@
+# Run boti serve for one bot as a systemd user service.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp packaging/ax-webi.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now ax-webi
+#
+# boti starts webi from the bot's [boti.serve] table, polls its /healthz, restarts it
+# when it exits and rolls back a build that crash-loops. Status and logs:
+#   boti -C %h/bots/example status
+#   boti -C %h/bots/example logs -n 50
+#
+# Secrets come from the vault (or the environment). Set the key once with
+#   systemctl --user edit ax-webi     # Environment=DEEPSEEK_API_KEY=...
+# or put it in <bot>/secrets/api-key, which ax reads by itself.
+[Unit]
+Description=boti serve for a bot (browser transport for ax)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/bots/example
+ExecStart=%h/.local/bin/boti serve
+Restart=on-failure
+RestartSec=5
+# webi starts ax per run; give a run room to finish before stopping.
+KillSignal=SIGTERM
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target

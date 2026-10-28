@@ -120,7 +120,7 @@ Root keys are reserved by Botdir. Consumer-specific configuration MUST use a top
 mention_only = true
 ```
 
-A consumer MUST ignore tables it does not own and unknown keys for forward compatibility.
+A consumer MUST ignore tables it does not own and unknown keys for forward compatibility. A host loader uses its own table the same way: `[boti.serve]` configures how `boti` hosts the bot.
 
 A host loader MAY read a top-level `[env]` table and export each entry as an
 environment variable for the consumer. Values are literal strings; host
