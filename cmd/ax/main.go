@@ -657,6 +657,9 @@ func buildCatalogSystemPrompt(dir string, bot *botCtx, cat *catalog.Catalog, cor
 	out.WriteString(cat.Brief(core))
 	out.WriteString("\nRules:\n")
 	out.WriteString("- Answer in the user's language; be concise and direct.\n")
+	if _, ok := cat.Lookup("memoryx.search"); ok {
+		out.WriteString("- Check memory for personal facts and preferences when relevant.\n")
+	}
 	out.WriteString("- Verify changes before reporting success.\n")
 	out.WriteString("- If a tool fails, fix the cause; do not repeat the same call.\n")
 	out.WriteString("- There is no sandbox: commands run as the user. Never print or transmit secrets. Ask before destructive or irreversible actions.\n")

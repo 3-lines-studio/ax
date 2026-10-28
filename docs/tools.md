@@ -4,16 +4,22 @@ AX uses ordinary processes as external tool providers. The convention is indepen
 
 ## Registration
 
-Providers are explicit. `AX_TOOLS` contains whitespace-separated executable names or paths:
+Providers are explicit. Declare a local connection in `bot.toml`:
 
-```sh
-AX_TOOLS="wax browserx bqx"
+```toml
+[[connection]]
+id = "wax"
+kind = "local"
+command = "wax"
 ```
 
-Names and paths in `AX_TOOLS` cannot contain whitespace. AX does not scan `PATH` for providers.
+`command` is an executable name or path and cannot contain whitespace. AX does
+not scan `PATH` for providers.
 
-AX has no built-in tools. When `AX_TOOLS` is unset, AX starts without local
-providers. Providers are indexed into ax's tool catalog alongside MCP servers;
+AX has no built-in tools. Without a local connection, AX starts without local
+providers. The legacy `tools` array and `AX_TOOLS` environment variable still
+register the same providers; new bots should use `[[connection]]`. Providers are
+indexed into ax's tool catalog alongside MCP servers;
 the model sees `search` and `execute`, not each provider tool. See
 [mcp.md](mcp.md). `-tool-mode direct` restores the old per-tool surface.
 

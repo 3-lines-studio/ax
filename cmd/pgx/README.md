@@ -12,7 +12,13 @@ curl -fsSL https://github.com/3-lines-studio/ax/releases/latest/download/install
 
 ```sh
 export DATABASE_URL=postgres://user:password@host/database
-export AX_TOOLS=pgx
+```
+
+```toml
+[[connection]]
+id = "pgx"
+kind = "local"
+command = "pgx"
 ```
 
 The legacy `ALFRED_PICSEL_DATABASE_URL` name remains supported during migration.

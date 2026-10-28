@@ -14,7 +14,13 @@ Slaxi supplies the message context. Set the bot token and enable the tool:
 
 ```sh
 export SLACK_BOT_TOKEN=xoxb-...
-export AX_TOOLS=slackx
+```
+
+```toml
+[[connection]]
+id = "slackx"
+kind = "local"
+command = "slackx"
 ```
 
 ## Protocol

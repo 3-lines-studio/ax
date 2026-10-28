@@ -82,12 +82,21 @@ Runtime consumers MAY create `state/`, `workspace/`, and `run/` when needed. The
 ```toml
 model = "gpt-5"
 base_url = "https://api.openai.com/v1"
-tools = ["wax", "fsx"]
+
+[[connection]]
+id = "wax"
+kind = "local"
+command = "wax"
+
+[[connection]]
+id = "fsx"
+kind = "local"
+command = "fsx"
 ```
 
 `base_url` identifies an OpenAI-compatible API endpoint.
 
-Each `tools` entry is one executable name resolved through `PATH`. It MUST NOT contain arguments. Consumers MUST preserve order and ignore duplicate entries after the first.
+A local connection's `command` is one executable name or path resolved through `PATH`. It MUST NOT contain arguments. The legacy `tools` array is still accepted; each entry is one executable name, consumers MUST preserve order and ignore duplicate entries after the first.
 
 `[[connection]]` declares one integration as a unit: an id the model sees, a
 kind and how to reach it. Consumers MUST treat the id as the tool namespace

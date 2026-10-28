@@ -104,6 +104,19 @@ func TestCatalogSystemPromptAddsBotInstructions(t *testing.T) {
 	}
 }
 
+func TestCatalogSystemPromptMentionsMemoryWhenConfigured(t *testing.T) {
+	cat := catalog.New([]catalog.Source{&testSource{name: "memoryx", tools: []catalog.Tool{{
+		Name:        "search",
+		Description: "Search memories",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}}}`),
+	}}}})
+	cat.Load(context.Background())
+	prompt := buildCatalogSystemPrompt("/work", nil, cat, nil)
+	if !strings.Contains(prompt, "Check memory for personal facts") {
+		t.Errorf("memory hint missing:\n%s", prompt)
+	}
+}
+
 func TestCatalogSystemPromptAddsUserInstructions(t *testing.T) {
 	cfg := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cfg, "ax"), 0o755); err != nil {
