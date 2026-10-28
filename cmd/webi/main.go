@@ -30,7 +30,28 @@ func main() {
 	model := flag.String("model", "", "override the model for every run")
 	selftest := flag.Bool("selftest", false, "check the bot, state and ax binary, then exit")
 	open := flag.Bool("open", true, "open the token URL in a browser when run in a terminal")
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: webi [flags] [setup]")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "  setup   install a systemd user unit, start the UI and open it")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "flags:")
+		flag.PrintDefaults()
+	}
 	flag.Parse()
+
+	switch flag.Arg(0) {
+	case "setup":
+		if err := runSetup(setupOptions{Root: *botRoot, State: *stateDir, Listen: *listen, AXPath: *axPath, Open: *open, Wait: 10 * time.Second}); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	case "":
+	default:
+		fmt.Fprintf(os.Stderr, "webi: unknown command %q\n", flag.Arg(0))
+		os.Exit(2)
+	}
 
 	root, fresh, err := resolveRoot(*botRoot)
 	if err != nil {

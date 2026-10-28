@@ -890,7 +890,8 @@ function renderChannelView() {
     '<div class="scroll"><div class="pad">' +
     (threads.length
       ? '<div class="thread-list">' + threads.map(threadItemHTML).join('') + '</div>'
-      : emptyHTML('No threads yet', 'Start one and ask ax anything.')) +
+      : '<div class="empty"><strong>No threads yet</strong><span>Ask ax anything to start.</span>' +
+        '<button class="btn primary" data-action="new-thread">Start chatting</button></div>') +
     '</div></div>';
 }
 

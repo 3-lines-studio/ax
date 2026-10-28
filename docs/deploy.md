@@ -26,7 +26,21 @@ boti -C ~/bots/example selftest     # also checks every tool in bot.toml
 dead integration is a warning; a broken compute root or an unparseable
 connection is a failure, because every run would hit it.
 
-## systemd (a VM or a small server)
+## systemd: the app
+
+For one bot and no supervisor, let webi write its own unit:
+
+```sh
+webi -C ~/bots/me -listen 0.0.0.0:8377 setup
+```
+
+It writes `~/.config/systemd/user/webi.service`, enables and starts it, and
+prints the token URL. `systemctl --user status webi` and `journalctl --user
+-u webi` are the familiar tools. A restart asks for the vault PIN. On a host
+where the user is not always logged in, `loginctl enable-linger <user>` keeps
+the unit running at boot.
+
+## systemd: supervised (boti serve)
 
 One unit per bot, running `boti serve`. See
 [`packaging/ax-webi.service`](../packaging/ax-webi.service):

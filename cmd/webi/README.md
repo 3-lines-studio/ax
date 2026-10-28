@@ -17,6 +17,23 @@ run, 0600). Flags: `-ax` (binary), `-state` (default
 `<BOT_DATA>/state/webi`), `-base`/`-model` overrides, `-open=false` to skip
 the browser.
 
+## Run it as a service
+
+```sh
+webi -C ~/bots/me -listen 0.0.0.0:8377 setup
+```
+
+`setup` writes `~/.config/systemd/user/webi.service` with the same `-C`,
+`-listen` and `-state`, enables and starts it, and prints the token URL. It
+does not restart a running unit when the flags change; it prints the
+`systemctl --user restart webi` command instead. Without systemd, run webi in
+a terminal or add it to your login items.
+
+A restart asks for the vault PIN again. `boti serve` (see
+[docs/deploy.md](../../docs/deploy.md)) keeps the key across restarts at the
+cost of a supervisor, which is worth it only if you also want builds and
+rollback.
+
 ## Access
 
 Every request needs the token except `/healthz` and `/readyz`: a browser gets

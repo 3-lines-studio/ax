@@ -77,22 +77,36 @@ func writeStarter(root string) error {
 // supervisor's log is a file, and a token in it would outlive the terminal.
 // Only a person at a terminal sees (and opens) the link.
 func announce(listener net.Listener, token string, open bool) {
-	if !isTerminal(os.Stdout) {
-		return
-	}
 	addr, ok := listener.Addr().(*net.TCPAddr)
 	if !ok {
 		return
 	}
-	localHost := addr.IP.String()
-	if addr.IP.IsUnspecified() {
-		localHost = "127.0.0.1"
+	host := ""
+	if !addr.IP.IsUnspecified() {
+		host = addr.IP.String()
 	}
-	local := "http://" + net.JoinHostPort(localHost, strconv.Itoa(addr.Port)) + "/?token=" + token
+	printURLs(host, addr.Port, token, open, "")
+}
+
+// printURLs is shared by the foreground server and `webi setup`.
+func printURLs(host string, port int, token string, open bool, tokenPath string) {
+	if !isTerminal(os.Stdout) {
+		if tokenPath != "" {
+			fmt.Fprintf(os.Stdout, "token: %s\n", tokenPath)
+		}
+		return
+	}
+	localHost := host
+	all := false
+	if localHost == "" || localHost == "0.0.0.0" || localHost == "::" {
+		localHost = "127.0.0.1"
+		all = true
+	}
+	local := "http://" + net.JoinHostPort(localHost, strconv.Itoa(port)) + "/?token=" + token
 	fmt.Fprintf(os.Stdout, "\n  webi is ready\n\n  This machine:  %s\n", local)
-	if addr.IP.IsUnspecified() {
+	if all {
 		if lan := lanAddress(); lan != "" {
-			fmt.Fprintf(os.Stdout, "  Other devices: http://%s/?token=%s\n", net.JoinHostPort(lan, strconv.Itoa(addr.Port)), token)
+			fmt.Fprintf(os.Stdout, "  Other devices: http://%s/?token=%s\n", net.JoinHostPort(lan, strconv.Itoa(port)), token)
 		}
 	}
 	fmt.Fprintln(os.Stdout, "\n  The link sets a cookie, so it is needed only once. Treat it like the PIN.")
