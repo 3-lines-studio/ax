@@ -1,7 +1,7 @@
 # Connections
 
 A **connection** is one integration the bot has: a local provider, an MCP
-server, and later a remote workspace. The connection, not its tools, is the
+server, or a remote host. The connection, not its tools, is the
 unit of configuration. Tools are discovered from the connection and projected
 into the catalog; `bot.toml` never lists them unless the bot wants to narrow an
 allowlist.
@@ -19,23 +19,23 @@ This is a configuration model, not a new contract:
 ```toml
 [[connection]]
 id           = "web"          # the tool prefix the model sees: web.search
-kind         = "local"        # local | mcp-stdio | mcp-http
+kind         = "local"        # local | ssh | mcp-stdio | mcp-http
 command      = "wax"          # kind = local, mcp-stdio
 trust        = "auto"         # auto | read
 capabilities = ["web.search"] # optional allowlist; empty means every tool
 ```
 
 `id` is what the model calls (`<id>.<tool>`), so it is stable across
-transports: pointing `fsx` at a remote workspace later must not rename a single
-tool. Ids are lowercase letters, digits, `_` and `-`, 1–64 characters, and are
+transports: pointing `fsx` at a remote host does not rename a single tool. Ids are lowercase letters, digits, `_` and `-`, 1–64 characters, and are
 unique across the whole bot.
 
 `kind` selects how the connection is reached:
 
 | kind | fields | notes |
 | --- | --- | --- |
-| `local` | `command` | An executable speaking `describe`/`run`. No arguments: wrap the command in a script. |
+| `local` | `command`, `root`, `env`, `pass_env` | An executable speaking `describe`/`run`. No arguments: wrap the command in a script. |
 | `mcp-stdio` | `command`, `args`, `env`, `pass_env`, `timeout` | MCP over stdio. |
+| `ssh` | `host`, `known_hosts`, `key`, `root` | Runs [sshx](../../cmd/sshx/README.md): files and commands on a remote host. |
 | `mcp-http` | `url`, `headers`, `token_env`, `auth`, `client_id`, `client_secret_env`, `scopes` | Streamable HTTP, OAuth included. |
 
 `capabilities` is a narrowing allowlist. Entries match either the qualified id
@@ -145,7 +145,38 @@ Order of implementation, cheapest first:
 
 1. Mounting (`sshfs`, NFS, a bind-mounted container volume) keeps `kind` at
    `local`: no adapter, no new failure modes. Prefer it when the host is yours.
-2. `kind = "ssh"` for hosts that cannot be mounted: SFTP for `fs.*`, an exec
-   channel for `bash`, host key pinned in the connection (never
-   `InsecureIgnoreHostKey`), key from the vault, `secrets/` never forwarded.
+2. `kind = "ssh"` for hosts that cannot be mounted: `sshx` speaks the same
+   tools over SFTP and an exec channel.
+
+That second case is implemented:
+
+```toml
+[[connection]]
+id          = "fs"
+kind        = "ssh"
+host        = "builder@10.0.0.5:22"
+root        = "/srv/app"              # a path on the remote host
+key         = "secrets/id_ed25519"    # relative to the bot root
+known_hosts = "secrets/known_hosts"
+compute     = true
+```
+
+`ax` does not speak SSH: it runs `sshx` (or `command`, if you point at a
+different build) with an environment built from the connection —
+`SSHX_HOST`, `SSHX_ROOT`, `SSHX_KEY_FILE`, `SSHX_KNOWN_HOSTS` — and the rest of
+the model (ids, capabilities, trust, compute, catalog, sessions) is exactly the
+same as a local connection. `known_hosts` is required: a connection that
+accepts any host key is a MITM with a shell, and `sshx` has no option for it.
+The key must be readable without a passphrase, because a provider process has
+no terminal.
+
+`root` on a local connection is the directory its provider runs in; on an ssh
+connection it is the remote directory every path is relative to. For remote
+compute the local workspace is left alone, so local MCP servers keep working:
+`root` is passed to the connection, not stat'ed on this machine.
+
+`env` and `pass_env` exist for providers that need configuration. A connection
+that sets either gets exactly that environment instead of inheriting the host's,
+so a remote workspace cannot read secrets it never asked for.
+
 3. Object volumes get `push`/`pull` semantics, not a fake POSIX `fs`.

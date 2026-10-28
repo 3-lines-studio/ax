@@ -162,7 +162,7 @@ func boundedDescribe(command *exec.Cmd) (int, []byte, []byte, bool, error) {
 func tryExternalTools(commands string, workdir string) ([]Tool, error) {
 	var tools []Tool
 	for _, command := range strings.Fields(commands) {
-		discovered, err := discoverProvider(context.Background(), command, workdir)
+		discovered, err := discoverProvider(context.Background(), command, workdir, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -178,9 +178,15 @@ func tryExternalTools(commands string, workdir string) ([]Tool, error) {
 	return tools, nil
 }
 
-func discoverProvider(ctx context.Context, command, workdir string) ([]Tool, error) {
+// discoverProvider asks a provider for its tool descriptors. A non-nil env is
+// the connection's environment: it replaces the inherited one for the child, so
+// a remote workspace sees only what its connection configured.
+func discoverProvider(ctx context.Context, command, workdir string, env []string) ([]Tool, error) {
 	describe := exec.CommandContext(ctx, command, "describe")
 	describe.Dir = workdir
+	if len(env) > 0 {
+		describe.Env = env
+	}
 	code, stdout, stderr, exceeded, err := boundedDescribe(describe)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -243,7 +249,7 @@ func discoverProvider(ctx context.Context, command, workdir string) ([]Tool, err
 			Timeout:     timeout,
 			Validate:    schema.validate,
 			RunContext: func(ctx context.Context, arguments string, _ func(string)) string {
-				return runExternalTool(ctx, executable, toolName, arguments, workdir, timeout)
+				return runExternalTool(ctx, executable, toolName, arguments, workdir, timeout, env)
 			},
 		}
 		if tool.Snippet == "" {
@@ -254,7 +260,7 @@ func discoverProvider(ctx context.Context, command, workdir string) ([]Tool, err
 	return tools, nil
 }
 
-func runExternalTool(ctx context.Context, command, name, arguments, workdir string, timeoutSeconds int) string {
+func runExternalTool(ctx context.Context, command, name, arguments, workdir string, timeoutSeconds int, env []string) string {
 	ensureSignalHandler()
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = defaultToolTimeout
@@ -264,6 +270,9 @@ func runExternalTool(ctx context.Context, command, name, arguments, workdir stri
 
 	cmd := exec.CommandContext(runCtx, command, "run", name)
 	cmd.Dir = workdir
+	if len(env) > 0 {
+		cmd.Env = env
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin = strings.NewReader(arguments)
 	var stdout, stderr tailBuffer
