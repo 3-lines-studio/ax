@@ -22,6 +22,15 @@ Open `http://127.0.0.1:8377`. Flags: `-ax` (binary), `-state` (default
   restart and `slaxi` can read the same conversation format.
 - `POST /api/threads/{id}/stop` writes the `cancel` control to ax's stdin;
   `POST /api/threads/{id}/compact` runs `ax compact --session ...`.
+- A message sent while the thread is running steers the run: webi writes
+  `{"type":"steer","text":...}` to the same ax process, which applies it at the
+  next turn boundary and records it in the session. The composer stays usable
+  during a run for exactly this. Images cannot be steered (`409`): they need a
+  new prompt, not a user turn.
+- The first finished run names the thread: one small model call with the first
+  exchange, best effort. The name is stored once (`title_generated`) and a
+  later run never renames the thread; without a key the title stays the one
+  derived from the first message.
 
 ## Vault
 
