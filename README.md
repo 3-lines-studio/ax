@@ -45,18 +45,23 @@ make install        # ~/.local/bin, override with PREFIX=/usr/local
 
 ```sh
 curl -fsSL https://github.com/3-lines-studio/ax/releases/latest/download/install.sh | sh
-webi -C ~/bots/me
+webi -C ~/bots/me setup
 ```
 
-The first run creates `~/bots/me` with a starter `bot.toml`, prints a token
-URL and opens it in your browser. The page asks for a vault PIN (8+
-characters) and a DeepSeek API key (any OpenAI-compatible endpoint works via
-Settings), once, and then you are chatting. For a phone or another computer,
-start it with `-listen 0.0.0.0:8377` and open the "Other devices" URL the
-terminal prints. Running `webi` from your home directory uses `~/bots/default`;
-`-C` accepts `~/`. To keep it running under the supervisor, use
-`boti -C ~/bots/me serve` (a systemd unit is in
-[docs/deploy.md](docs/deploy.md)).
+`setup` creates `~/bots/me` with a starter `bot.toml`, installs a systemd
+user unit (`~/.config/systemd/user/webi.service`), starts it with your
+session and opens the UI. The first page asks for a vault PIN (8+ characters)
+and a DeepSeek API key (any OpenAI-compatible endpoint works via Settings),
+once, and then it is just chat. To use it from a phone, start it with
+`-listen 0.0.0.0:8377` before `setup`; the terminal prints the "Other
+devices" URL.
+
+On macOS `setup` is not available: run `webi -C ~/bots/me` in a terminal or
+add it to your login items. `webi setup` without `-C` uses `~/bots/default`
+when run from your home directory. Updates are `sh install.sh update` plus
+`systemctl --user restart webi`; the vault asks for the PIN once after a
+restart. If you want builds, rollback and the key kept across restarts, the
+supervised `boti serve` path is in [docs/deploy.md](docs/deploy.md).
 
 ## CLI quick start
 
