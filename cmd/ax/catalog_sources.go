@@ -25,14 +25,15 @@ type localSource struct {
 	command string
 	name    string
 	workdir string
+	env     []string
 
 	mu     sync.Mutex
 	tools  []Tool
 	listed bool
 }
 
-func newLocalSource(command, name, workdir string) *localSource {
-	return &localSource{command: command, name: name, workdir: workdir}
+func newLocalSource(command, name, workdir string, env []string) *localSource {
+	return &localSource{command: command, name: name, workdir: workdir, env: env}
 }
 
 func (s *localSource) Name() string { return s.name }
@@ -72,7 +73,7 @@ func (s *localSource) discover(ctx context.Context) ([]Tool, error) {
 	if s.listed {
 		return s.tools, nil
 	}
-	tools, err := discoverProvider(ctx, s.command, s.workdir)
+	tools, err := discoverProvider(ctx, s.command, s.workdir, s.env)
 	if err != nil {
 		return nil, err
 	}
@@ -421,7 +422,7 @@ type connRuntime struct {
 }
 
 func openConnections(fc fileConfig, bot *botCtx, refresh bool) ([]connRuntime, error) {
-	conns, err := resolveConnections(fc, bot.Workspace, mcpAuthDir(bot))
+	conns, err := resolveConnections(fc, bot.Root, bot.Workspace, mcpAuthDir(bot))
 	if err != nil {
 		return nil, err
 	}
@@ -435,7 +436,7 @@ func openConnections(fc fileConfig, bot *botCtx, refresh bool) ([]connRuntime, e
 		case conn.kind == connMCP:
 			inner = newMCPSource(conn.cfg, cacheDir, refresh)
 		default:
-			inner = newLocalSource(conn.command, conn.id, bot.Workspace)
+			inner = newLocalSource(conn.command, conn.id, conn.workdir, conn.env)
 		}
 		out = append(out, connRuntime{conn: conn, inner: inner, source: newConnSource(inner, conn)})
 	}

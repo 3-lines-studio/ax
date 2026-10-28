@@ -8,11 +8,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync/atomic"
 
 	"github.com/3-lines-studio/ax/internal/botdir"
+	"github.com/3-lines-studio/ax/internal/filetext"
 )
 
 const maxInput = 1024 * 1024
@@ -150,58 +150,7 @@ func (files *filesystem) read(args readArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	text := strings.ToValidUTF8(string(content), "�")
-	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
-	text = sanitize(text)
-	lines := strings.Split(text, "\n")
-	if text == "" || strings.HasSuffix(text, "\n") {
-		lines = lines[:len(lines)-1]
-	}
-	start := 0
-	if args.Offset != nil {
-		if *args.Offset < 1 {
-			return "", errors.New("offset must be positive")
-		}
-		start = *args.Offset - 1
-		if start >= len(lines) {
-			return "", fmt.Errorf("offset %d is beyond end of file (%d lines total)", *args.Offset, len(lines))
-		}
-	}
-	end := len(lines)
-	if args.Limit != nil {
-		if *args.Limit < 0 {
-			return "", errors.New("limit must not be negative")
-		}
-		end = min(start+*args.Limit, end)
-	}
-	selected := strings.Join(lines[start:end], "\n")
-	if len(selected) <= maxOutput {
-		if end < len(lines) {
-			selected += fmt.Sprintf("\n\n[%d more lines in file. Use offset=%d to continue.]", len(lines)-end, end+1)
-		}
-		if selected == "" {
-			return "File is empty.", nil
-		}
-		return selected, nil
-	}
-	shown := make([]string, 0)
-	size := 0
-	for _, line := range lines[start:end] {
-		added := len(line)
-		if len(shown) > 0 {
-			added++
-		}
-		if size+added > maxOutput {
-			break
-		}
-		shown = append(shown, line)
-		size += added
-	}
-	if len(shown) == 0 {
-		return fmt.Sprintf("[Line %d is %d bytes, exceeds the %d limit.]", start+1, len(lines[start]), maxOutput), nil
-	}
-	last := start + len(shown)
-	return fmt.Sprintf("%s\n\n[Showing lines %d-%d of %d (%d byte limit). Use offset=%d to continue.]", strings.Join(shown, "\n"), start+1, last, len(lines), maxOutput, last+1), nil
+	return filetext.Read(content, args.Offset, args.Limit)
 }
 
 func (files *filesystem) write(args writeArgs) (string, error) {
@@ -227,84 +176,18 @@ func (files *filesystem) edit(args editArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	original := string(content)
-	type replacement struct {
-		start int
-		end   int
-		text  string
+	edits := make([]filetext.Edit, 0, len(args.Edits))
+	for _, item := range args.Edits {
+		edits = append(edits, filetext.Edit{OldText: item.OldText, NewText: item.NewText})
 	}
-	replacements := make([]replacement, 0, len(args.Edits))
-	for index, item := range args.Edits {
-		if item.OldText == "" {
-			return "", fmt.Errorf("edits[%d].oldText must not be empty", index)
-		}
-		start, end, count := locate(original, item.OldText)
-		if count == 0 {
-			return "", fmt.Errorf("could not find edits[%d] in %s", index, args.Path)
-		}
-		if count != 1 {
-			return "", fmt.Errorf("found %d occurrences of edits[%d] in %s", count, index, args.Path)
-		}
-		newText := item.NewText
-		if strings.Contains(original[start:end], "\r\n") {
-			newText = strings.ReplaceAll(strings.ReplaceAll(newText, "\r\n", "\n"), "\n", "\r\n")
-		}
-		replacements = append(replacements, replacement{start, end, newText})
-	}
-	sort.Slice(replacements, func(i, j int) bool {
-		return replacements[i].start < replacements[j].start
-	})
-	for i := 1; i < len(replacements); i++ {
-		if replacements[i].start < replacements[i-1].end {
-			return "", errors.New("edits overlap")
-		}
-	}
-	for i := len(replacements) - 1; i >= 0; i-- {
-		item := replacements[i]
-		original = original[:item.start] + item.text + original[item.end:]
-	}
-	if err := files.atomicWrite(path, []byte(original)); err != nil {
+	updated, message, err := filetext.Apply(content, args.Path, edits)
+	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("edited %s (%d replacements)", args.Path, len(args.Edits)), nil
-}
-
-func locate(content, oldText string) (int, int, int) {
-	count := strings.Count(content, oldText)
-	if count > 0 {
-		start := strings.Index(content, oldText)
-		return start, start + len(oldText), count
+	if err := files.atomicWrite(path, updated); err != nil {
+		return "", err
 	}
-	normalized, offsets := normalizeWithOffsets(content)
-	oldText = strings.ReplaceAll(strings.ReplaceAll(oldText, "\r\n", "\n"), "\r", "\n")
-	count = strings.Count(normalized, oldText)
-	if count == 0 {
-		return 0, 0, 0
-	}
-	start := strings.Index(normalized, oldText)
-	return offsets[start], offsets[start+len(oldText)], count
-}
-
-func normalizeWithOffsets(content string) (string, []int) {
-	input := []byte(content)
-	output := make([]byte, 0, len(input))
-	offsets := make([]int, 0, len(input)+1)
-	for index := 0; index < len(input); {
-		offsets = append(offsets, index)
-		if input[index] == '\r' {
-			output = append(output, '\n')
-			if index+1 < len(input) && input[index+1] == '\n' {
-				index += 2
-			} else {
-				index++
-			}
-			continue
-		}
-		output = append(output, input[index])
-		index++
-	}
-	offsets = append(offsets, len(input))
-	return string(output), offsets
+	return message, nil
 }
 
 func (files *filesystem) atomicWrite(path string, content []byte) error {
@@ -328,18 +211,6 @@ func (files *filesystem) atomicWrite(path string, content []byte) error {
 		return err
 	}
 	return files.root.Rename(temporary, path)
-}
-
-func sanitize(value string) string {
-	return strings.Map(func(character rune) rune {
-		if character == '\t' || character == '\n' || character == '\r' {
-			return character
-		}
-		if character <= 0x1f || character >= 0xfff9 && character <= 0xfffb {
-			return -1
-		}
-		return character
-	}, value)
 }
 
 func fail(status int, message string) {

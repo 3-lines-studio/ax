@@ -99,6 +99,15 @@
       "doc": "cmd/fsx/README.md"
     },
     {
+      "name": "sshx",
+      "kind": "provider",
+      "role": "Remote filesystem and shell",
+      "description": "Reads, writes, edits and runs commands on a remote host over SSH, so a bot can work on a remote workspace with the same tool names as fsx and bashx.",
+      "protocol": "describe/run",
+      "depends_on": [],
+      "doc": "cmd/sshx/README.md"
+    },
+    {
       "name": "skillx",
       "kind": "provider",
       "role": "Agent Skills provider",

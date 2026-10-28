@@ -128,7 +128,7 @@ configuration is a **connection** ([docs/connections.md](../../docs/connections.
 ```toml
 [[connection]]
 id      = "web"        # the model calls web.search / web.fetch
-kind    = "local"       # local | mcp-stdio | mcp-http
+kind    = "local"       # local | ssh | mcp-stdio | mcp-http
 command = "wax"
 ```
 
@@ -150,8 +150,20 @@ compute = true
 root    = "vol"     # relative to the bot root, must exist
 ```
 
-`root` is a path on the backend, which is the seam for a remote workspace later:
-changing `kind` to `ssh` will not rename a single tool. The
+`root` is a path on the backend. Changing `kind` to `ssh` (see
+[sshx](../sshx/README.md)) moves the same tools to a remote host without
+renaming any of them:
+
+```toml
+[[connection]]
+id          = "fs"
+kind        = "ssh"
+host        = "builder@10.0.0.5:22"
+root        = "/srv/app"
+key         = "secrets/id_ed25519"
+known_hosts = "secrets/known_hosts"
+compute     = true
+``` The
 older spellings still work and keep their ids: `tools`/`AX_TOOLS` become
 `kind = "local"` and `[[mcp]]` becomes `kind = "mcp-*"`.
 

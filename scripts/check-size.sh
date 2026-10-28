@@ -21,6 +21,8 @@ budget() {
     attachx) echo 8000000 ;;
     browserx) echo 9589000 ;;
     wax) echo 14369000 ;;
+    # SSH transport client (x/crypto/ssh + sftp) for remote compute.
+    sshx) echo 9000000 ;;
     skillx) echo 2934000 ;;
     slackx) echo 7543000 ;;
     bqx) echo 24789000 ;;

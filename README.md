@@ -91,6 +91,7 @@ and `execute`, so adding integrations does not grow the prompt. See
 | [browserx](cmd/browserx/README.md) | Chromium tool | Visible Chromium browser tool for ax. |
 | [bashx](cmd/bashx/README.md) | Bash tool | Runs non-interactive shell commands for ax. |
 | [fsx](cmd/fsx/README.md) | Filesystem tools | Reads, writes and edits files inside the workspace. |
+| [sshx](cmd/sshx/README.md) | Remote filesystem and shell | Reads, writes, edits and runs commands on a remote host over SSH, so a bot can work on a remote workspace with the same tool names as fsx and bashx. |
 | [skillx](cmd/skillx/README.md) | Agent Skills provider | Exposes Agent Skills to ax. |
 | [attachx](cmd/attachx/README.md) | Conversation attachment tool | Copies workspace files into the bot's artifact directory so a transport can deliver them to the user. |
 
