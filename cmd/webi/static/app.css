@@ -321,12 +321,29 @@ body.drawer #scrim { opacity: 1; pointer-events: auto; }
   animation: pulse 1.4s ease-in-out infinite;
 }
 
-.empty { padding: 44px 16px; text-align: center; color: var(--faint); font-size: 13.5px; }
-.empty strong { color: var(--muted); font-weight: 500; display: block; margin-bottom: 4px; font-size: 14.5px; }
-.messages.is-empty { justify-content: center; }
-.thread-empty { padding: 24px 16px 40px; }
-.empty-logo { display: block; width: 34px; height: 34px; flex: none; margin: 0 auto 12px; }
-.empty-logo::after { inset: 10px 8px 10px 12px; }
+.empty { padding: 40px 16px; text-align: center; color: var(--muted); font-size: 13.5px; }
+.empty strong { color: var(--text); font-weight: 600; display: block; margin-bottom: 6px; font-size: 17px; letter-spacing: -.01em; }
+.empty-sub { display: block; max-width: 36ch; margin: 0 auto; line-height: 1.55; }
+.messages.is-empty { justify-content: flex-start; }
+/* Auto margins center the hero while it fits, but keep it scrollable when the
+   keyboard shrinks the viewport: justify-content alone would clip the top. */
+.messages.is-empty > .thread-empty { margin-top: auto; margin-bottom: auto; }
+.empty.thread-empty { padding: 20px 20px 44px; max-width: 520px; margin: 0 auto; }
+.empty.thread-empty strong { font-size: 20px; }
+.empty-logo {
+  display: block; width: 52px; height: 52px; flex: none; margin: 0 auto 16px;
+  box-shadow: 0 0 0 1px rgba(74, 222, 128, .12), 0 0 34px rgba(74, 222, 128, .16), inset 0 0 14px rgba(74, 222, 128, .07);
+}
+.empty-logo::after { inset: 15px 12px 15px 18px; border-width: 2.5px; }
+.suggestions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 22px; }
+.suggestion {
+  padding: 7px 13px; border-radius: var(--r-pill);
+  border: 1px solid var(--line); background: rgba(255, 255, 255, .02);
+  color: var(--muted); font-size: 12.5px; line-height: 1.2;
+  transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.suggestion:hover { color: var(--text); border-color: #34413a; background: rgba(74, 222, 128, .05); }
+.suggestion:active { transform: translateY(1px); }
 
 .banner {
   margin: 10px max(8px, var(--safe-r)) 0 max(8px, var(--safe-l));

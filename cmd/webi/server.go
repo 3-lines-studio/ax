@@ -20,6 +20,7 @@ import (
 
 // Settings are the per-install overrides webi passes to ax.
 type Settings struct {
+	Name      string  `json:"name,omitempty"` // how the UI labels the person typing
 	Model     string  `json:"model,omitempty"`
 	BaseURL   string  `json:"base_url,omitempty"`
 	Effort    string  `json:"effort,omitempty"`
@@ -218,7 +219,9 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 			"threads":     threads,
 		})
 	}
+	name := strings.TrimSpace(settings.Name)
 	config := map[string]any{
+		"name":        name,
 		"model":       firstNonEmpty(settings.Model, s.cfg.Model, "deepseek-flash"),
 		"effort":      firstNonEmpty(settings.Effort, "max"),
 		"has_key":     s.hasKey(),
@@ -228,7 +231,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 		"compact_at":  firstNonZeroFloat(settings.CompactAt, 0.5),
 	}
 	writeJSON(w, 200, map[string]any{
-		"user":           "",
+		"user":           name,
 		"build":          s.build,
 		"running":        running,
 		"uptime":         int(time.Since(s.started).Seconds()),
@@ -250,6 +253,7 @@ func (s *Server) loadSettings() Settings {
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	settings := s.loadSettings()
 	writeJSON(w, 200, map[string]any{
+		"name":           strings.TrimSpace(settings.Name),
 		"model":          firstNonEmpty(settings.Model, s.cfg.Model, "deepseek-flash"),
 		"base_url":       firstNonEmpty(settings.BaseURL, s.cfg.BaseURL, "https://api.deepseek.com"),
 		"effort":         firstNonEmpty(settings.Effort, "max"),
@@ -266,6 +270,10 @@ func (s *Server) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 	if req.CompactAt < 0 || req.CompactAt >= 1 {
 		writeErr(w, 400, "compact_at is a fraction of the window between 0 and 1")
 		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if len([]rune(req.Name)) > 40 {
+		req.Name = string([]rune(req.Name)[:40])
 	}
 	data, _ := json.MarshalIndent(req, "", "  ")
 	if err := writeFileAtomic(s.settings, data, 0o600); err != nil {
