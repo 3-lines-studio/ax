@@ -27,6 +27,7 @@ entry = "./run.sh"
 schedule = "0 8 * * *"          # optional
 timezone = "America/Argentina/Buenos_Aires"
 timeout = "10m"
+keep_runs = 50                  # run directories to keep; 0 keeps them all
 enabled = false                 # test it before turning it on
 ```
 
@@ -35,7 +36,12 @@ enabled = false                 # test it before turning it on
   `@daily`, `@midnight`, `@weekly`, `@monthly`, `@yearly` and `@annually` are
   accepted. Names (`JAN`, `MON`) are not.
 - `timezone` defaults to the host's local time; an IANA name is recommended.
-- `timeout` defaults to `10m` and is capped at `1h`.
+- `timeout` defaults to `10m` and is capped at `1h`. On a timeout the runner
+  kills the routine's whole process group, not just the entry script, so a
+  script that spawned children does not leave them behind.
+- `keep_runs` defaults to `50` and is capped at `1000`; `0` keeps every run.
+  Pruning happens after each run, under the same lock, and deletes the oldest
+  run directories first.
 - `enabled` defaults to `false`. Loading a bot never runs a routine; the
   scheduler only considers enabled routines.
 
@@ -67,8 +73,10 @@ The execution environment:
 | `ROUTINE_TRIGGER` | `manual` or `cron` |
 
 The working directory is the bot workspace. State and cursors belong in
-`ROUTINE_STATE`; they are not memory and not part of the bot definition. The
-runner creates:
+`ROUTINE_STATE`; they are not memory and not part of the bot definition. When a
+host runs a channel, `BOT_ROOT` and `BOT_DATA` are that channel's root: every
+channel has its own workspace, state and run history, even if the host process
+itself was started with a different `BOT_DATA`. The runner creates:
 
 ```text
 state/routines/<name>/
@@ -144,8 +152,23 @@ Routines are trusted code and run with the bot's privileges. There is no
 approval gate: test with `enabled = false`, keep the code small, and turn the
 schedule on only after a manual run succeeds.
 
-## Not implemented yet
+## Notifications
 
-Notifications. A run is visible in `run.json`, `output.log`, `ax routine
-runs|log` and the webi Routines view; pushing a result to a channel is a later
-layer.
+webi pushes every finished run over the same SSE stream as thread events
+(`{"type":"routine", ...}`). When notifications are on, the PWA shows a local
+notification — no push server, no VAPID, nothing that runs while the app is
+closed:
+
+- a failure, a timeout or an interrupted run always notifies;
+- a success notifies only if the page is hidden or the run took longer than
+  ten seconds;
+- tapping it opens the Routines view on that run's log.
+
+The same events keep an open Routines view current: a row's status changes
+without a reload. The notification toggle is the bell in the sidebar; it is
+the same permission and preference as thread run notifications.
+
+Runs still land in `run.json`, `output.log`, `ax routine runs|log` and the
+webi API; posting a result into a channel thread is not implemented on
+purpose: thread messages belong to the ax session log, and a host must not
+invent turns there.

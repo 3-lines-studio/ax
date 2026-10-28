@@ -164,6 +164,25 @@ func TestTimeoutAndFailure(t *testing.T) {
 	}
 }
 
+func TestTimeoutKillsTheProcessGroup(t *testing.T) {
+	paths := testPaths(t)
+	writeRoutine(t, paths, "tree", "entry = \"./run.sh\"\ntimeout = \"200ms\"\n", `#!/bin/sh
+( sleep 1; echo late > "$ROUTINE_STATE/late" ) &
+sleep 5
+`)
+	set, _ := Open(paths)
+	item, _ := set.Find("tree")
+	runner := NewRunner(paths)
+	result, err := runner.Run(context.Background(), item, "manual")
+	if err != nil || result.Status != "timeout" {
+		t.Fatalf("result = %+v err=%v", result, err)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(runner.stateDir("tree"), "late")); err == nil {
+		t.Fatal("a child of the routine survived the timeout")
+	}
+}
+
 func TestConcurrentRunIsRejected(t *testing.T) {
 	paths := testPaths(t)
 	writeRoutine(t, paths, "slow", "entry = \"./run.sh\"\ntimeout = \"2s\"\n", "#!/bin/sh\nsleep 1\n")
@@ -215,10 +234,39 @@ func TestDisabledAndScheduled(t *testing.T) {
 	}
 }
 
+func TestKeepRunsPrunesOldRuns(t *testing.T) {
+	paths := testPaths(t)
+	writeRoutine(t, paths, "hello", "entry = \"./run.sh\"\nkeep_runs = 2\n", "#!/bin/sh\necho hi\n")
+	set, _ := Open(paths)
+	item, _ := set.Find("hello")
+	if item.KeepRuns != 2 {
+		t.Fatalf("KeepRuns = %d", item.KeepRuns)
+	}
+	runner := NewRunner(paths)
+	for i := 0; i < 4; i++ {
+		if _, err := runner.Run(context.Background(), item, "manual"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runs, err := runner.Runs("hello", 10)
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("runs = %+v err=%v", runs, err)
+	}
+	entries, err := os.ReadDir(filepath.Join(runner.stateDir("hello"), "runs"))
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("run dirs = %d err=%v", len(entries), err)
+	}
+}
+
 func TestInvalidManifest(t *testing.T) {
 	paths := testPaths(t)
 	writeRoutine(t, paths, "escape", "entry = \"../outside.sh\"\n", "#!/bin/sh\ntrue\n")
 	if _, err := Open(paths); err == nil {
 		t.Fatal("accepted an entry outside the routine directory")
+	}
+	other := testPaths(t)
+	writeRoutine(t, other, "negative", "entry = \"./run.sh\"\nkeep_runs = -1\n", "#!/bin/sh\ntrue\n")
+	if _, err := Open(other); err == nil {
+		t.Fatal("accepted a negative keep_runs")
 	}
 }

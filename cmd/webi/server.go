@@ -128,6 +128,9 @@ func (s *Server) releaseRun(id string) {
 func (s *Server) subscribe() chan []byte {
 	ch := make(chan []byte, 64)
 	s.mu.Lock()
+	if s.subs == nil {
+		s.subs = map[chan []byte]struct{}{}
+	}
 	s.subs[ch] = struct{}{}
 	s.mu.Unlock()
 	return ch

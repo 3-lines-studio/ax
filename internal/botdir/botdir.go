@@ -50,9 +50,19 @@ func LoadTOML(root string, v any) error {
 // Resolve derives a consumer's paths from root. When root is a bot and the
 // runtime workspace is missing, Resolve creates it.
 func Resolve(root string) Paths {
+	return ResolveData(root, DataRoot(root))
+}
+
+// ResolveData is Resolve with an explicit runtime data root. A host that
+// manages several bots uses it to read a channel's paths without changing its
+// own BOT_DATA: every channel is a bot whose runtime data is its own root.
+func ResolveData(root, dataRoot string) Paths {
+	if dataRoot == "" {
+		dataRoot = root
+	}
 	paths := Paths{Root: root, IsBot: Exists(filepath.Join(root, "bot.toml"))}
-	paths.DataRoot = DataRoot(root)
-	paths.State = StateRoot(root)
+	paths.DataRoot = dataRoot
+	paths.State = filepath.Join(dataRoot, "state")
 	workspace := filepath.Join(paths.DataRoot, "workspace")
 	if IsDir(workspace) {
 		paths.Workspace = workspace
