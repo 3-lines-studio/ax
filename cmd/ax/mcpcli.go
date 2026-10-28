@@ -49,7 +49,7 @@ func runMCPCommand(fc fileConfig, bot *botCtx, args []string) {
 func mcpUsage() {
 	fmt.Fprint(os.Stderr, `usage: ax mcp <command> [flags]
 
-  serve [--stdio]          expose search and execute over MCP
+  serve [--stdio | --http ADDR]  expose search and execute over MCP
   list [--json]            configured servers and their login state
   add <name|url>           add a server to bot.toml (name from the registry)
   import <path|url|dir>    import an mcp.json, plugin.json or Cursor plugin
@@ -74,16 +74,12 @@ func mcpServeCommand(fc fileConfig, bot *botCtx, args []string) {
 			}
 			httpAddr = args[i]
 		case "-h", "--help":
-			fmt.Fprint(os.Stderr, "usage: ax mcp serve [--stdio]\n")
+			fmt.Fprint(os.Stderr, "usage: ax mcp serve [--stdio | --http ADDR]\n")
 			return
 		default:
 			fmt.Fprintf(os.Stderr, "error: unknown mcp serve flag %q\n", args[i])
 			os.Exit(2)
 		}
-	}
-	if httpAddr != "" {
-		fmt.Fprintln(os.Stderr, "error: ax mcp serve --http is not implemented yet; use --stdio")
-		os.Exit(2)
 	}
 	sources, err := buildSources(fc, bot, false)
 	if err != nil {
@@ -95,7 +91,15 @@ func mcpServeCommand(fc fileConfig, bot *botCtx, args []string) {
 	cat.Load(ctx)
 	cancel()
 	defer func() { _ = cat.Close() }()
-	if err := serveMCP(os.Stdin, os.Stdout, catalogTools(cat)); err != nil && !strings.Contains(err.Error(), "EOF") {
+	tools := catalogTools(cat)
+	if httpAddr != "" {
+		if err := serveMCPHTTP(httpAddr, tools); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if err := serveMCP(os.Stdin, os.Stdout, tools); err != nil && !strings.Contains(err.Error(), "EOF") {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
