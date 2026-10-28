@@ -26,9 +26,13 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func setFakeHTTP(t *testing.T, fn func(*http.Request) (*http.Response, error)) {
 	t.Helper()
-	old := http.DefaultClient
+	old, oldSlack := http.DefaultClient, slackClient
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(fn)}
-	t.Cleanup(func() { http.DefaultClient = old })
+	slackClient = http.DefaultClient
+	t.Cleanup(func() {
+		http.DefaultClient = old
+		slackClient = oldSlack
+	})
 }
 
 func jsonResponse(body string) *http.Response {
