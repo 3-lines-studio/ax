@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/3-lines-studio/ax/internal/skill"
 )
 
 func testStore(t *testing.T) (*store, string) {
@@ -70,7 +72,7 @@ func TestRejectsInvalidNamesAndEscapes(t *testing.T) {
 }
 
 func TestParseFallback(t *testing.T) {
-	description, content := parse("\nTitle\nBody")
+	description, content := skill.Parse("\nTitle\nBody")
 	if description != "Title" || content != "\nTitle\nBody" {
 		t.Fatalf("unexpected parse result: %q %q", description, content)
 	}
@@ -78,11 +80,11 @@ func TestParseFallback(t *testing.T) {
 
 func TestValidateName(t *testing.T) {
 	for _, name := range []string{"", "Upper", "bad_name", "-bad", "bad-", "bad--name"} {
-		if validateName(name) == nil {
+		if skill.ValidName(name) == nil {
 			t.Fatalf("accepted invalid name: %q", name)
 		}
 	}
-	if err := validateName("bigquery-metrics"); err != nil {
+	if err := skill.ValidName("bigquery-metrics"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -466,17 +468,17 @@ func TestReadErrors(t *testing.T) {
 }
 
 func TestValidateNameBoundaries(t *testing.T) {
-	if err := validateName("a"); err != nil {
+	if err := skill.ValidName("a"); err != nil {
 		t.Fatalf("single char rejected: %v", err)
 	}
-	if err := validateName(strings.Repeat("a", 64)); err != nil {
+	if err := skill.ValidName(strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("64-char name rejected: %v", err)
 	}
-	if err := validateName(strings.Repeat("a", 65)); err == nil {
+	if err := skill.ValidName(strings.Repeat("a", 65)); err == nil {
 		t.Fatal("accepted 65-char name")
 	}
 	for _, name := range []string{"..", ".", "a/b", `a\b`, "café", "--", "-", "a.b"} {
-		if validateName(name) == nil {
+		if skill.ValidName(name) == nil {
 			t.Fatalf("accepted invalid name: %q", name)
 		}
 	}
@@ -498,7 +500,7 @@ func TestParseFrontmatterVariants(t *testing.T) {
 		{"malformed no close", "---\ndescription: A\nbody remains", "---", "---\ndescription: A\nbody remains"},
 		{"empty content", "", "", ""},
 	} {
-		description, body := parse(tc.content)
+		description, body := skill.Parse(tc.content)
 		if description != tc.description || body != tc.body {
 			t.Fatalf("%s: got (%q, %q) want (%q, %q)", tc.name, description, body, tc.description, tc.body)
 		}
