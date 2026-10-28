@@ -58,25 +58,28 @@ type Event struct {
 	Outcome      string          `json:"outcome,omitempty"`
 	Summary      string          `json:"summary,omitempty"`
 	Upto         int             `json:"upto,omitempty"`
-	Raw          json.RawMessage `json:"-"`
+	// secret_request
+	Description string          `json:"description,omitempty"`
+	Raw         json.RawMessage `json:"-"`
 }
 
 func (e *Event) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		Type      string          `json:"type"`
-		Text      string          `json:"text"`
-		ID        string          `json:"id"`
-		Name      string          `json:"name"`
-		Target    string          `json:"target"`
-		Arguments json.RawMessage `json:"arguments"`
-		Output    json.RawMessage `json:"output"`
-		Message   json.RawMessage `json:"message"`
-		Messages  json.RawMessage `json:"messages"`
-		Usage     *Usage          `json:"usage"`
-		Input     int             `json:"input"`
-		Outcome   string          `json:"outcome"`
-		Summary   string          `json:"summary"`
-		Upto      int             `json:"upto"`
+		Type        string          `json:"type"`
+		Text        string          `json:"text"`
+		ID          string          `json:"id"`
+		Name        string          `json:"name"`
+		Target      string          `json:"target"`
+		Arguments   json.RawMessage `json:"arguments"`
+		Output      json.RawMessage `json:"output"`
+		Message     json.RawMessage `json:"message"`
+		Messages    json.RawMessage `json:"messages"`
+		Usage       *Usage          `json:"usage"`
+		Input       int             `json:"input"`
+		Outcome     string          `json:"outcome"`
+		Summary     string          `json:"summary"`
+		Description string          `json:"description"`
+		Upto        int             `json:"upto"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -85,7 +88,7 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 		Type: raw.Type, Text: raw.Text, ID: raw.ID, Name: raw.Name, Target: raw.Target,
 		Arguments: raw.Arguments, Message: raw.Message, Messages: raw.Messages,
 		Usage: raw.Usage, InputTokens: raw.Input, Outcome: raw.Outcome,
-		Summary: raw.Summary, Upto: raw.Upto,
+		Summary: raw.Summary, Upto: raw.Upto, Description: raw.Description,
 	}
 	if len(raw.Output) > 0 {
 		var text string
@@ -301,6 +304,32 @@ func (r *Run) Steer(text string) error {
 		return err
 	}
 	_, err = r.stdin.Write(append(payload, '\n'))
+	return err
+}
+
+// Secret answers a secret_request: the next call to the asking tool sees the
+// value in its environment. The value is not part of the conversation.
+func (r *Run) Secret(name, value string) error {
+	return r.control(map[string]any{"type": "secret", "name": name, "value": value})
+}
+
+// SkipSecret tells ax the user declined, so the tool call fails with a message
+// the model can read instead of waiting.
+func (r *Run) SkipSecret(name string) error {
+	return r.control(map[string]any{"type": "secret", "name": name, "skip": true})
+}
+
+func (r *Run) control(payload map[string]any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.done {
+		return errors.New("axrun: run already finished")
+	}
+	line, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	_, err = r.stdin.Write(append(line, '\n'))
 	return err
 }
 

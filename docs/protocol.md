@@ -21,6 +21,8 @@ While AX runs, stdin accepts JSONL controls:
 ```json
 {"type":"cancel"}
 {"type":"steer","text":"also update the changelog"}
+{"type":"secret","name":"GH_TOKEN","value":"..."}
+{"type":"secret","name":"GH_TOKEN","skip":true}
 ```
 
 `cancel` stops the run at the next safe point and ends with `outcome:
@@ -43,6 +45,16 @@ so two hosts resuming the same session cannot race.
 Hosts (webi, slaxi, boti) own the policy: on startup and on a timer they look
 for open runs and call `ax --resume`.
 
+## Secrets
+
+A provider can answer a call with `{"ask":{"name":"GH_TOKEN","description":...}}`
+instead of a result (see [tools.md](tools.md)). AX emits `secret_request` and
+waits for `{"type":"secret",...}` on stdin. With a value, AX retries the same
+call with the variable in the provider's environment; with `"skip":true` the
+call fails with a message the model can read. The request blocks the run, so a
+host that dies leaves an interrupted run for `ax --resume` to pick up. The value
+stays in memory: it is never written to the session log nor sent to the model.
+
 ## Output events
 
 ```json
@@ -57,6 +69,7 @@ for open runs and call `ax --resume`.
 {"type":"compaction","upto":42,"summary":"Goal: ... Decisions: ..."}
 {"type":"steer","text":"also update the changelog"}
 {"type":"resume","run":"r1","interrupted":["fsx.write"]}
+{"type":"secret_request","id":"call_1","tool":"execute","name":"GH_TOKEN","description":"the gh CLI reads it"}
 {"type":"message","message":{"Role":"assistant","Content":"done"}}
 {"type":"result","messages":[],"usage":{"input":100,"output":20,"cached_input":0}}
 {"type":"error","message":"provider error"}

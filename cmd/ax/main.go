@@ -352,7 +352,11 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 	var cancel atomic.Bool
 	steer := make(chan string, 8)
 	if !stdinIsTerminal() {
-		go readControls(&cancel, steer)
+		secrets.enable()
+		go func() {
+			readControls(&cancel, steer)
+			secrets.hostGone()
+		}()
 	}
 
 	provider := NewOpenAI(base, apiKey(fc, bot))
@@ -829,13 +833,22 @@ func readControls(cancel *atomic.Bool, steer chan<- string) {
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		var control struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type  string `json:"type"`
+			Text  string `json:"text"`
+			Name  string `json:"name"`
+			Value string `json:"value"`
+			Skip  bool   `json:"skip"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &control); err != nil {
 			continue
 		}
 		switch control.Type {
+		case "secret":
+			if control.Skip {
+				secrets.skip(control.Name)
+			} else {
+				secrets.deliver(control.Name, control.Value)
+			}
 		case "cancel":
 			cancel.Store(true)
 		case "steer":
@@ -976,6 +989,19 @@ func (s *eventSink) toolResult(call ToolCall) {
 func (s *eventSink) steer(msg Message) {
 	s.append(sessionEntry{Type: entryMessage, Message: &msg})
 	s.emit(map[string]any{"type": axproto.TypeSteer, "text": msg.Content})
+}
+
+// secretRequest tells the host a tool needs a value. The model never sees it:
+// the call is retried once the value exists.
+func (s *eventSink) secretRequest(call ToolCall, ask secretAsk) {
+	target := s.targets[call.ID]
+	if target == "" {
+		target = call.Name
+	}
+	s.emit(map[string]any{
+		"type": axproto.TypeSecretRequest, "id": call.ID,
+		"tool": target, "name": ask.Name, "description": ask.Description,
+	})
 }
 
 func (s *eventSink) tokens(input, output, cached int) {

@@ -29,6 +29,7 @@ const (
 	TypeCompaction     = "compaction"
 	TypeSteer          = "steer"
 	TypeResume         = "resume"
+	TypeSecretRequest  = "secret_request"
 	TypeMessage        = "message"
 	TypeResult         = "result"
 	TypeError          = "error"
