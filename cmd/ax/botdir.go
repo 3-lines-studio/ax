@@ -7,17 +7,18 @@ import (
 )
 
 type botConfig struct {
-	Model           string     `toml:"model"`
-	BaseURL         string     `toml:"base_url"`
-	Tools           []string   `toml:"tools"`
-	Thinking        *bool      `toml:"thinking"`
-	ReasoningEffort string     `toml:"reasoning_effort"`
-	MaxTokens       int        `toml:"max_tokens"`
-	ToolMode        string     `toml:"tool_mode"`
-	CoreTools       []string   `toml:"core_tools"`
-	MCP             []mcpEntry `toml:"mcp"`
-	CompactAt       *float64   `toml:"compact_at"`
-	ContextWindow   *int       `toml:"context_window"`
+	Model           string            `toml:"model"`
+	BaseURL         string            `toml:"base_url"`
+	Tools           []string          `toml:"tools"`
+	Thinking        *bool             `toml:"thinking"`
+	ReasoningEffort string            `toml:"reasoning_effort"`
+	MaxTokens       int               `toml:"max_tokens"`
+	ToolMode        string            `toml:"tool_mode"`
+	CoreTools       []string          `toml:"core_tools"`
+	MCP             []mcpEntry        `toml:"mcp"`
+	Connections     []connectionEntry `toml:"connection"`
+	CompactAt       *float64          `toml:"compact_at"`
+	ContextWindow   *int              `toml:"context_window"`
 }
 
 // botCtx is what the engine needs from the Botdir conventions.
@@ -65,6 +66,9 @@ func mergeBotConfig(fc fileConfig, bc botConfig) fileConfig {
 	}
 	if len(bc.MCP) > 0 {
 		fc.mcp = append([]mcpEntry(nil), bc.MCP...)
+	}
+	if len(bc.Connections) > 0 {
+		fc.connections = append([]connectionEntry(nil), bc.Connections...)
 	}
 	if bc.CompactAt != nil {
 		fc.compactAt, fc.compactAtSet = *bc.CompactAt, true

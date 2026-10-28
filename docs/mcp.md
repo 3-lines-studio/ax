@@ -57,11 +57,15 @@ local descriptors.
 
 ## Sources
 
+Both source kinds are **connections** ([connections.md](connections.md)): the
+catalog indexes `<connection>.<tool>` and `bot.toml` declares integrations, not
+tool names. `tools` and `[[mcp]]` are the legacy spellings and keep their ids.
+
 ### Local providers
 
 `tools` in `bot.toml` and `AX_TOOLS` from the environment keep the
 `describe`/`run` contract in [tools.md](tools.md). Each executable becomes a
-server named after its basename:
+server named after its basename (or after the `[[connection]]` id):
 
 ```text
 AX_TOOLS="fsx bashx"  ->  fsx.read, fsx.write, fsx.edit, bashx.bash

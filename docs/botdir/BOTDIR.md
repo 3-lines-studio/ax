@@ -89,6 +89,24 @@ tools = ["wax", "fsx"]
 
 Each `tools` entry is one executable name resolved through `PATH`. It MUST NOT contain arguments. Consumers MUST preserve order and ignore duplicate entries after the first.
 
+`[[connection]]` declares one integration as a unit: an id the model sees, a
+kind and how to reach it. Consumers MUST treat the id as the tool namespace
+(`<id>.<tool>`); tools are discovered from the connection, never listed in
+`bot.toml`. `tools` and `[[mcp]]` are legacy spellings of the same thing and
+keep their ids.
+
+```toml
+[[connection]]
+id           = "web"
+kind         = "local"          # local | mcp-stdio | mcp-http
+command      = "wax"
+capabilities = ["web.search"]   # optional allowlist
+```
+
+Ids are lowercase letters, digits, `_` and `-` (1–64 characters) and unique
+across the bot. `capabilities` only narrows what a connection declares; an empty
+list enables every tool. See [docs/connections.md](../connections.md).
+
 A missing key uses the consumer default.
 
 Root keys are reserved by Botdir. Consumer-specific configuration MUST use a top-level table named after that consumer:
