@@ -195,6 +195,11 @@ The prompt is deliberately small: identity, environment, safety and style.
 Tool mechanics belong in the tool descriptions, and long procedures belong in
 `skills/` or `bot.md`. The prompt is not a tool manual.
 
+`memoryx` is the optional personal-memory provider. It keeps one JSON file per
+fact under `state/memory/` and exposes `search`, `get`, `verify`, `upsert` and
+`delete`; add it to `tools` when the bot should remember preferences across
+sessions. The data is readable and exportable; see [docs/memory.md](../../docs/memory.md).
+
 ### MCP servers
 
 ```toml
