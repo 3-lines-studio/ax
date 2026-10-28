@@ -29,7 +29,7 @@ func TestChannelGetsItsOwnDataRoot(t *testing.T) {
 
 	axPath := filepath.Join(t.TempDir(), "ax")
 	script := `#!/bin/sh
-printf '%s' "$BOT_DATA" > "$BOTI_TEST_RECORD"
+printf '%s' "$BOT_DATA" > "$BOTI_TEST_RECORD.tmp" && mv "$BOTI_TEST_RECORD.tmp" "$BOTI_TEST_RECORD"
 printf '%s\n' '{"type":"message","message":{"Role":"assistant","Content":"ok"}}' \
   '{"type":"done","outcome":"done"}'
 `
