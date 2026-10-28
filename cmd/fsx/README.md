@@ -17,16 +17,22 @@ edit
 
 Fsx uses `$BOT_DATA/workspace` when run inside a bot (falling back to `$BOT_ROOT`), `$BOT_ROOT/workspace` when only `BOT_ROOT` is set, then the current directory (or a `workspace/` directory present there) when run standalone. Go's `os.Root` rejects `..`, absolute-path, and symlink escapes. Absolute input paths are accepted only when they are beneath the workspace. Files inside the workspace remain writable and removable.
 
-Run AX with Fsx:
+Add Fsx to the bot's `bot.toml`:
 
-```sh
-AX_TOOLS="fsx" ax
+```toml
+[[connection]]
+id = "fsx"
+kind = "local"
+command = "fsx"
 ```
 
-Use it with Bashx:
+Use it with Bashx by adding a second connection:
 
-```sh
-AX_TOOLS="fsx bashx" ax
+```toml
+[[connection]]
+id = "bashx"
+kind = "local"
+command = "bashx"
 ```
 
 ## Build

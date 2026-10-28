@@ -63,13 +63,23 @@ tool names. `tools` and `[[mcp]]` are the legacy spellings and keep their ids.
 
 ### Local providers
 
-`tools` in `bot.toml` and `AX_TOOLS` from the environment keep the
-`describe`/`run` contract in [tools.md](tools.md). Each executable becomes a
-server named after its basename (or after the `[[connection]]` id):
+Local providers are connections with `kind = "local"`; each keeps the
+`describe`/`run` contract in [tools.md](tools.md) and exposes `<id>.<tool>`:
 
-```text
-AX_TOOLS="fsx bashx"  ->  fsx.read, fsx.write, fsx.edit, bashx.bash
+```toml
+[[connection]]
+id = "fsx"
+kind = "local"
+command = "fsx"
+
+[[connection]]
+id = "bashx"
+kind = "local"
+command = "bashx"
 ```
+
+The legacy `tools`/`AX_TOOLS` spellings keep the same contract and ids; new
+bots should use `[[connection]]`.
 
 A provider that fails to describe is shown as `unavailable`; the rest of the
 catalog still loads.

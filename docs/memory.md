@@ -56,6 +56,15 @@ Use the right home for everything else:
 
 ## Tools
 
+Declare the provider as a local connection:
+
+```toml
+[[connection]]
+id = "memoryx"
+kind = "local"
+command = "memoryx"
+```
+
 The `memoryx` provider exposes five catalog tools:
 
 - `memoryx.search` — rank active memories for a query.

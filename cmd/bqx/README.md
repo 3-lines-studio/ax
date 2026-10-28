@@ -13,7 +13,13 @@ curl -fsSL https://github.com/3-lines-studio/ax/releases/latest/download/install
 ```sh
 export GOOGLE_CLOUD_PROJECT=my-project
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
-export AX_TOOLS=bqx
+```
+
+```toml
+[[connection]]
+id = "bqx"
+kind = "local"
+command = "bqx"
 ```
 
 `GOOGLE_APPLICATION_CREDENTIALS` accepts either a path to a service-account JSON file or the inline JSON content itself (a JSON object).
