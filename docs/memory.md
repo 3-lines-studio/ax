@@ -16,6 +16,20 @@ One JSON file per memory, mode 0600, directory 0700. Readers may read the files
 directly; the format is the export. A malformed file is a hard error, so the
 user can fix it instead of silently losing facts.
 
+### Per channel
+
+A channel is a bot, and a host runs each channel with `BOT_DATA` set to the
+channel's own workdir. Memory therefore follows the channel:
+
+```text
+/channels/work/state/memory/       # channel "work"
+/channels/home/state/memory/       # channel "home"
+```
+
+Switching channel switches facts: a preference saved in `work` is not visible in
+`home`, and `dedupe_key` only collides inside one channel. Copying
+`state/memory/` between channels is the way to share something on purpose.
+
 ```json
 {
   "id": "20261028T174029-0f137b1f",
@@ -76,11 +90,14 @@ The `memoryx` provider exposes five catalog tools:
 The tool descriptions carry the policy: verify before writing, keep one fact per
 memory, say what was saved, and never store secrets, routine state or
 procedures. Search is lexical and local; no model and no network call are
-involved.
+involved. The provider inherits the channel's `BOT_ROOT` and `BOT_DATA` from the
+`ax` process that starts it, which is what keeps the store per channel.
 
-## Not implemented yet
+## Why there is no automatic surfacing
 
-Kody-style automatic surfacing (retrieving one or two relevant memories and
-putting them next to a search/execute result) is deliberately left for a later
-pass. The data and the tool exist first; auto-surfacing can be added when the
-evals show it is needed.
+Kody-style automatic surfacing — retrieving one or two memories and putting them
+next to a search/execute result — is deliberately not implemented. The model
+already has `memoryx.search` and a prompt rule to check memory when a task
+depends on personal facts; injecting extra text into every tool result would
+spend context on guesses. Add it only if an eval shows the model missing facts
+it could have found.

@@ -19,7 +19,8 @@ delete   soft-delete, or remove with force
 ```
 
 The store is one JSON file per memory under `state/memory/` in the runtime data
-root (`BOT_DATA` when a host provides one, otherwise the bot root). Files are
+root (`BOT_DATA` when a host provides one, otherwise the bot root), so a host
+that runs a channel per workdir gets memory per channel. Files are
 0600 and the directory is 0700. Memories are durable personal facts: names,
 ids, preferences, relationships and project context. They are not for secrets
 (the vault), routine state (`state/routines/`), procedures (`skills/`) or
