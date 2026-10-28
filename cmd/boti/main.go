@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -23,6 +25,14 @@ type botConfig struct {
 	Consumer string            `toml:"consumer"`
 	Env      map[string]string `toml:"env"`
 	PreRun   []preRunHook      `toml:"pre_run"`
+	Boti     botiConfig        `toml:"boti"`
+}
+
+// botiConfig is bot.toml's [boti] table, the host's own configuration. Botdir
+// reserves root keys for the specification, so the loader keeps its settings in
+// a table named after itself.
+type botiConfig struct {
+	Serve serveConfig `toml:"serve"`
 }
 
 type preRunHook struct {
@@ -33,6 +43,8 @@ func main() {
 	fs := flag.NewFlagSet("boti", flag.ExitOnError)
 	dir := fs.String("C", "", "bot root directory (default: $BOT_ROOT, else cwd)")
 	installURL := fs.String("install-url", "", "installer script URL (default: $BOTI_INSTALL_URL, else the hosted installer)")
+	lines := fs.Int("n", 40, "lines to show (logs)")
+	asJSON := fs.Bool("json", false, "print the supervisor state as JSON (status)")
 	_ = fs.Parse(os.Args[1:])
 
 	root := resolveRoot(*dir)
@@ -58,8 +70,26 @@ func main() {
 		if err := update(root, installerURL(*installURL)); err != nil {
 			fatal("update: %v", err)
 		}
+	case "serve":
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+		defer stop()
+		if err := runServe(ctx, root); err != nil {
+			fatal("serve: %v", err)
+		}
+	case "status":
+		if err := status(root, *asJSON); err != nil {
+			fatal("%v", err)
+		}
+	case "logs":
+		if err := logs(root, *lines); err != nil {
+			fatal("logs: %v", err)
+		}
+	case "restart":
+		if err := restart(root); err != nil {
+			fatal("%v", err)
+		}
 	default:
-		fatal("unknown mode %q (want install, run, selftest or update)", mode)
+		fatal("unknown mode %q (want install, run, selftest, update, serve, status, logs or restart)", mode)
 	}
 }
 
@@ -153,17 +183,8 @@ func run(root string) error {
 	for k, v := range bc.Env {
 		env = setEnvIfUnset(env, k, v)
 	}
-	for _, h := range bc.PreRun {
-		if h.Command == "" {
-			continue
-		}
-		cmd := exec.Command("/bin/sh", "-c", h.Command)
-		cmd.Env = env
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("pre_run %q: %w", h.Command, err)
-		}
+	if err := runHooks(bc, env, os.Stdout, os.Stderr); err != nil {
+		return err
 	}
 
 	consumer := bc.Consumer
@@ -289,13 +310,24 @@ func botPackages(root string) ([]string, error) {
 	}
 	pkgs := []string{"ax", "slaxi"}
 	seen := map[string]bool{"ax": true, "slaxi": true}
-	for _, t := range bc.Tools {
-		t = strings.TrimSpace(t)
-		if t == "" || seen[t] {
-			continue
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] || strings.ContainsRune(name, os.PathSeparator) {
+			return
 		}
-		seen[t] = true
-		pkgs = append(pkgs, t)
+		seen[name] = true
+		pkgs = append(pkgs, name)
+	}
+	// A bot that names its own consumer or transport needs that program too,
+	// even when it is not a tool provider.
+	if bc.Consumer != "" {
+		add(bc.Consumer)
+	}
+	if len(bc.Boti.Serve.Command) > 0 {
+		add(bc.Boti.Serve.Command[0])
+	}
+	for _, t := range bc.Tools {
+		add(t)
 	}
 	return pkgs, nil
 }

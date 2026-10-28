@@ -1,0 +1,709 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/3-lines-studio/ax/internal/botdir"
+)
+
+// serveConfig is bot.toml's [boti.serve] table: what the host runs and how it
+// knows the process is useful.
+type serveConfig struct {
+	Command []string `toml:"command"`
+	Health  string   `toml:"health"`
+}
+
+const defaultServeListen = "127.0.0.1:8377"
+
+// serveSettings applies the defaults for a browser bot: webi on loopback and
+// its /healthz. A custom command with no health URL is supervised by process
+// liveness only, which is what a transport without a port needs.
+func (bc botConfig) serveSettings() serveConfig {
+	cfg := bc.Boti.Serve
+	if len(cfg.Command) == 0 {
+		cfg.Command = []string{"webi", "-listen", defaultServeListen}
+		if cfg.Health == "" {
+			cfg.Health = "http://" + defaultServeListen + "/healthz"
+		}
+	}
+	return cfg
+}
+
+// hostPaths is everything boti serve owns inside the bot's data directory.
+type hostPaths struct {
+	root   string
+	data   string
+	dir    string
+	state  string
+	log    string
+	sock   string
+	builds string
+}
+
+func newHostPaths(root string) hostPaths {
+	data := botdir.DataRoot(root)
+	dir := filepath.Join(data, "state", "host")
+	return hostPaths{
+		root:   root,
+		data:   data,
+		dir:    dir,
+		state:  filepath.Join(dir, "state.json"),
+		log:    filepath.Join(dir, "log"),
+		sock:   filepath.Join(dir, "sock"),
+		builds: filepath.Join(dir, "builds"),
+	}
+}
+
+// hostState is what `boti status` reads and the control socket serves. It holds
+// no secrets: a build id, pids, timestamps and the last error.
+type hostState struct {
+	PID       int        `json:"pid"`
+	Build     string     `json:"build"`
+	Previous  string     `json:"previous,omitempty"`
+	Started   time.Time  `json:"started"`
+	Restarts  int        `json:"restarts"`
+	LastError string     `json:"last_error,omitempty"`
+	Child     childState `json:"child"`
+}
+
+type childState struct {
+	PID     int       `json:"pid,omitempty"`
+	Started time.Time `json:"started,omitempty"`
+	Healthy bool      `json:"healthy"`
+}
+
+// host is one supervised transport. It owns the child process, the state file
+// and the control socket; it never builds anything (that is `boti promote`).
+type host struct {
+	paths hostPaths
+	cfg   serveConfig
+	env   []string
+	log   *os.File
+
+	mu      sync.Mutex
+	state   hostState
+	restart chan struct{}
+	recent  []time.Time
+	failed  map[string]bool
+
+	startTimeout time.Duration
+	stopTimeout  time.Duration
+	backoff      time.Duration
+	crashWindow  time.Duration
+	crashLimit   int
+}
+
+func newHost(root string, bc botConfig) (*host, error) {
+	paths := newHostPaths(root)
+	if err := os.MkdirAll(paths.builds, 0o755); err != nil {
+		return nil, err
+	}
+	file, err := openHostLog(paths.log)
+	if err != nil {
+		return nil, err
+	}
+	env := os.Environ()
+	env = setEnv(env, "BOT_ROOT", paths.root)
+	env = setEnvIfUnset(env, "BOT_DATA", paths.data)
+	for k, v := range bc.Env {
+		env = setEnvIfUnset(env, k, v)
+	}
+	h := &host{
+		paths:        paths,
+		cfg:          bc.serveSettings(),
+		env:          env,
+		log:          file,
+		restart:      make(chan struct{}, 1),
+		failed:       map[string]bool{},
+		startTimeout: 30 * time.Second,
+		stopTimeout:  10 * time.Second,
+		backoff:      time.Second,
+		crashWindow:  time.Minute,
+		crashLimit:   3,
+	}
+	if data, err := os.ReadFile(paths.state); err == nil {
+		_ = json.Unmarshal(data, &h.state)
+	}
+	h.state.PID = os.Getpid()
+	h.state.Started = time.Now().UTC()
+	h.state.Child = childState{}
+	h.save()
+	return h, nil
+}
+
+func (h *host) close() {
+	if h.log != nil {
+		_ = h.log.Close()
+	}
+}
+
+func (h *host) save() {
+	h.mu.Lock()
+	data, err := json.MarshalIndent(h.state, "", "  ")
+	h.mu.Unlock()
+	if err != nil {
+		slog.Error("boti: marshal state", "err", err)
+		return
+	}
+	if err := writeFileAtomic(h.paths.state, data, 0o644); err != nil {
+		slog.Error("boti: save state", "err", err)
+	}
+}
+
+// build resolves the symlink a promotion switches. Without one the host runs
+// whatever is on PATH and reports "dev", which is what an unmanaged checkout
+// should say.
+func (h *host) build() (string, string, error) {
+	link := filepath.Join(h.paths.builds, "current")
+	target, err := os.Readlink(link)
+	if err != nil {
+		return "dev", "", nil
+	}
+	id := filepath.Base(target)
+	bin := filepath.Join(h.paths.builds, id, "bin")
+	if info, err := os.Stat(bin); err != nil || !info.IsDir() {
+		return "", "", fmt.Errorf("build %s has no bin directory (%s)", id, bin)
+	}
+	return id, bin, nil
+}
+
+// switchBuild points `current` at a build, atomically.
+func (h *host) switchBuild(id string) error {
+	if id == "" || strings.ContainsAny(id, "/\\") || id == "." || id == ".." {
+		return fmt.Errorf("invalid build id %q", id)
+	}
+	temporary := filepath.Join(h.paths.builds, ".current-"+strconv.FormatInt(time.Now().UnixNano(), 10))
+	if err := os.Symlink(id, temporary); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, filepath.Join(h.paths.builds, "current")); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	return nil
+}
+
+type childProc struct {
+	cmd     *exec.Cmd
+	done    chan struct{}
+	waitErr error
+}
+
+func (h *host) spawn(id, bin string) (*childProc, error) {
+	command := h.cfg.Command
+	if len(command) == 0 {
+		return nil, errors.New("serve.command is empty")
+	}
+	env := h.env
+	env = setEnv(env, "AX_BUILD", id)
+	if bin != "" {
+		path := envValue(env, "PATH")
+		if path != "" {
+			path = bin + string(os.PathListSeparator) + path
+		} else {
+			path = bin
+		}
+		env = setEnv(env, "PATH", path)
+	}
+	// exec.Command resolves a bare name with the *parent's* PATH, so resolve
+	// it against the build's PATH ourselves; the whole point of a build is
+	// that its bin directory wins.
+	name := command[0]
+	if !strings.ContainsRune(name, os.PathSeparator) {
+		resolved, err := lookPath(name, envValue(env, "PATH"))
+		if err != nil {
+			return nil, err
+		}
+		name = resolved
+	}
+	cmd := exec.Command(name, command[1:]...)
+	cmd.Dir = h.paths.root
+	cmd.Env = env
+	cmd.Stdout = h.log
+	cmd.Stderr = h.log
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	proc := &childProc{cmd: cmd, done: make(chan struct{})}
+	go func() {
+		proc.waitErr = cmd.Wait()
+		close(proc.done)
+	}()
+
+	h.mu.Lock()
+	h.state.Build = id
+	h.state.Child = childState{PID: cmd.Process.Pid, Started: time.Now().UTC()}
+	h.mu.Unlock()
+	h.save()
+	slog.Info("boti: started", "pid", cmd.Process.Pid, "build", id, "command", strings.Join(command, " "))
+	return proc, nil
+}
+
+// awaitHealthy polls the health URL until it answers, the child dies or the
+// start window closes. With no health URL the child is healthy once it is
+// running.
+func (h *host) awaitHealthy(ctx context.Context, proc *childProc) bool {
+	if h.cfg.Health == "" {
+		h.markHealthy()
+		return true
+	}
+	deadline := time.Now().Add(h.startTimeout)
+	client := &http.Client{Timeout: 2 * time.Second}
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-proc.done:
+			return false
+		default:
+		}
+		resp, err := client.Get(h.cfg.Health)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				h.markHealthy()
+				return true
+			}
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func (h *host) markHealthy() {
+	h.mu.Lock()
+	h.state.Child.Healthy = true
+	h.failed = map[string]bool{}
+	pid := h.state.Child.PID
+	h.mu.Unlock()
+	h.save()
+	slog.Info("boti: healthy", "pid", pid)
+}
+
+func (h *host) clearChild() {
+	h.mu.Lock()
+	h.state.Child = childState{}
+	h.mu.Unlock()
+	h.save()
+}
+
+// stop asks the child to exit and waits. The child may have its own runs in
+// flight; webi resumes them from the session log on the next start.
+func (h *host) stop(proc *childProc) {
+	select {
+	case <-proc.done:
+		return
+	default:
+	}
+	_ = proc.cmd.Process.Signal(syscall.SIGTERM)
+	select {
+	case <-proc.done:
+	case <-time.After(h.stopTimeout):
+		slog.Warn("boti: child ignored SIGTERM, killing", "pid", proc.cmd.Process.Pid)
+		_ = proc.cmd.Process.Kill()
+		<-proc.done
+	}
+	h.clearChild()
+}
+
+// crashed records an exit and decides whether the host should fall back to the
+// previous build. A child that has never been healthy counts too: a build that
+// cannot start is exactly what a rollback is for.
+func (h *host) crashed(err error, reason string) {
+	if err != nil {
+		reason = fmt.Sprintf("%s: %v", reason, err)
+	}
+	h.mu.Lock()
+	h.state.LastError = reason
+	h.state.Restarts++
+	now := time.Now()
+	h.recent = append(h.recent, now)
+	cut := now.Add(-h.crashWindow)
+	kept := h.recent[:0]
+	for _, at := range h.recent {
+		if at.After(cut) {
+			kept = append(kept, at)
+		}
+	}
+	h.recent = kept
+	limit := h.crashLimit
+	previous := h.state.Previous
+	current := h.state.Build
+	h.failed[current] = true
+	canRollBack := previous != "" && previous != current && !h.failed[previous]
+	h.mu.Unlock()
+	h.save()
+	slog.Warn("boti: child failed", "build", current, "reason", reason, "recent", len(kept), "limit", limit)
+
+	if len(kept) < limit || !canRollBack {
+		return
+	}
+	if err := h.switchBuild(previous); err != nil {
+		slog.Error("boti: rollback", "build", previous, "err", err)
+		return
+	}
+	h.mu.Lock()
+	h.state.Build, h.state.Previous = previous, current
+	h.state.LastError = fmt.Sprintf("rolled back to %s after %d failures: %s", previous, len(kept), reason)
+	h.recent = nil
+	h.mu.Unlock()
+	h.save()
+	slog.Warn("boti: rolled back", "to", previous, "from", current)
+}
+
+func (h *host) sleep(ctx context.Context, wait time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(wait):
+		return true
+	}
+}
+
+// loop is the supervisor: start, verify, wait, repeat.
+func (h *host) loop(ctx context.Context) error {
+	if err := h.control(ctx); err != nil {
+		return err
+	}
+	for {
+		if ctx.Err() != nil {
+			return nil
+		}
+		id, bin, err := h.build()
+		if err != nil {
+			h.crashed(err, "build")
+			if !h.sleep(ctx, h.backoff) {
+				return nil
+			}
+			continue
+		}
+		proc, err := h.spawn(id, bin)
+		if err != nil {
+			h.crashed(err, "start")
+			if !h.sleep(ctx, h.backoff) {
+				return nil
+			}
+			continue
+		}
+		if !h.awaitHealthy(ctx, proc) {
+			if ctx.Err() != nil {
+				h.stop(proc)
+				return nil
+			}
+			reason := "not healthy within " + h.startTimeout.String()
+			select {
+			case <-proc.done:
+				reason = "exited before healthy"
+			default:
+			}
+			h.stop(proc)
+			h.crashed(nil, reason)
+			if !h.sleep(ctx, h.backoff) {
+				return nil
+			}
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			h.stop(proc)
+			return nil
+		case <-h.restart:
+			slog.Info("boti: restart requested")
+			h.stop(proc)
+		case <-proc.done:
+			h.clearChild()
+			h.crashed(proc.waitErr, "exited")
+			if !h.sleep(ctx, h.backoff) {
+				return nil
+			}
+		}
+	}
+}
+
+// control serves status and restart over a unix socket in the bot's state
+// directory. A process running as this user can already signal the host; the
+// socket is there to make that a request instead of a guess.
+func (h *host) control(ctx context.Context) error {
+	_ = os.Remove(h.paths.sock)
+	listener, err := net.Listen("unix", h.paths.sock)
+	if err != nil {
+		return fmt.Errorf("control socket: %w", err)
+	}
+	if err := os.Chmod(h.paths.sock, 0o600); err != nil {
+		_ = listener.Close()
+		return err
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
+		h.mu.Lock()
+		data, _ := json.Marshal(h.state)
+		h.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(data)
+	})
+	mux.HandleFunc("POST /restart", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case h.restart <- struct{}{}:
+		default:
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	server := &http.Server{Handler: mux}
+	go func() {
+		<-ctx.Done()
+		_ = server.Close()
+		_ = os.Remove(h.paths.sock)
+	}()
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("boti: control socket", "err", err)
+		}
+	}()
+	return nil
+}
+
+func controlClient(sock string) *http.Client {
+	return &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+			},
+		},
+	}
+}
+
+// runServe is the `boti serve` entry point.
+func runServe(ctx context.Context, root string) error {
+	bc, found, err := readBotConfig(root)
+	if err != nil {
+		return err
+	}
+	if !found {
+		fmt.Fprintf(os.Stderr, "boti: no bot.toml in %s; serving the default webi\n", root)
+	}
+	paths := newHostPaths(root)
+	if err := os.MkdirAll(paths.dir, 0o755); err != nil {
+		return err
+	}
+	lock, err := lockHost(filepath.Join(paths.dir, "lock"))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
+	h, err := newHost(root, bc)
+	if err != nil {
+		return err
+	}
+	defer h.close()
+	if err := runHooks(bc, h.env, h.log, h.log); err != nil {
+		return err
+	}
+	return h.loop(ctx)
+}
+
+// runHooks runs the bot's pre_run commands in order. `boti run` runs them once
+// before exec; `boti serve` runs them once before the first start.
+func runHooks(bc botConfig, env []string, stdout, stderr io.Writer) error {
+	for _, hook := range bc.PreRun {
+		if hook.Command == "" {
+			continue
+		}
+		cmd := exec.Command("/bin/sh", "-c", hook.Command)
+		cmd.Env = env
+		cmd.Dir = envValue(env, "BOT_ROOT")
+		cmd.Stdout = stdout
+		cmd.Stderr = stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("pre_run %q: %w", hook.Command, err)
+		}
+	}
+	return nil
+}
+
+func openHostLog(path string) (*os.File, error) {
+	if info, err := os.Stat(path); err == nil && info.Size() > 4<<20 {
+		_ = os.Remove(path + ".1")
+		_ = os.Rename(path, path+".1")
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+}
+
+// --- commands --------------------------------------------------------------
+
+func status(root string, asJSON bool) error {
+	paths := newHostPaths(root)
+	data, err := os.ReadFile(paths.state)
+	if err != nil {
+		return fmt.Errorf("no supervisor state in %s (is `boti serve` running?)", paths.dir)
+	}
+	if asJSON {
+		fmt.Print(string(data))
+		return nil
+	}
+	var state hostState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return fmt.Errorf("parse %s: %w", paths.state, err)
+	}
+	fmt.Print(statusText(state, processAlive(state.PID)))
+	if !processAlive(state.PID) {
+		return fmt.Errorf("not running (last pid %d)", state.PID)
+	}
+	return nil
+}
+
+func statusText(state hostState, alive bool) string {
+	var out strings.Builder
+	if alive && !state.Started.IsZero() {
+		fmt.Fprintf(&out, "boti: running (pid %d, up %s)\n", state.PID, time.Since(state.Started).Round(time.Second))
+	} else if alive {
+		fmt.Fprintf(&out, "boti: running (pid %d)\n", state.PID)
+	} else {
+		fmt.Fprintf(&out, "boti: not running (last pid %d)\n", state.PID)
+	}
+	fmt.Fprintf(&out, "build: %s\n", state.Build)
+	if state.Previous != "" {
+		fmt.Fprintf(&out, "previous: %s\n", state.Previous)
+	}
+	if state.Child.PID > 0 {
+		health := "starting"
+		if state.Child.Healthy {
+			health = "healthy"
+		}
+		up := ""
+		if !state.Child.Started.IsZero() {
+			up = ", up " + time.Since(state.Child.Started).Round(time.Second).String()
+		}
+		fmt.Fprintf(&out, "child: pid %d, %s%s\n", state.Child.PID, health, up)
+	} else {
+		out.WriteString("child: none\n")
+	}
+	fmt.Fprintf(&out, "restarts: %d\n", state.Restarts)
+	if state.LastError != "" {
+		fmt.Fprintf(&out, "last error: %s\n", state.LastError)
+	}
+	return out.String()
+}
+
+func logs(root string, lines int) error {
+	paths := newHostPaths(root)
+	text, err := tailFile(paths.log, lines)
+	if err != nil {
+		return fmt.Errorf("no log in %s (is `boti serve` running?)", paths.dir)
+	}
+	fmt.Print(text)
+	return nil
+}
+
+// tailFile returns the last lines of a file, newline terminated.
+func tailFile(path string, lines int) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	all := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if lines > 0 && len(all) > lines {
+		all = all[len(all)-lines:]
+	}
+	return strings.Join(all, "\n") + "\n", nil
+}
+
+func restart(root string) error {
+	paths := newHostPaths(root)
+	resp, err := controlClient(paths.sock).Post("http://unix/restart", "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("restart: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("restart: %s", resp.Status)
+	}
+	fmt.Println("boti: restart requested")
+	return nil
+}
+
+// lookPath finds an executable in an explicit PATH, so the supervisor can
+// resolve a build's binary without touching the process environment.
+func lookPath(name, pathEnv string) (string, error) {
+	if strings.ContainsRune(name, os.PathSeparator) {
+		return name, nil
+	}
+	for _, dir := range filepath.SplitList(pathEnv) {
+		candidate := filepath.Join(dir, name)
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+			continue
+		}
+		return candidate, nil
+	}
+	return "", fmt.Errorf("%s: %w", name, exec.ErrNotFound)
+}
+
+// lockHost keeps a second `boti serve` for the same bot from starting a rival
+// child and rewriting the same state file.
+func lockHost(path string) (*os.File, error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("another `boti serve` is running for this bot")
+	}
+	return file, nil
+}
+
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	return syscall.Kill(pid, 0) == nil
+}
+
+// writeFileAtomic replaces a file without ever leaving half of it on disk.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	temporary, err := os.CreateTemp(dir, ".boti-state-*")
+	if err != nil {
+		return err
+	}
+	name := temporary.Name()
+	if _, err := temporary.Write(data); err != nil {
+		_ = temporary.Close()
+		_ = os.Remove(name)
+		return err
+	}
+	if err := temporary.Chmod(mode); err != nil {
+		_ = temporary.Close()
+		_ = os.Remove(name)
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	return nil
+}
