@@ -20,6 +20,21 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
+// unsetenv removes a variable for the test and restores it after, so a host
+// that exports BOT_DATA does not change what the bot sees.
+func unsetenv(t *testing.T, key string) {
+	t.Helper()
+	old, ok := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if ok {
+			_ = os.Setenv(key, old)
+		}
+	})
+}
+
 func contains(env []string, want string) bool {
 	for _, e := range env {
 		if e == want {
@@ -557,6 +572,7 @@ func spawnHelper(t *testing.T, mode, root string, env ...string) (string, int) {
 }
 
 func TestRunWiresEnvAndHooksThenExec(t *testing.T) {
+	unsetenv(t, "BOT_DATA")
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "bot.toml"), `consumer = "cons-echo"
 [env]

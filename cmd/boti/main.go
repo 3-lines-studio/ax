@@ -45,6 +45,8 @@ func main() {
 	installURL := fs.String("install-url", "", "installer script URL (default: $BOTI_INSTALL_URL, else the hosted installer)")
 	lines := fs.Int("n", 40, "lines to show (logs)")
 	asJSON := fs.Bool("json", false, "print the supervisor state as JSON (status)")
+	repo := fs.String("repo", "", "source checkout to build (promote; default [boti.serve].repo)")
+	now := fs.Bool("now", false, "activate without waiting for idle (promote)")
 	_ = fs.Parse(os.Args[1:])
 
 	root := resolveRoot(*dir)
@@ -88,8 +90,16 @@ func main() {
 		if err := restart(root); err != nil {
 			fatal("%v", err)
 		}
+	case "promote":
+		if err := promote(root, promoteOptions{Repo: *repo, Now: *now}); err != nil {
+			fatal("promote: %v", err)
+		}
+	case "rollback":
+		if err := rollback(root); err != nil {
+			fatal("rollback: %v", err)
+		}
 	default:
-		fatal("unknown mode %q (want install, run, selftest, update, serve, status, logs or restart)", mode)
+		fatal("unknown mode %q (want install, run, selftest, update, serve, status, logs, restart, promote or rollback)", mode)
 	}
 }
 
