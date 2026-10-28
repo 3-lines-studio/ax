@@ -164,6 +164,7 @@ are no per-program tags, and no per-program assets to map by name.
 - [docs/connections.md](docs/connections.md) — connections, capabilities and the
   local/remote compute plan.
 - [docs/session.md](docs/session.md) — the durable session log contract.
+- [docs/deploy.md](docs/deploy.md) — systemd, container, and what goes in front.
 - [docs/botdir/](docs/botdir/README.md) — the Botdir specification and guide.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — development workflow and conventions.
 - [MIGRATION.md](MIGRATION.md) — where each program came from, and what changed

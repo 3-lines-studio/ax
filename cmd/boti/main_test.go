@@ -747,3 +747,102 @@ func TestMainInstallSuccess(t *testing.T) {
 		t.Fatalf("exit code = %d\n%s", code, out)
 	}
 }
+
+func fakeBin(t *testing.T, name, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, name)
+	writeFile(t, path, body)
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestSelftestRequiresEveryProgram(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "bot.toml"), "tools = [\"fsx\"]\n")
+	bin := fakeBin(t, "ax", "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	err := selftest(root)
+	if err == nil || !strings.Contains(err.Error(), "slaxi") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestSelftestRunsTheEngine(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "bot.toml"), "tools = [\"fsx\"]\n")
+	record := filepath.Join(t.TempDir(), "args")
+	bin := t.TempDir()
+	for _, name := range []string{"ax", "slaxi", "fsx"} {
+		path := filepath.Join(bin, name)
+		if name == "ax" {
+			writeFile(t, path, "#!/bin/sh\nprintf '%s' \"$*\" > "+record+"\nexit 0\n")
+		} else {
+			writeFile(t, path, "#!/bin/sh\nexit 0\n")
+		}
+		if err := os.Chmod(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	if err := selftest(root); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "-C") || !strings.Contains(string(data), "selftest") {
+		t.Fatalf("ax was called with %q", data)
+	}
+}
+
+// A build that fails its selftest must put the previous binaries back, or a bad
+// release leaves a host that cannot start.
+func TestUpdateRollsBackOnFailedSelftest(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "bot.toml"), "tools = []\n")
+	bin := fakeBin(t, "ax", "#!/bin/sh\necho old > /dev/null\nexit 0\n")
+	for _, name := range []string{"slaxi"} {
+		path := filepath.Join(bin, name)
+		writeFile(t, path, "#!/bin/sh\nexit 0\n")
+		if err := os.Chmod(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	installed := filepath.Join(bin, "ax")
+	before, err := os.ReadFile(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	installer := filepath.Join(t.TempDir(), "install.sh")
+	writeFile(t, installer, `#!/bin/sh
+set -eu
+if [ "${1:-}" != "update" ]; then
+  echo "expected update" >&2
+  exit 1
+fi
+cat > "$AX_TARGET" <<'BROKEN'
+#!/bin/sh
+exit 9
+BROKEN
+chmod 0755 "$AX_TARGET"
+`)
+	t.Setenv("AX_TARGET", installed)
+	t.Setenv("PATH", bin+":/usr/bin:/bin")
+
+	err = update(root, "file://"+installer)
+	if err == nil || !strings.Contains(err.Error(), "previous binaries restored") {
+		t.Fatalf("err = %v", err)
+	}
+	after, err := os.ReadFile(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("ax was not restored:\nbefore=%q\nafter=%q", before, after)
+	}
+}

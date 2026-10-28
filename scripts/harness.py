@@ -811,6 +811,19 @@ def oneshot_resume(h, ax):
 
 
 @case
+def selftest_passes_and_fails(h, ax):
+    h.write_config("[[connection]]\nid = \"shell\"\nkind = \"local\"\ncommand = \"%s\"\n" % bash_provider(h))
+    p = h.oneshot(ax, ["selftest"], stdin=b"")
+    check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+    check("catalog: 1 server(s), 1 tool(s)" in p.stdout, "stdout = %s" % p.stdout)
+
+    h.write_config("[[connection]]\nid = \"fs\"\nkind = \"local\"\ncommand = \"fsx\"\ncompute = true\nroot = \"missing-dir\"\n")
+    p = h.oneshot(ax, ["selftest"], stdin=b"")
+    check(p.returncode == 1, "a broken compute root must fail: %s" % p.returncode)
+    check("fail:" in p.stdout, "stdout = %s" % p.stdout)
+
+
+@case
 def oneshot_auto_compaction(h, ax):
     session = h.root / "compact.jsonl"
     h.write_config("compact_at = 0.5\ncontext_window = 10000\n")

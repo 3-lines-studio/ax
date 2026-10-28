@@ -50,8 +50,16 @@ func main() {
 		if err := run(root); err != nil {
 			fatal("run: %v", err)
 		}
+	case "selftest":
+		if err := selftest(root); err != nil {
+			fatal("selftest: %v", err)
+		}
+	case "update":
+		if err := update(root, installerURL(*installURL)); err != nil {
+			fatal("update: %v", err)
+		}
 	default:
-		fatal("unknown mode %q (want install or run)", mode)
+		fatal("unknown mode %q (want install, run, selftest or update)", mode)
 	}
 }
 
@@ -267,4 +275,142 @@ func envValue(env []string, key string) string {
 func fatal(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "boti: "+format+"\n", args...)
 	os.Exit(1)
+}
+
+// botPackages is what a bot needs on this host: the engine, its default
+// transport and every tool the bot lists.
+func botPackages(root string) ([]string, error) {
+	bc, found, err := readBotConfig(root)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("bot.toml is required in %s", root)
+	}
+	pkgs := []string{"ax", "slaxi"}
+	seen := map[string]bool{"ax": true, "slaxi": true}
+	for _, t := range bc.Tools {
+		t = strings.TrimSpace(t)
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		pkgs = append(pkgs, t)
+	}
+	return pkgs, nil
+}
+
+// selftest answers "can this host run this bot": every program is on PATH and
+// the engine can parse the bot, resolve its connections and load its catalog.
+func selftest(root string) error {
+	pkgs, err := botPackages(root)
+	if err != nil {
+		return err
+	}
+	var missing []string
+	for _, pkg := range pkgs {
+		path, err := exec.LookPath(pkg)
+		if err != nil {
+			missing = append(missing, pkg)
+			fmt.Fprintf(os.Stderr, "fail: %s is not on PATH\n", pkg)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "ok:   %s %s\n", pkg, path)
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing programs: %s (run boti install)", strings.Join(missing, " "))
+	}
+	axPath, err := exec.LookPath("ax")
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(axPath, "-C", root, "selftest")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("ax selftest: %w", err)
+	}
+	return nil
+}
+
+// backup is one installed binary kept next to nothing: enough to put the host
+// back the way it was when a new build does not survive its selftest.
+type backup struct {
+	path string
+	data []byte
+	mode os.FileMode
+}
+
+// update installs the current release over what is here, then checks the new
+// engine. If the check fails, the previous binaries come back and the error
+// says so: a bad release must not leave a host that cannot start.
+func update(root, installerURL string) error {
+	pkgs, err := botPackages(root)
+	if err != nil {
+		return err
+	}
+	var backups []backup
+	for _, pkg := range pkgs {
+		path, err := exec.LookPath(pkg)
+		if err != nil {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("backup %s: %w", path, err)
+		}
+		backups = append(backups, backup{path: path, data: data, mode: info.Mode()})
+	}
+
+	installer, err := fetchInstaller(installerURL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(installer) }()
+	if err := runInstaller(installer, append([]string{"update"}, pkgs...)...); err != nil {
+		return fmt.Errorf("update: %w", err)
+	}
+
+	if err := selftest(root); err != nil {
+		if restoreErr := restore(backups); restoreErr != nil {
+			return fmt.Errorf("the new build failed its selftest (%v) and the rollback failed too: %w", err, restoreErr)
+		}
+		return fmt.Errorf("the new build failed its selftest, previous binaries restored: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "boti: updated %s\n", strings.Join(pkgs, " "))
+	return nil
+}
+
+func restore(backups []backup) error {
+	for _, item := range backups {
+		dir := filepath.Dir(item.path)
+		temporary, err := os.CreateTemp(dir, ".boti-restore-*")
+		if err != nil {
+			return err
+		}
+		name := temporary.Name()
+		if _, err := temporary.Write(item.data); err != nil {
+			_ = temporary.Close()
+			_ = os.Remove(name)
+			return err
+		}
+		if err := temporary.Close(); err != nil {
+			_ = os.Remove(name)
+			return err
+		}
+		if err := os.Chmod(name, item.mode); err != nil {
+			_ = os.Remove(name)
+			return err
+		}
+		if err := os.Rename(name, item.path); err != nil {
+			_ = os.Remove(name)
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "boti: restored %s\n", item.path)
+	}
+	return nil
 }
