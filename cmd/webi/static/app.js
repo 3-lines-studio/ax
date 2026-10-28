@@ -2248,6 +2248,160 @@ async function showRoutineLog(name, channel, runID) {
   }
 }
 
+/* ------------------------------------------------------------------- skills */
+
+function openSkills() {
+  const dlg = $('#modal');
+  if (!dlg) return;
+  const channel = memoryChannel();
+  dlg.className = 'skills-dialog';
+  dlg.innerHTML =
+    '<div class="modal-head">Skills <span class="routine-channel">#' + esc(channel.name) + '</span></div>' +
+    '<div class="modal-body" id="skills-body">loading…</div>' +
+    '<div class="modal-foot"><button type="button" class="btn" data-action="skills-close">Close</button></div>';
+  if (!dlg.open) dlg.showModal();
+  loadSkills();
+}
+
+async function loadSkills() {
+  const body = $('#skills-body');
+  if (!body) return;
+  const channel = memoryChannel();
+  body.innerHTML = 'loading…';
+  try {
+    const data = await api('/api/skills?channel=' + encodeURIComponent(channel.id));
+    const rows = (data.skills || []).map((s) =>
+      '<div class="memory-row">' +
+        '<div class="memory-main"><div class="memory-subject">' + esc(s.name) +
+          ' <span class="routine-channel">' + esc(s.source) + '</span></div>' +
+          (s.error
+            ? '<p class="skill-error">' + esc(s.error) + '</p>'
+            : '<p>' + esc(s.description) + '</p>') +
+        '</div>' +
+        '<div class="routine-actions"><button type="button" class="btn" data-action="skill-open" data-name="' + esc(s.name) + '">Open</button></div>' +
+      '</div>').join('');
+    body.innerHTML = rows || '<div class="routine-empty">No skills. Add <code>skills/&lt;name&gt;/SKILL.md</code> to the bot.</div>';
+  } catch (e) {
+    body.innerHTML = '<div class="routine-empty">' + esc(e.message) + '</div>';
+  }
+}
+
+async function showSkill(name) {
+  const body = $('#skills-body');
+  if (!body) return;
+  const channel = memoryChannel();
+  body.innerHTML = 'loading…';
+  try {
+    const data = await api('/api/skills/' + encodeURIComponent(name) + '?channel=' + encodeURIComponent(channel.id));
+    const s = data.skill || {};
+    body.innerHTML =
+      '<div class="skill-detail">' +
+        '<div class="memory-subject">' + esc(s.name) + ' <span class="routine-channel">' + esc(s.source) + '</span></div>' +
+        '<div class="memory-meta">' + esc(s.description || '') + '</div>' +
+        (s.error ? '<p class="skill-error">' + esc(s.error) + '</p>' : '') +
+        '<div class="skill-body">' + (s.body ? md(s.body) : '<p class="routine-empty">This skill is empty.</p>') + '</div>' +
+        '<div class="memory-actions"><button type="button" class="btn" data-action="skills-back">Back</button></div>' +
+      '</div>';
+  } catch (e) {
+    body.innerHTML = '<div class="routine-empty">' + esc(e.message) + '</div>';
+  }
+}
+
+/* ------------------------------------------------------------------- memory */
+
+let memoryTimer = 0;
+
+function memoryChannel() {
+  const channel = findChannel(S.channelId);
+  return channel ? { id: channel.id, name: channel.name } : { id: '', name: 'bot' };
+}
+
+function openMemory() {
+  const dlg = $('#modal');
+  if (!dlg) return;
+  const channel = memoryChannel();
+  dlg.className = 'memory-dialog';
+  dlg.innerHTML =
+    '<div class="modal-head">Memory <span class="routine-channel">#' + esc(channel.name) + '</span></div>' +
+    '<div class="memory-search"><input id="memory-search" type="search" placeholder="Search memories" autocomplete="off"></div>' +
+    '<div class="modal-body" id="memory-body">loading…</div>' +
+    '<div class="modal-foot"><button type="button" class="btn" data-action="memory-close">Close</button></div>';
+  if (!dlg.open) dlg.showModal();
+  const input = $('#memory-search');
+  if (input) {
+    input.addEventListener('input', () => {
+      clearTimeout(memoryTimer);
+      memoryTimer = setTimeout(() => loadMemory(input.value.trim()), 200);
+    });
+  }
+  loadMemory('');
+}
+
+async function loadMemory(query) {
+  const body = $('#memory-body');
+  if (!body) return;
+  const channel = memoryChannel();
+  body.innerHTML = 'loading…';
+  try {
+    const url = '/api/memory?channel=' + encodeURIComponent(channel.id) + '&limit=100' +
+      (query ? '&q=' + encodeURIComponent(query) : '');
+    const data = await api(url);
+    const rows = (data.memories || []).map((m) =>
+      '<div class="memory-row">' +
+        '<div class="memory-main"><div class="memory-subject">' + esc(m.subject) +
+          (m.category ? ' <span class="routine-channel">' + esc(m.category) + '</span>' : '') +
+          ' <span class="routine-meta">' + relTime(m.updated_at) + '</span></div>' +
+          '<p>' + esc(m.summary) + '</p></div>' +
+        '<div class="routine-actions">' +
+          '<button type="button" class="btn" data-action="memory-open" data-id="' + esc(m.id) + '">Open</button>' +
+          '<button type="button" class="btn" data-action="memory-forget" data-id="' + esc(m.id) + '" data-subject="' + esc(m.subject) + '">Forget</button>' +
+        '</div></div>').join('');
+    body.innerHTML = rows || '<div class="routine-empty">' +
+      (query ? 'No memory matches that search.' : 'No memories yet. Ask ax to remember something.') + '</div>';
+  } catch (e) {
+    body.innerHTML = '<div class="routine-empty">' + esc(e.message) + '</div>';
+  }
+}
+
+async function showMemory(id) {
+  const body = $('#memory-body');
+  if (!body) return;
+  const channel = memoryChannel();
+  body.innerHTML = 'loading…';
+  try {
+    const data = await api('/api/memory/' + encodeURIComponent(id) + '?channel=' + encodeURIComponent(channel.id));
+    const m = data.memory || {};
+    const sources = (m.source_uris || []).map((u) =>
+      '<a href="' + esc(u) + '" target="_blank" rel="noreferrer">' + esc(u) + '</a>').join('<br>');
+    body.innerHTML =
+      '<div class="memory-detail">' +
+        '<div class="memory-subject">' + esc(m.subject) + '</div>' +
+        '<div class="memory-meta">' + esc(m.category || 'uncategorized') + ' · updated ' + relTime(m.updated_at) +
+          ' · <span class="routine-runid">' + esc(m.id) + '</span></div>' +
+        '<p>' + esc(m.summary) + '</p>' +
+        (m.body ? '<pre class="memory-body">' + esc(m.body) + '</pre>' : '') +
+        (sources ? '<div class="memory-sources">' + sources + '</div>' : '') +
+        '<div class="memory-actions"><button type="button" class="btn" data-action="memory-back">Back</button></div>' +
+      '</div>';
+  } catch (e) {
+    body.innerHTML = '<div class="routine-empty">' + esc(e.message) + '</div>';
+  }
+}
+
+async function forgetMemory(id, subject) {
+  if (!id) return;
+  if (!window.confirm('Forget ' + (subject ? '"' + subject + '"' : 'this memory') + '?')) return;
+  const channel = memoryChannel();
+  try {
+    await api('/api/memory/' + encodeURIComponent(id) + '?channel=' + encodeURIComponent(channel.id), { method: 'DELETE' });
+    toast('memory forgotten');
+    const input = $('#memory-search');
+    await loadMemory(input ? input.value.trim() : '');
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
 /* ------------------------------------------------------------------- drawer */
 /* On phones the drawer is an overlay. Opening it pushes a history entry so the
    Android back gesture closes the drawer instead of leaving the app. */
@@ -2454,7 +2608,16 @@ function wireEvents() {
       case 'back': location.hash = S.channelId ? '#/c/' + S.channelId : '#/'; break;
       case 'settings': openSettings(); break;
       case 'routines': openRoutines(); break;
-      case 'routine-close': { const dlg = $('#modal'); if (dlg) dlg.close(); break; }
+      case 'memory': openMemory(); break;
+      case 'skills': openSkills(); break;
+      case 'skill-open': showSkill(a.dataset.name); break;
+      case 'skills-back': loadSkills(); break;
+      case 'memory-open': showMemory(a.dataset.id); break;
+      case 'memory-forget': forgetMemory(a.dataset.id, a.dataset.subject); break;
+      case 'memory-back': { const input = $('#memory-search'); loadMemory(input ? input.value.trim() : ''); break; }
+      case 'routine-close':
+      case 'memory-close':
+      case 'skills-close': { const dlg = $('#modal'); if (dlg) dlg.close(); break; }
       case 'routine-run': runRoutine(a); break;
       case 'routine-history': showRoutineHistory(a.dataset.name, a.dataset.channel); break;
       case 'routine-run-log': showRoutineLog(a.dataset.name, a.dataset.channel, a.dataset.run); break;
