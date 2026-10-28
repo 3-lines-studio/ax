@@ -12,17 +12,27 @@ suite, one release. Every program is still a single static binary.
 
 ## Install
 
-One installer serves every program in the ecosystem:
+The ecosystem is one product: a release is **one archive per platform** with
+every program inside, so installing the whole set costs the same as installing
+one tool.
 
 ```sh
 curl -fsSL https://github.com/3-lines-studio/ax/releases/latest/download/install.sh | sh
 ```
 
-Install specific programs by name:
+That installs every program into `~/.local/bin`. Name the ones you want if you
+would rather not have all of them, or manage an existing install:
 
 ```sh
-curl -fsSL https://github.com/3-lines-studio/ax/releases/latest/download/install.sh | sh -s -- fsx bashx skillx
+sh install.sh ax fsx bashx    # only these
+sh install.sh update          # re-fetch, replace only what changed
+sh install.sh uninstall ax    # remove
 ```
+
+`AX_PREFIX` (or `PREFIX`) moves the install root, `VERSION` pins a tag, and
+`INSTALL_BASE_URL` points at a mirror, which is also how the installed
+`install.sh` is tested locally. Linux x86-64/ARM64 and macOS ARM64, all
+SHA-256 verified against the release's `SHA256SUMS`.
 
 From a checkout:
 
@@ -30,8 +40,6 @@ From a checkout:
 make build          # bin/<program> for all programs
 make install        # ~/.local/bin, override with PREFIX=/usr/local
 ```
-
-Linux x86-64/ARM64 and macOS ARM64, all SHA-256 verified.
 
 ## Quick start
 
@@ -137,13 +145,15 @@ make build          # all binaries into bin/
 make bin/fsx        # one binary
 make test           # go test ./...
 make check          # gofmt, tidy, vet, tests, race, builds, size budgets, harness
-make dist           # release artifacts for the current platform into dist/
+make dist           # loose binaries for the current platform into dist/
+scripts/package.sh --release all   # the three release archives + SHA256SUMS
 ```
 
 Releases are one tag for the whole ecosystem. Pushing `vX.Y.Z` builds every
-program for Linux x86-64/ARM64 and macOS ARM64, uploads the artifacts to a
-single GitHub release and attaches `install.sh`. All programs share that
-version: there are no per-program tags.
+program for Linux x86-64/ARM64 and macOS ARM64, packs each platform into one
+`ax-<os>-<arch>.tar.gz`, and publishes the three archives, `SHA256SUMS` and
+`install.sh` as a single GitHub release. All programs share that version: there
+are no per-program tags, and no per-program assets to map by name.
 
 ## Docs
 
