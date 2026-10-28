@@ -3,6 +3,8 @@
 The browser transport for `ax`, the sibling of `slaxi`: one `ax` process per
 message, the same sessions and the same MCP catalog. A channel is a bot
 directory (`bot.toml`, `workspace/`, `skills/`); a thread is an ax session log.
+A fresh bot gets a `bot.toml` that declares every installed provider among
+`fsx`, `bashx`, `skillx` and `memoryx`, so the first chat can use them.
 
 ```sh
 ax mcp add sentry             # whatever the bot needs
