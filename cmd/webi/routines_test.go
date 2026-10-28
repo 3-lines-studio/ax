@@ -221,6 +221,38 @@ func TestRoutinesAcrossChannelsAndHistory(t *testing.T) {
 	}
 }
 
+func TestRoutineCurrentFindsTheRunningRun(t *testing.T) {
+	srv := routineServer(t)
+	runDir := filepath.Join(srv.cfg.BotRoot, "state", "routines", "hello", "runs", "20260101T000000-deadbeef")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	record := `{"id":"20260101T000000-deadbeef","name":"hello","trigger":"cron","status":"running","exit_code":-1,` +
+		`"started_at":"2026-01-01T00:00:00Z","log":"` + filepath.Join(runDir, "output.log") + `"}`
+	if err := os.WriteFile(filepath.Join(runDir, "run.json"), []byte(record), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "output.log"), []byte("partial output\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("GET", "/api/routines/hello/current", nil)
+	req.SetPathValue("name", "hello")
+	rec := httptest.NewRecorder()
+	srv.handleRoutineCurrent(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "partial output") {
+		t.Fatalf("current = %d %s", rec.Code, rec.Body)
+	}
+	done := strings.Replace(record, `"status":"running"`, `"status":"ok"`, 1)
+	if err := os.WriteFile(filepath.Join(runDir, "run.json"), []byte(done), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	srv.handleRoutineCurrent(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("finished run still current = %d %s", rec.Code, rec.Body)
+	}
+}
+
 func TestRoutineSchedulerRunsEveryChannel(t *testing.T) {
 	rootOne := t.TempDir()
 	rootTwo := t.TempDir()

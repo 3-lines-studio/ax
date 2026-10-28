@@ -2157,6 +2157,7 @@ function openRoutines(focus) {
 async function loadRoutines() {
   const body = $('#routines-body');
   if (!body) return;
+  stopRoutinePoll();
   try {
     const data = await api('/api/routines');
     const rows = (data.routines || []).map((r) => {
@@ -2187,24 +2188,91 @@ async function loadRoutines() {
   }
 }
 
+let routinePoll = 0;
+
+function stopRoutinePoll() {
+  if (routinePoll) {
+    clearTimeout(routinePoll);
+    routinePoll = 0;
+  }
+}
+
+// Poll one routine URL while a run is in progress. The callback returns true
+// to keep going; a failing request keeps polling because the run record may
+// not exist yet.
+function pollRoutine(url, apply) {
+  stopRoutinePoll();
+  let stopped = false;
+  const tick = async () => {
+    if (stopped) return;
+    try {
+      const data = await api(url);
+      if (stopped) return;
+      if (apply(data) === false) { stopped = true; return; }
+    } catch (e) {
+      // no run record yet: try again on the next tick
+    }
+    if (!stopped) routinePoll = setTimeout(tick, 1200);
+  };
+  tick();
+  return () => { stopped = true; stopRoutinePoll(); };
+}
+
+function routineLogHTML(name, run) {
+  return '<div class="routine-log-head"><button type="button" class="btn" data-action="routine-back">Back</button>' +
+    '<strong>' + esc(name) + '</strong>' +
+    '<span id="routine-live-status" class="routine-status ' + esc(run.status) + '">' + esc(run.status) + '</span>' +
+    '<span id="routine-live-id" class="routine-runid">' + esc(run.id) + ' · ' + relTime(run.started_at) + '</span></div>' +
+    '<pre class="routine-log" id="routine-live-log"></pre>';
+}
+
+function applyRoutineLog(data) {
+  const pre = $('#routine-live-log');
+  const status = $('#routine-live-status');
+  const id = $('#routine-live-id');
+  if (status && data.run) {
+    status.textContent = data.run.status;
+    status.className = 'routine-status ' + data.run.status;
+  }
+  if (id && data.run) id.textContent = data.run.id + ' · ' + relTime(data.run.started_at);
+  if (pre) {
+    const stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 24;
+    pre.textContent = data.log || '(no output yet)';
+    if (stick) pre.scrollTop = pre.scrollHeight;
+  }
+}
+
 async function runRoutine(btn) {
   const name = btn.dataset.name;
   const channel = btn.dataset.channel || '';
   if (!name) return;
   btn.disabled = true;
   btn.textContent = 'Running…';
+  const body = $('#routines-body');
+  if (body) {
+    routineView = 'live';
+    body.innerHTML = routineLogHTML(name, { id: 'starting…', status: 'running', started_at: new Date().toISOString() });
+    pollRoutine('/api/routines/' + encodeURIComponent(name) + '/current?channel=' + encodeURIComponent(channel), (data) => {
+      applyRoutineLog(data);
+      return data.run && data.run.status === 'running';
+    });
+  }
   try {
     const data = await api('/api/routines/' + encodeURIComponent(name) + '/run?channel=' + encodeURIComponent(channel), { method: 'POST' });
+    stopRoutinePoll();
     toast(name + ': ' + data.run.status);
+    await showRoutineLog(name, channel, data.run.id);
   } catch (e) {
+    stopRoutinePoll();
     toast(e.message, true);
+    await loadRoutines();
   }
-  await loadRoutines();
 }
 
 async function showRoutineHistory(name, channel) {
   const body = $('#routines-body');
   if (!body) return;
+  stopRoutinePoll();
   routineView = 'history';
   body.innerHTML = 'loading…';
   try {
@@ -2229,6 +2297,7 @@ async function showRoutineHistory(name, channel) {
 async function showRoutineLog(name, channel, runID) {
   const body = $('#routines-body');
   if (!body) return;
+  stopRoutinePoll();
   routineView = 'log';
   body.innerHTML = 'loading…';
   const url = runID
@@ -2236,12 +2305,14 @@ async function showRoutineLog(name, channel, runID) {
     : '/api/routines/' + encodeURIComponent(name) + '/log?channel=' + encodeURIComponent(channel || '');
   try {
     const data = await api(url);
-    body.innerHTML =
-      '<div class="routine-log-head"><button type="button" class="btn" data-action="routine-back">Back</button>' +
-      '<strong>' + esc(name) + '</strong>' +
-      '<span class="routine-status ' + esc(data.run.status) + '">' + esc(data.run.status) + '</span>' +
-      '<span class="routine-runid">' + esc(data.run.id) + ' · ' + relTime(data.run.started_at) + '</span></div>' +
-      '<pre class="routine-log">' + esc(data.log || '(no output)') + '</pre>';
+    body.innerHTML = routineLogHTML(name, data.run);
+    applyRoutineLog(data);
+    if (data.run && data.run.status === 'running') {
+      pollRoutine(url, (next) => {
+        applyRoutineLog(next);
+        return next.run && next.run.status === 'running';
+      });
+    }
   } catch (e) {
     body.innerHTML = '<button type="button" class="btn" data-action="routine-back">Back</button>' +
       '<div class="routine-empty">' + esc(e.message) + '</div>';
@@ -2617,7 +2688,7 @@ function wireEvents() {
       case 'memory-back': { const input = $('#memory-search'); loadMemory(input ? input.value.trim() : ''); break; }
       case 'routine-close':
       case 'memory-close':
-      case 'skills-close': { const dlg = $('#modal'); if (dlg) dlg.close(); break; }
+      case 'skills-close': { stopRoutinePoll(); const dlg = $('#modal'); if (dlg) dlg.close(); break; }
       case 'routine-run': runRoutine(a); break;
       case 'routine-history': showRoutineHistory(a.dataset.name, a.dataset.channel); break;
       case 'routine-run-log': showRoutineLog(a.dataset.name, a.dataset.channel, a.dataset.run); break;

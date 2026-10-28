@@ -183,6 +183,32 @@ func (s *Server) handleRoutineLog(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"run": last, "log": tailFile(last.Log)})
 }
 
+// handleRoutineCurrent returns the run in progress, so the UI can tail it
+// while the POST that started it is still open.
+func (s *Server) handleRoutineCurrent(w http.ResponseWriter, req *http.Request) {
+	target, err := s.botTarget(req.URL.Query().Get("channel"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	runs, err := routine.NewRunner(target.Paths).Runs(req.PathValue("name"), 20)
+	if err != nil {
+		if errors.Is(err, routine.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "no runs yet")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, run := range runs {
+		if run.Status == "running" {
+			writeJSON(w, http.StatusOK, map[string]any{"run": run, "log": tailFile(run.Log)})
+			return
+		}
+	}
+	writeErr(w, http.StatusNotFound, "no run in progress")
+}
+
 func (s *Server) handleRoutineRuns(w http.ResponseWriter, req *http.Request) {
 	target, err := s.botTarget(req.URL.Query().Get("channel"))
 	if err != nil {

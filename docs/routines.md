@@ -124,15 +124,17 @@ of the bot's runtime data (`BOT_DATA`), not the definition, so it is safe to
 delete and never travels with `bot.toml`.
 
 The webi UI has a **Routines** entry: it lists every routine with its channel,
-schedule, last status and last run time; **Run now** executes one manually,
-**History** lists the recent runs, and **Log** opens the output of the latest
-run or of a chosen one. The same data is available over HTTP behind the UI
+schedule, last status and last run time; **Run now** executes one manually and
+streams its output while it runs, **History** lists the recent runs, and
+**Log** opens the output of the latest run or of a chosen one. A run that is
+still going keeps updating its log view every 1.2 seconds until it finishes. The same data is available over HTTP behind the UI
 token:
 
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/routines?channel=<id>` | routines, with their last run |
 | `POST /api/routines/<name>/run?channel=<id>` | run now; `409` if already running |
+| `GET /api/routines/<name>/current?channel=<id>` | the run in progress and its output so far |
 | `GET /api/routines/<name>/runs?channel=<id>&limit=20` | recent runs |
 | `GET /api/routines/<name>/log?channel=<id>` | latest run and its output |
 | `GET /api/routines/<name>/runs/<run-id>?channel=<id>` | one run and its output |
