@@ -86,10 +86,40 @@ a host-level convenience for local providers.
 
 ## Compute: local and remote
 
-`read`, `write`, `edit` and `bash` are today the tools of an implicit local
-connection (`fsx` and `bashx` in `core_tools`). Naming that connection is the
-next phase; the point of doing it is to let the same tools reach a different
-workspace without changing the model surface.
+A connection marked `compute = true` defines the bot's compute: its tools are
+the ones the prompt suggests calling directly (the core tools), and its `root`
+is the directory every source runs in.
+
+```toml
+[[connection]]
+id      = "fs"            # the model calls fs.read, fs.write, fs.edit
+kind    = "local"
+command = "fsx"
+compute = true
+
+[[connection]]
+id      = "shell"         # and shell.bash
+kind    = "local"
+command = "bashx"
+compute = true
+root    = "vol"           # relative to the bot root; must exist
+```
+
+- Every compute connection must agree on `root`; two different roots are an
+  error, not a silent winner.
+- `root` makes the workspace a property of the bot instead of the process: the
+  prompt's working directory, every provider's `cmd.Dir` and the MCP servers all
+  move together.
+- Without `root` the Botdir workspace is used, which is what a bot that never
+  mentions compute gets. Without `compute` the core tools stay the historical
+  `fsx.read`, `fsx.write`, `fsx.edit`, `bashx.bash`.
+- `core_tools` still wins when set: it is the escape hatch, not the normal way.
+- A missing root fails the run with a clear error, while `ax conn list` and
+  `ax conn doctor` still work and report it.
+
+That is the whole seam for a remote workspace. `root` is a path *on the
+backend*: making `fs` an SSH connection later changes `kind`, not the tools, the
+prompt or the sessions.
 
 Guarantees are part of the contract, and a backend that cannot provide one must
 say so instead of pretending:

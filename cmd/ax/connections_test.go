@@ -274,7 +274,7 @@ func TestConnListJSON(t *testing.T) {
 	fc := fileConfig{
 		tools: bin,
 		connections: []connectionEntry{{ID: "web", Kind: "local", Command: bin,
-			Trust: "read", Capabilities: []string{"web.list", "web.delete"}}},
+			Trust: "read", Compute: true, Capabilities: []string{"web.list", "web.delete"}}},
 	}
 	out := captureStdout(t, func() { connListCommand(fc, resolveBotCtx(t.TempDir()), []string{"--json"}) })
 	var listed []map[string]string
@@ -286,6 +286,9 @@ func TestConnListJSON(t *testing.T) {
 	}
 	first := listed[0]
 	if first["id"] != "web" || first["trust"] != "read" || first["capabilities"] != "2" || first["status"] != "ready" {
+		t.Fatalf("web = %+v", first)
+	}
+	if first["role"] != "compute" {
 		t.Fatalf("web = %+v", first)
 	}
 	if listed[1]["id"] != "mocktool" || listed[1]["trust"] != "auto" || listed[1]["capabilities"] != "all" {
@@ -303,5 +306,148 @@ func TestConnDoctorReportsDeclaredAndEnabled(t *testing.T) {
 	}
 	if !strings.Contains(out, "repo") || !strings.Contains(out, "ready") {
 		t.Fatalf("doctor = %s", out)
+	}
+}
+
+func TestResolveCompute(t *testing.T) {
+	root := t.TempDir()
+	botRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(botRoot, "shared"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(botRoot, "notadir")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		fc   fileConfig
+		root string
+		ids  string
+		want string
+	}{
+		{
+			name: "absolute root",
+			fc:   fileConfig{connections: []connectionEntry{{ID: "fs", Compute: true, Root: root}}},
+			root: root, ids: "fs",
+		},
+		{
+			name: "relative root resolves against the bot",
+			fc:   fileConfig{connections: []connectionEntry{{ID: "fs", Compute: true, Root: "shared"}}},
+			root: filepath.Join(botRoot, "shared"), ids: "fs",
+		},
+		{
+			name: "fs and shell agree",
+			fc: fileConfig{connections: []connectionEntry{
+				{ID: "fs", Compute: true, Root: "shared"},
+				{ID: "shell", Compute: true},
+			}},
+			root: filepath.Join(botRoot, "shared"), ids: "fs,shell",
+		},
+		{
+			name: "no root keeps the workspace",
+			fc:   fileConfig{connections: []connectionEntry{{ID: "fs", Compute: true}}},
+			ids:  "fs",
+		},
+		{
+			name: "root without compute",
+			fc:   fileConfig{connections: []connectionEntry{{ID: "fs", Root: "shared"}}},
+			want: "root only applies to compute",
+		},
+		{
+			name: "two roots",
+			fc: fileConfig{connections: []connectionEntry{
+				{ID: "fs", Compute: true, Root: "shared"},
+				{ID: "shell", Compute: true, Root: root},
+			}},
+			want: "disagrees",
+		},
+		{
+			name: "missing root",
+			fc:   fileConfig{connections: []connectionEntry{{ID: "fs", Compute: true, Root: "nope"}}},
+			want: "root",
+		},
+		{
+			name: "root is a file",
+			fc:   fileConfig{connections: []connectionEntry{{ID: "fs", Compute: true, Root: "notadir"}}},
+			want: "not a directory",
+		},
+		{
+			name: "compute without id",
+			fc:   fileConfig{connections: []connectionEntry{{Compute: true}}},
+			want: "needs an id",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveCompute(tc.fc, botRoot)
+			if tc.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("err = %v, want %q", err, tc.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.root != tc.root {
+				t.Errorf("root = %q, want %q", got.root, tc.root)
+			}
+			if strings.Join(got.ids, ",") != tc.ids {
+				t.Errorf("ids = %v, want %s", got.ids, tc.ids)
+			}
+		})
+	}
+}
+
+func TestCoreToolIDsFollowTheComputeConnection(t *testing.T) {
+	source := &testSource{name: "fs", tools: []catalog.Tool{
+		{Name: "read", Description: "Read a file"},
+		{Name: "write", Description: "Write a file"},
+	}}
+	cat := catalog.New([]catalog.Source{source})
+	cat.Load(context.Background())
+
+	got := coreToolIDs(fileConfig{computeIDs: []string{"fs"}}, cat)
+	if strings.Join(got, ",") != "fs.read,fs.write" {
+		t.Fatalf("core tools = %v", got)
+	}
+	// An explicit core_tools list wins.
+	explicit := coreToolIDs(fileConfig{computeIDs: []string{"fs"}, coreTools: []string{"fs.read"}}, cat)
+	if strings.Join(explicit, ",") != "fs.read" {
+		t.Fatalf("explicit core tools = %v", explicit)
+	}
+	// Without a compute connection the historical ids stay.
+	fallback := coreToolIDs(fileConfig{}, cat)
+	if strings.Join(fallback, ",") != strings.Join(defaultCoreTools, ",") {
+		t.Fatalf("fallback = %v", fallback)
+	}
+}
+
+func TestCoreToolIDsAreCapped(t *testing.T) {
+	tools := make([]catalog.Tool, 0, maxCoreTools+3)
+	for i := 0; i < maxCoreTools+3; i++ {
+		tools = append(tools, catalog.Tool{Name: fmt.Sprintf("t%d", i), Description: "tool"})
+	}
+	cat := catalog.New([]catalog.Source{&testSource{name: "fs", tools: tools}})
+	cat.Load(context.Background())
+	if got := coreToolIDs(fileConfig{computeIDs: []string{"fs"}}, cat); len(got) != maxCoreTools {
+		t.Fatalf("core tools = %d, want %d", len(got), maxCoreTools)
+	}
+}
+
+func TestCoreEditHintFollowsTheConnectionID(t *testing.T) {
+	cat := catalog.New([]catalog.Source{&testSource{name: "fs", tools: []catalog.Tool{
+		{Name: "read", Description: "Read a file"},
+		{Name: "edit", Description: "Edit a file"},
+	}}})
+	cat.Load(context.Background())
+	prompt := buildCatalogSystemPrompt([]Tool{{Name: "search"}, {Name: "execute"}}, "/w", resolveBotCtx(t.TempDir()), cat, []string{"fs.read", "fs.edit"})
+	if !strings.Contains(prompt, "Use fs.edit for precise file changes") {
+		t.Fatalf("prompt = %s", prompt)
+	}
+	if strings.Contains(prompt, "fsx.edit") {
+		t.Fatalf("legacy edit hint leaked: %s", prompt)
 	}
 }
