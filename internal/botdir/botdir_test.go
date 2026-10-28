@@ -170,6 +170,27 @@ func TestResolveUsesBotDataRoot(t *testing.T) {
 	}
 }
 
+func TestResolveDataIgnoresHostBotData(t *testing.T) {
+	host := t.TempDir()
+	channel := t.TempDir()
+	_ = os.WriteFile(filepath.Join(channel, "bot.toml"), []byte(""), 0o644)
+	t.Setenv("BOT_DATA", host)
+
+	ctx := ResolveData(channel, channel)
+	if ctx.DataRoot != channel || ctx.State != filepath.Join(channel, "state") {
+		t.Errorf("DataRoot = %q State = %q, want the channel root", ctx.DataRoot, ctx.State)
+	}
+	if ctx.Workspace != filepath.Join(channel, "workspace") {
+		t.Errorf("Workspace = %q, want the channel workspace", ctx.Workspace)
+	}
+	if _, err := os.Stat(filepath.Join(host, "workspace")); err == nil {
+		t.Error("host BOT_DATA must not receive the channel workspace")
+	}
+	if ctx := ResolveData(channel, ""); ctx.DataRoot != channel {
+		t.Errorf("empty data root = %q, want the root", ctx.DataRoot)
+	}
+}
+
 func TestWorkspace(t *testing.T) {
 	root := t.TempDir()
 	data := t.TempDir()

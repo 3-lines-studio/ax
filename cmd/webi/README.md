@@ -142,7 +142,9 @@ and runs enabled cron schedules with no model in the loop. `ax routine list`
 shows them, `ax routine run NAME` tests one manually, and `ax routine runs|log`
 reads the history under `state/routines/<name>/runs/<run-id>/`.
 The sidebar's **Routines** view lists them with their channel, **Run now**,
-**History** and **Log**. See [docs/routines.md](../../docs/routines.md).
+**History** and **Log**; a finished run also arrives over the SSE stream, so the
+view stays current and the PWA can notify on failures. See
+[docs/routines.md](../../docs/routines.md).
 
 ## Not here yet
 

@@ -50,6 +50,8 @@ self.addEventListener('fetch', (e) => {
 function notificationTarget(data) {
   const ch = (data && data.channel) || '';
   const th = (data && data.thread) || '';
+  const rt = (data && data.routine) || '';
+  if (rt && ch) return '#/routines/' + ch + '/' + rt + (data.run ? '/' + data.run : '');
   if (th && ch) return '#/c/' + ch + '/t/' + th;
   if (ch) return '#/c/' + ch;
   return '#/';
@@ -72,7 +74,7 @@ self.addEventListener('notificationclick', (event) => {
     });
     if (client) {
       try { await client.focus(); } catch (err) {}
-      client.postMessage({ type: 'ax-open', thread: data.thread || '', channel: data.channel || '' });
+      client.postMessage({ type: 'ax-open', thread: data.thread || '', channel: data.channel || '', routine: data.routine || '', run: data.run || '' });
       return;
     }
     if (self.clients.openWindow) {

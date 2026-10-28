@@ -269,6 +269,11 @@ function restoreRoute() {
 async function route() {
   closeMenu(false);
   const hash = location.hash.replace(/^#/, '') || '/';
+  const routine = hash.match(/^\/routines\/([A-Za-z0-9_]+)\/([a-z0-9_-]+)(?:\/([A-Za-z0-9_-]+))?$/);
+  if (routine) {
+    openRoutines({ channel: routine[1], name: routine[2], run: routine[3] || '' });
+    return;
+  }
   if (hash === '/vault') {
     S.channelId = null;
     S.threadId = null;
@@ -1360,6 +1365,10 @@ function handleEvent(ev) {
       if (ev.thread !== S.threadId && ev.secret) toast('ax needs ' + ev.secret.name);
       refreshState().catch(() => {});
       break;
+    case 'routine':
+      trackRoutine(ev.routine);
+      if (routineView === 'list') loadRoutines();
+      break;
     case 'step':
       break;
   }
@@ -2129,7 +2138,10 @@ async function openSettings() {
 
 /* ----------------------------------------------------------------- routines */
 
-function openRoutines() {
+let routineView = '';
+let routineFocus = null;
+
+function openRoutines(focus) {
   const dlg = $('#modal');
   if (!dlg) return;
   dlg.className = 'routines-dialog';
@@ -2138,6 +2150,7 @@ function openRoutines() {
     '<div class="modal-body" id="routines-body">loading…</div>' +
     '<div class="modal-foot"><button type="button" class="btn" data-action="routine-close">Close</button></div>';
   if (!dlg.open) dlg.showModal();
+  routineFocus = focus || null;
   loadRoutines();
 }
 
@@ -2165,6 +2178,10 @@ async function loadRoutines() {
         '</div></div>';
     }).join('');
     body.innerHTML = rows || '<div class="routine-empty">No routines yet. Add <code>routines/&lt;name&gt;/routine.toml</code> in the bot root.</div>';
+    routineView = 'list';
+    const focus = routineFocus;
+    routineFocus = null;
+    if (focus) await showRoutineLog(focus.name, focus.channel || '', focus.run || '');
   } catch (e) {
     body.innerHTML = '<div class="routine-empty">' + esc(e.message) + '</div>';
   }
@@ -2188,6 +2205,7 @@ async function runRoutine(btn) {
 async function showRoutineHistory(name, channel) {
   const body = $('#routines-body');
   if (!body) return;
+  routineView = 'history';
   body.innerHTML = 'loading…';
   try {
     const data = await api('/api/routines/' + encodeURIComponent(name) + '/runs?channel=' + encodeURIComponent(channel || '') + '&limit=20');
@@ -2211,6 +2229,7 @@ async function showRoutineHistory(name, channel) {
 async function showRoutineLog(name, channel, runID) {
   const body = $('#routines-body');
   if (!body) return;
+  routineView = 'log';
   body.innerHTML = 'loading…';
   const url = runID
     ? '/api/routines/' + encodeURIComponent(name) + '/runs/' + encodeURIComponent(runID) + '?channel=' + encodeURIComponent(channel || '')
@@ -2548,7 +2567,7 @@ function syncNotifyButton() {
   btn.classList.toggle('on', on);
   const label = $('#notify-state');
   if (label) label.textContent = perm === 'denied' ? 'blocked' : (on ? 'on' : 'off');
-  btn.title = on ? 'Notifications on (click to turn off)' : 'Notify me when a run finishes';
+  btn.title = on ? 'Notifications on (click to turn off)' : 'Notify me when a run or routine finishes';
 }
 
 async function toggleNotify() {
@@ -2615,6 +2634,23 @@ function trackRun(ev) {
   }
 }
 
+// A scheduled routine finishes while nobody is looking: notify on failure or
+// timeout always, and on success only when the page is hidden (or the run was
+// long enough that the user walked away). One notification per run id.
+const NOTIFY_ROUTINES = new Set();
+
+function trackRoutine(r) {
+  if (!r || !r.name) return;
+  const key = (r.channel || '') + '/' + r.name + '/' + (r.id || r.ended_at || '');
+  if (NOTIFY_ROUTINES.has(key)) return;
+  if (NOTIFY_ROUTINES.size > 200) NOTIFY_ROUTINES.delete(NOTIFY_ROUTINES.values().next().value);
+  NOTIFY_ROUTINES.add(key);
+  if (!notifyActive()) return;
+  const took = r.started_at && r.ended_at ? Date.parse(r.ended_at) - Date.parse(r.started_at) : 0;
+  if (r.status === 'ok' && !document.hidden && took < NOTIFY_LONG_RUN) return;
+  showRoutineNotification(r).catch(() => {});
+}
+
 async function notifyRunDone(threadId, err) {
   const known = findThread(threadId);
   let title = known ? known.title : '';
@@ -2638,15 +2674,7 @@ async function notifyRunDone(threadId, err) {
   await showRunNotification(title || 'ax', body, threadId, channel);
 }
 
-async function showRunNotification(title, body, threadId, channel) {
-  const opts = {
-    body: body,
-    tag: threadId || 'ax-run',
-    renotify: true,
-    icon: '/static/icon-192.png',
-    badge: '/static/icon-192.png',
-    data: { thread: threadId || '', channel: channel || '' },
-  };
+async function showNotification(title, opts) {
   try {
     if ('serviceWorker' in navigator) {
       const reg = await navigator.serviceWorker.getRegistration();
@@ -2671,7 +2699,54 @@ async function showRunNotification(title, body, threadId, channel) {
   }
 }
 
+async function showRunNotification(title, body, threadId, channel) {
+  return showNotification(title, {
+    body: body,
+    tag: threadId || 'ax-run',
+    renotify: true,
+    icon: '/static/icon-192.png',
+    badge: '/static/icon-192.png',
+    data: { thread: threadId || '', channel: channel || '' },
+  });
+}
+
+function routineLabel(r) {
+  return (r.channel_name ? r.channel_name + ' · ' : '') + r.name;
+}
+
+function routineBody(r) {
+  const took = r.started_at && r.ended_at
+    ? Math.max(0, Math.round((Date.parse(r.ended_at) - Date.parse(r.started_at)) / 1000))
+    : 0;
+  const when = took > 0 ? ' · ' + took + 's' : '';
+  if (r.status === 'ok') return 'ok' + when;
+  const exit = r.exit_code > 0 ? ' (exit ' + r.exit_code + ')' : '';
+  const why = r.error && r.status !== 'timeout' ? ' · ' + clipText(r.error, 80) : '';
+  return r.status + exit + when + why;
+}
+
+async function showRoutineNotification(r) {
+  return showNotification(routineLabel(r), {
+    body: routineBody(r),
+    tag: 'ax-routine-' + (r.channel || '') + '-' + r.name,
+    renotify: true,
+    icon: '/static/icon-192.png',
+    badge: '/static/icon-192.png',
+    data: { channel: r.channel || '', routine: r.name, run: r.id || '' },
+  });
+}
+
 async function openFromNotification(data) {
+  if (data && data.routine) {
+    if (data.channel) {
+      const hash = '#/routines/' + data.channel + '/' + data.routine + (data.run ? '/' + data.run : '');
+      if (location.hash === hash) route();
+      else location.hash = hash;
+    } else {
+      openRoutines({ name: data.routine, run: data.run || '' });
+    }
+    return;
+  }
   const threadId = (data && data.thread) || '';
   let channel = (data && data.channel) || '';
   if (!threadId) {

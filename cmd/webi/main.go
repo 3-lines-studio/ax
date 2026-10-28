@@ -135,7 +135,7 @@ func main() {
 	announce(listener, token, *open)
 	schedCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()
-	go newRoutineScheduler(store).Run(schedCtx)
+	go newRoutineScheduler(store, srv.publishRoutine).Run(schedCtx)
 	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)

@@ -14,6 +14,9 @@ type Scheduler struct {
 	Paths botdir.Paths
 	Now   func() time.Time
 	Logf  func(string, ...any)
+	// OnRun observes a finished scheduled run. The host uses it to push the
+	// result to a UI; it is not called when the routine is already running.
+	OnRun func(Routine, RunResult)
 	last  map[string]time.Time
 }
 
@@ -83,6 +86,9 @@ func (s *Scheduler) Tick(ctx context.Context, now time.Time) {
 				return
 			}
 			s.logf("routine %s: %s (exit %d)", item.Name, result.Status, result.ExitCode)
+			if s.OnRun != nil {
+				s.OnRun(item, result)
+			}
 		}()
 	}
 }
