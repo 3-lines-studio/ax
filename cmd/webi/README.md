@@ -49,6 +49,11 @@ Open `http://127.0.0.1:8377`. Flags: `-ax` (binary), `-state` (default
 
 ## Vault
 
+The API key is a vault secret: create the vault first, then add
+`DEEPSEEK_API_KEY` in the `global` scope (the "Add key" banner opens that form
+with the name already filled). The Settings dialog does not store a key; there
+is exactly one place for secrets.
+
 The UI's vault panel works: secrets live in `state/webi/vault.json`, one
 AES-256-GCM blob whose key is derived from a PIN with scrypt (N=32768). The
 file never holds plaintext and the decrypted map only exists in memory while
