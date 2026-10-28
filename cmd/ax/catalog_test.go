@@ -71,12 +71,53 @@ func TestCatalogToolsSearchAndExecute(t *testing.T) {
 
 func TestCatalogSystemPrompt(t *testing.T) {
 	cat := testCatalog(t)
-	tools := catalogTools(cat)
-	prompt := buildCatalogSystemPrompt(tools, "/work", nil, cat, []string{"fake.echo"})
-	for _, want := range []string{"two tools", "search", "execute", "fake (1)", "`fake.echo`", "Current working directory: /work"} {
+	prompt := buildCatalogSystemPrompt("/work", nil, cat, []string{"fake.echo"})
+	for _, want := range []string{
+		"Use tools to find facts",
+		"Current working directory: /work",
+		"fake (1)",
+		"`fake.echo`(message)",
+		"Rules:",
+		"Never print or transmit secrets",
+		"no sandbox",
+	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "You have two tools") || strings.Contains(prompt, "Args:") {
+		t.Errorf("prompt still explains the tool surface:\n%s", prompt)
+	}
+	// The prompt is a policy layer, not a tool manual. The schemas stay in the
+	// catalog; core tools only contribute an id and an argument signature.
+	if len(prompt) > 1000 {
+		t.Errorf("prompt is %d chars, want <= 1000:\n%s", len(prompt), prompt)
+	}
+}
+
+func TestCatalogSystemPromptAddsBotInstructions(t *testing.T) {
+	cat := testCatalog(t)
+	bot := &botCtx{Workspace: "/work", Prompt: "answer in haiku"}
+	prompt := buildCatalogSystemPrompt("/work", bot, cat, nil)
+	if !strings.Contains(prompt, "## Bot instructions\nanswer in haiku") {
+		t.Errorf("bot instructions missing:\n%s", prompt)
+	}
+}
+
+func TestCatalogSystemPromptAddsUserInstructions(t *testing.T) {
+	cfg := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cfg, "ax"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg, "ax", "SYSTEM.md"), []byte("call me assistant"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("HOME", "")
+	cat := testCatalog(t)
+	prompt := buildCatalogSystemPrompt("/work", nil, cat, nil)
+	if !strings.Contains(prompt, "## User instructions\ncall me assistant") {
+		t.Errorf("user instructions missing:\n%s", prompt)
 	}
 }
 

@@ -103,6 +103,15 @@ func TestBriefIncludesCoreTools(t *testing.T) {
 	if !strings.Contains(brief, "`fsx.read`") || strings.Contains(brief, "missing.tool") {
 		t.Errorf("brief core = %s", brief)
 	}
+	if !strings.Contains(brief, "`fsx.read`(offset?, path)") {
+		t.Errorf("brief signature = %s", brief)
+	}
+	if strings.Contains(brief, "Args:") || strings.Contains(brief, "Use search") {
+		t.Errorf("brief still carries the tool manual = %s", brief)
+	}
+	if strings.Contains(brief, "Read the contents of a file") {
+		t.Errorf("brief still carries core descriptions = %s", brief)
+	}
 }
 
 func TestCallRoutesAndResolves(t *testing.T) {

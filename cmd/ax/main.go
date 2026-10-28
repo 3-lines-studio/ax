@@ -645,35 +645,32 @@ func resolveSystem(cfg cliConfig, tools []Tool, bot *botCtx, cat *catalog.Catalo
 		return cfg.system
 	}
 	if cat != nil {
-		return buildCatalogSystemPrompt(tools, bot.Workspace, bot, cat, core)
+		return buildCatalogSystemPrompt(bot.Workspace, bot, cat, core)
 	}
 	return buildSystemPrompt(tools, bot.Workspace, bot)
 }
 
-func buildCatalogSystemPrompt(tools []Tool, dir string, bot *botCtx, cat *catalog.Catalog, core []string) string {
+func buildCatalogSystemPrompt(dir string, bot *botCtx, cat *catalog.Catalog, core []string) string {
 	var out strings.Builder
-	out.WriteString("You are an expert assistant operating inside ax.\n\n")
-	out.WriteString("You have two tools:\n")
-	for _, tool := range tools {
-		fmt.Fprintf(&out, "- %s: %s\n", tool.Name, tool.Snippet)
-	}
-	out.WriteString("\n")
+	out.WriteString("You are an expert assistant operating inside ax. Use tools to find facts; do not guess.\n\n")
+	fmt.Fprintf(&out, "Current working directory: %s\n", dir)
 	out.WriteString(cat.Brief(core))
-	out.WriteString("\nGuidelines:\n")
-	out.WriteString("- Call search before using a tool whose id you do not know. An empty search returns the whole catalog.\n")
-	out.WriteString("- execute takes the exact tool id and a JSON object of arguments; never invent an id.\n")
-	out.WriteString("- If a tool returns an error, read it, fix the arguments and retry.\n")
-	out.WriteString("- Be concise in your responses.\n")
-	out.WriteString("- Show file paths clearly when working with files.\n")
+	out.WriteString("\nRules:\n")
+	out.WriteString("- Answer in the user's language; be concise and direct.\n")
+	out.WriteString("- Verify changes before reporting success.\n")
+	out.WriteString("- If a tool fails, fix the cause; do not repeat the same call.\n")
+	out.WriteString("- There is no sandbox: commands run as the user. Never print or transmit secrets. Ask before destructive or irreversible actions.\n")
+	out.WriteString("- If a request is ambiguous, assume and state it; ask only if blocked.\n")
 	if edit := coreEditTool(core, cat); edit != "" {
 		fmt.Fprintf(&out, "- Use %s for precise file changes; every edits[].oldText must match one unique region.\n", edit)
 	}
-	fmt.Fprintf(&out, "\nCurrent working directory: %s", dir)
 	if bot != nil && bot.Prompt != "" {
-		out.WriteString("\n\n" + bot.Prompt)
+		out.WriteString("\n## Bot instructions\n")
+		out.WriteString(bot.Prompt)
 	}
 	if up := userSystemPrompt(); up != "" {
-		out.WriteString("\n\n" + up)
+		out.WriteString("\n\n## User instructions\n")
+		out.WriteString(up)
 	}
 	return out.String()
 }
