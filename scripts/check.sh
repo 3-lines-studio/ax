@@ -45,6 +45,15 @@ if [ "$mode" = fast ]; then
     exit 0
 fi
 
+step "tracked binaries"
+for program in $programs; do
+    if git ls-files --error-unmatch "$program" >/dev/null 2>&1; then
+        echo "a program binary is tracked: $program" >&2
+        echo "fix: git rm --cached $program" >&2
+        exit 1
+    fi
+done
+
 step "go vet"
 go vet ./...
 
