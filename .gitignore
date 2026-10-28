@@ -1,11 +1,23 @@
 /bin/
 /dist/
-/ax
 .ax/
 /ax-*
 __pycache__/
 .env
 .DS_Store
+# `go build ./cmd/<program>` without -o drops the binary in the repo root.
+/attachx
+/ax
+/bashx
+/boti
+/bqx
+/browserx
+/fsx
+/memoryx
+/pgx
+/skillx
+/slackx
 /slaxi
-/webi
+/sshx
 /wax
+/webi
