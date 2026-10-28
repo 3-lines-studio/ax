@@ -76,22 +76,31 @@ catalog still loads.
 
 ### MCP servers
 
+An MCP server is a connection with an MCP kind:
+
 ```toml
-[[mcp]]
-name = "github"
+[[connection]]
+id = "github"
+kind = "mcp-http"
 url = "https://api.githubcopilot.com/mcp/"
 headers = { Authorization = "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}" }
 
-[[mcp]]
-name = "sentry"
+[[connection]]
+id = "sentry"
+kind = "mcp-http"
 url = "https://mcp.sentry.dev/mcp"          # OAuth: ax mcp login sentry
 
-[[mcp]]
-name = "filesystem"
+[[connection]]
+id = "filesystem"
+kind = "mcp-stdio"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/work"]
 timeout = 30
 ```
+
+The older spelling puts the same fields in a `[[mcp]]` table with `name`
+instead of `id` and `kind`. It is still read — every existing bot keeps
+working — but `ax mcp add` and `ax mcp import` write `[[connection]]`.
 
 - `command` starts a stdio server; `url` uses Streamable HTTP. Exactly one.
 - `pass_env` passes named environment variables through. `env` sets literal
@@ -102,7 +111,7 @@ timeout = 30
 - Names are lowercase letters, digits, `_` and `-`; they namespace tool ids
   (`github.create_issue`) and must be unique across sources.
 
-A `[[mcp]]` table that only fails at runtime — an unset environment variable,
+A server whose table only fails at runtime — an unset environment variable,
 a missing binary — is shown as `unavailable` in the menu with the reason.
 It never stops the rest of the catalog from loading.
 
@@ -133,8 +142,9 @@ ax mcp logout sentry
   registration, keep it in `bot.toml` without the secret:
 
   ```toml
-  [[mcp]]
-  name = "zoom"
+  [[connection]]
+  id = "zoom"
+  kind = "mcp-http"
   url = "https://mcp.zoom.us/mcp/zoom/streamable"
   client_id = "${ZOOM_CLIENT_ID}"
   client_secret_env = "ZOOM_CLIENT_SECRET"
@@ -151,7 +161,7 @@ in the menu, so it can tell the user what to run instead of retrying.
 ### Importing `mcp.json`
 
 `ax mcp import` reads the shapes Cursor, Claude Desktop and VS Code write and
-appends `[[mcp]]` tables to `bot.toml`:
+appends `[[connection]]` tables to `bot.toml`:
 
 ```bash
 ax mcp import ./mcp.json                     # {"mcpServers": {...}}

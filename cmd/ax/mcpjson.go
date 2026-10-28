@@ -409,11 +409,17 @@ func normalizeServerName(name string) string {
 	return value
 }
 
-// renderMCPEntry writes one [[mcp]] table.
+// renderMCPEntry writes one [[connection]] table. A server is a connection
+// with an MCP kind; the older `[[mcp]]` spelling is still read, never written.
 func renderMCPEntry(entry mcpEntry) string {
 	var out strings.Builder
-	out.WriteString("[[mcp]]\n")
-	out.WriteString("name = " + tomlString(entry.Name) + "\n")
+	out.WriteString("[[connection]]\n")
+	out.WriteString("id = " + tomlString(entry.Name) + "\n")
+	if entry.URL != "" {
+		out.WriteString("kind = \"mcp-http\"\n")
+	} else {
+		out.WriteString("kind = \"mcp-stdio\"\n")
+	}
 	if entry.Command != "" {
 		out.WriteString("command = " + tomlString(entry.Command) + "\n")
 	}
@@ -529,7 +535,8 @@ func appendMCPEntries(path string, entries []mcpEntry) error {
 	return os.WriteFile(path, out.Bytes(), 0o644)
 }
 
-// existingMCPNames reads the [[mcp]] names already configured in a bot root.
+// existingMCPNames reads the ids already configured in a bot root, in either
+// spelling, so `ax mcp add` does not add a second copy.
 func existingMCPNames(root string) (map[string]bool, error) {
 	botConfig, err := loadBotConfig(root)
 	if err != nil {
@@ -538,6 +545,9 @@ func existingMCPNames(root string) (map[string]bool, error) {
 	names := map[string]bool{}
 	for _, entry := range botConfig.MCP {
 		names[strings.ToLower(strings.TrimSpace(entry.Name))] = true
+	}
+	for _, entry := range botConfig.Connections {
+		names[strings.ToLower(strings.TrimSpace(entry.ID))] = true
 	}
 	return names, nil
 }
