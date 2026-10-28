@@ -334,7 +334,9 @@ function syncKeyBanner() {
   if (onVaultRoute()) return;
   const existing = document.querySelector('#main .banner.key');
   const v = S.state && S.state.vault;
-  const need = S.state && S.state.config && !S.state.config.has_key && !(v && v.exists && v.locked);
+  // Only after the vault exists and is open: before that, the vault banner is
+  // the one that knows what to do.
+  const need = S.state && S.state.config && !S.state.config.has_key && !!(v && v.exists && !v.locked);
   if (need && !existing) {
     const header = $('#main .topbar');
     if (header) header.insertAdjacentHTML('afterend', keyBannerHTML());
@@ -345,12 +347,12 @@ function syncKeyBanner() {
 
 function keyBannerHTML() {
   if (!S.state || S.state.config.has_key) return '';
-  // With a locked vault the key may simply be out of reach: the vault banner
-  // already explains what to do.
+  // Without a vault, or with it locked, the key is out of reach and the vault
+  // banner already explains how to fix that.
   const v = S.state.vault;
-  if (v && v.exists && v.locked) return '';
+  if (!v || !v.exists || v.locked) return '';
   return '<div class="banner key"><div class="grow">No DeepSeek API key yet. Add one to start chatting.</div>' +
-    '<button class="btn" data-action="settings">Add key</button></div>';
+    '<button class="btn" data-action="add-key">Add key</button></div>';
 }
 
 function emptyHTML(title, sub) {
@@ -672,7 +674,7 @@ async function vaultCopy(scope, name) {
   }
 }
 
-async function vaultNew(scope) {
+async function vaultNew(scope, initialName) {
   const scopes = vaultGroups().map((g) => g.scope);
   const current = scope || defaultVaultScope();
   if (!scopes.includes(current)) scopes.push(current);
@@ -680,7 +682,7 @@ async function vaultNew(scope) {
     title: 'New secret',
     submit: 'Add',
     fields: [
-      { name: 'name', label: 'Variable', placeholder: 'GH_TOKEN', note: 'A-Z, 0-9 and underscore. For a file (PEM, kubeconfig), name it @file:KUBECONFIG: the variable will point at a private temp file for each command.' },
+      { name: 'name', label: 'Variable', value: initialName || '', placeholder: 'GH_TOKEN', note: 'A-Z, 0-9 and underscore. For a file (PEM, kubeconfig), name it @file:KUBECONFIG: the variable will point at a private temp file for each command.' },
       { name: 'value', label: 'Value', textarea: true, placeholder: 'secret value or file content' },
       { name: 'scope', label: 'Scope', value: current, options: scopes.map((s) => ({ value: s, label: s })) },
     ],
@@ -693,6 +695,9 @@ async function vaultNew(scope) {
     S.vaultOpen = v.scope + '/' + name;
     toast('Saved');
     await loadVault();
+    // has_key comes from /api/state: without this the banner survives and the
+    // composer keeps refusing to send.
+    await refreshState();
   } catch (e) { toast(e.message, true); }
 }
 
@@ -741,18 +746,11 @@ async function vaultImport(scope) {
   if (!text.trim()) { toast('Paste the .env content first', true); return; }
   try {
     const r = await api('/api/vault/import', { method: 'POST', body: JSON.stringify({ scope: v.scope, text: text }) });
-    const parts = [];
-    if (r.added) parts.push(r.added + ' new');
-    if (r.updated) parts.push(r.updated + ' updated');
-    let msg = 'Imported ' + (parts.join(', ') || '0 variables');
-    const skipped = r.skipped || [];
-    if (skipped.length) {
-      const lines = skipped.slice(0, 6).map((s) => s.line).join(', ') + (skipped.length > 6 ? '…' : '');
-      msg += ' · skipped lines ' + lines;
-    }
-    toast(msg, skipped.length > 0);
+    const n = r.imported || 0;
+    toast('Imported ' + n + (n === 1 ? ' variable' : ' variables'));
     S.vaultOpen = null;
     await loadVault();
+    await refreshState();
   } catch (e) { toast(e.message, true); }
 }
 
@@ -781,6 +779,7 @@ async function vaultEdit(scope, name) {
     S.vaultOpen = v.scope + '/' + newName;
     toast('Saved');
     await loadVault();
+    await refreshState();
   } catch (e) { toast(e.message, true); }
 }
 
@@ -793,6 +792,7 @@ async function vaultDelete(scope, name) {
     S.vaultOpen = null;
     toast('Deleted');
     await loadVault();
+    await refreshState();
   } catch (e) { toast(e.message, true); }
 }
 
@@ -816,6 +816,8 @@ async function createVault() {
     toast('Vault created');
     await refreshState();
     if (onVaultRoute()) await loadVault();
+    // The key is the reason the vault exists: ask for it right away.
+    if (!(S.state && S.state.config && S.state.config.has_key)) await vaultNew('global', 'DEEPSEEK_API_KEY');
   } catch (e) { toast(e.message, true); }
 }
 
@@ -2091,13 +2093,11 @@ async function stopRun() {
 
 async function openSettings() {
   const cfg = (S.state && S.state.config) || {};
-  const full = await api('/api/settings').catch(() => null);
   const v = await openModal({
     title: 'Settings',
     submit: 'Save',
+    body: 'The DeepSeek API key lives in the vault, not here.',
     fields: [
-      { name: 'user_name', label: 'Your name', value: full ? full.user_name : '' },
-      { name: 'api_key', label: 'DeepSeek API key', type: 'password', placeholder: full && full.has_key ? 'configured (' + full.key_hint + ') — leave empty to keep' : 'sk-…' },
       { name: 'model', label: 'Model', value: cfg.model, options: [
         { value: 'deepseek-flash', label: 'deepseek-flash (1M ctx, vision)' },
         { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro (stronger, slower)' },
@@ -2114,13 +2114,11 @@ async function openSettings() {
   });
   if (!v) return;
   const payload = {
-    user_name: v.user_name,
     model: v.model,
     effort: v.effort,
     compact_at: Number(v.compact_at),
     max_context: Number(v.max_context),
   };
-  if (v.api_key && v.api_key.trim()) payload.api_key = v.api_key.trim();
   try {
     await api('/api/settings', { method: 'POST', body: JSON.stringify(payload) });
     await refreshState();
@@ -2333,6 +2331,7 @@ function wireEvents() {
       case 'close-drawer': closeDrawer(); break;
       case 'back': location.hash = S.channelId ? '#/c/' + S.channelId : '#/'; break;
       case 'settings': openSettings(); break;
+      case 'add-key': vaultNew('global', 'DEEPSEEK_API_KEY'); break;
       case 'search': openSwitcher(); break;
       case 'vault': location.hash = '#/vault'; break;
       case 'vault-new': vaultNew(a.dataset.scope || ''); break;
