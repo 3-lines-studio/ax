@@ -401,33 +401,23 @@ func configFingerprint(cfg mcp.ServerConfig) string {
 
 // buildSources assembles local providers and configured MCP servers.
 func buildSources(fc fileConfig, bot *botCtx, refresh bool) ([]catalog.Source, error) {
-	var sources []catalog.Source
-	used := map[string]bool{}
-	for _, command := range localCommands(fc) {
-		name := localSourceName(command, used)
-		sources = append(sources, newLocalSource(command, name, bot.Workspace))
-	}
-	configs, err := resolveMCPEntries(fc.mcp, bot.Workspace, mcpAuthDir(bot))
+	conns, err := resolveConnections(fc, bot.Workspace, mcpAuthDir(bot))
 	if err != nil {
-		for _, source := range sources {
-			_ = source.Close()
-		}
 		return nil, err
 	}
 	cacheDir := filepath.Join(bot.DataRoot, "state", "ax", "mcp")
-	for _, resolved := range configs {
-		if used[resolved.name] {
-			for _, source := range sources {
-				_ = source.Close()
-			}
-			return nil, fmt.Errorf("mcp: server name %q collides with another source", resolved.name)
+	sources := make([]catalog.Source, 0, len(conns))
+	for _, conn := range conns {
+		var source catalog.Source
+		switch {
+		case conn.err != nil:
+			source = newUnavailableSource(conn.id, conn.err)
+		case conn.kind == connMCP:
+			source = newMCPSource(conn.cfg, cacheDir, refresh)
+		default:
+			source = newLocalSource(conn.command, conn.id, bot.Workspace)
 		}
-		used[resolved.name] = true
-		if resolved.err != nil {
-			sources = append(sources, newUnavailableSource(resolved.name, resolved.err))
-			continue
-		}
-		sources = append(sources, newMCPSource(resolved.cfg, cacheDir, refresh))
+		sources = append(sources, newCappedSource(source, conn.id, conn.caps))
 	}
 	return sources, nil
 }
