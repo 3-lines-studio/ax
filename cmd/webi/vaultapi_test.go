@@ -138,18 +138,18 @@ func TestRunReceivesVaultSecrets(t *testing.T) {
 	if code := call(t, srv, "POST", "/api/threads/"+thread.ID+"/messages", `{"text":"hi"}`, nil); code != 200 {
 		t.Fatalf("message code=%d", code)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	var data []byte
-	for {
-		var err error
-		data, err = os.ReadFile(record)
-		if err == nil {
-			break
-		}
+	// Wait for the run to finish: the fake ax writes the record while it runs,
+	// and the @file secret is deleted only when the run ends.
+	deadline := time.Now().Add(10 * time.Second)
+	for srv.running(thread.ID) {
 		if time.Now().After(deadline) {
-			t.Fatalf("the run never wrote its environment: %v", err)
+			t.Fatal("the run did not finish")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("the run never wrote its environment: %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if lines[0] != "g" || lines[1] != "t" {
