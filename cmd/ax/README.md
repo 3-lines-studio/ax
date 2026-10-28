@@ -44,8 +44,9 @@ max_tokens = 65536
 compact_at = 0.5
 context_window = 1000000
 
-[[mcp]]
-name = "github"
+[[connection]]
+id = "github"
+kind = "mcp-stdio"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-github"]
 pass_env = ["GITHUB_TOKEN"]
@@ -165,7 +166,8 @@ known_hosts = "secrets/known_hosts"
 compute     = true
 ``` The
 older spellings still work and keep their ids: `tools`/`AX_TOOLS` become
-`kind = "local"` and `[[mcp]]` becomes `kind = "mcp-*"`.
+`kind = "local"` and `[[mcp]]` becomes `kind = "mcp-*"`; `ax mcp add` and
+`ax mcp import` write the connection form.
 
 The model always sees two tools:
 
@@ -191,15 +193,17 @@ work can call `execute` directly without paying for a `search` turn.
 ### MCP servers
 
 ```toml
-[[mcp]]
-name = "github"
+[[connection]]
+id = "github"
+kind = "mcp-stdio"
 command = "npx"                         # stdio server
 args = ["-y", "@modelcontextprotocol/server-github"]
 pass_env = ["GITHUB_TOKEN"]             # names only; values come from the environment
 timeout = 30
 
-[[mcp]]
-name = "sentry"
+[[connection]]
+id = "sentry"
+kind = "mcp-http"
 url = "https://mcp.sentry.dev/mcp"      # Streamable HTTP + OAuth
 ```
 
