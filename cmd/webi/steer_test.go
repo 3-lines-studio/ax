@@ -16,7 +16,7 @@ func TestMessageWhileRunningSteers(t *testing.T) {
 	script := "#!/bin/sh\n" +
 		"sleep 1\n" +
 		"read line\n" +
-		"printf '%s' \"$line\" > " + record + "\n" +
+		"printf '%s' \"$line\" > " + record + ".tmp && mv " + record + ".tmp " + record + "\n" +
 		"printf '%s\\n' '{\"type\":\"message\",\"message\":{\"Role\":\"assistant\",\"Content\":\"ok\"}}' '{\"type\":\"done\",\"outcome\":\"done\"}'\n"
 	axPath := filepath.Join(dir, "ax")
 	if err := os.WriteFile(axPath, []byte(script), 0o755); err != nil {
