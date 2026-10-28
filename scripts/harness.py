@@ -113,6 +113,12 @@ SEARCH_SCENARIO = [
     {"stream": [content_chunk("found it.", "stop"), usage_chunk(20, 8)]},
 ]
 
+CONNECTION_SCENARIO = [
+    {"stream": [tool_chunk("search", {"query": "run a shell command"}), usage_chunk(10, 5)]},
+    {"stream": [tool_chunk("execute", {"tool": "shell.bash", "arguments": {"command": "echo via-connection > conn.txt"}}), usage_chunk(10, 5)]},
+    {"stream": [content_chunk("done.", "stop"), usage_chunk(20, 8)]},
+]
+
 DIRECT_SCENARIO = [
     {"stream": [tool_chunk("bash", {"command": "printf direct > direct.txt"}), usage_chunk(10, 5)]},
     {"stream": [content_chunk("direct done.", "stop"), usage_chunk(20, 8)]},
@@ -646,6 +652,66 @@ COMPACT_SCENARIO = [
     # The run continues with the summary in the system prompt.
     {"stream": [content_chunk("# Done\n\nCompacted and finished.\n", "stop"), usage_chunk(60, 8)]},
 ]
+
+
+@case
+def connections_list_and_doctor(h, ax):
+    provider = bash_provider(h)
+    h.write_config(
+        "[[connection]]\n"
+        'id = "shell"\n'
+        'kind = "local"\n'
+        'command = "%s"\n'
+        'capabilities = ["shell.bash"]\n' % provider
+    )
+    p = h.oneshot(ax, ["conn", "list", "--json"], stdin=b"")
+    check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+    listed = json.loads(p.stdout)
+    check(len(listed) == 1, "list = %s" % listed)
+    check(listed[0]["id"] == "shell", "id = %s" % listed[0])
+    check(listed[0]["kind"] == "local", "kind = %s" % listed[0])
+    check(listed[0]["capabilities"] == "1", "capabilities = %s" % listed[0])
+
+    p = h.oneshot(ax, ["conn", "doctor"], stdin=b"")
+    check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+    check("1 declared, 1 on" in p.stdout, "doctor = %s" % p.stdout)
+    check("ready" in p.stdout, "doctor = %s" % p.stdout)
+
+
+@case
+def oneshot_connection_id_reaches_the_model(h, ax):
+    provider = bash_provider(h)
+    h.write_config(
+        "[[connection]]\n"
+        'id = "shell"\n'
+        'kind = "local"\n'
+        'command = "%s"\n' % provider
+    )
+    with h.mock(CONNECTION_SCENARIO) as srv:
+        p = h.oneshot(ax, ["--events", "run something"], base=srv.base_url)
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        body = json.dumps(srv.requests[0]["json"]["messages"])
+        check("Catalog servers: shell (1)" in body, "connection missing from the prompt: %s" % body[:1000])
+        tool_msgs = body_msg(srv, 1, "tool")
+        check(
+            any("shell.bash" in m.get("content", "") for m in tool_msgs),
+            "search result has no connection id: %s" % tool_msgs,
+        )
+        check(
+            not any("bashprovider" in m.get("content", "") for m in tool_msgs),
+            "the binary name leaked into the catalog: %s" % tool_msgs,
+        )
+        events = read_events(p)
+        check(
+            any(
+                e.get("type") == "tool_start"
+                and e.get("name") == "execute"
+                and e.get("target") == "shell.bash"
+                for e in events
+            ),
+            "execute did not route through the connection id",
+        )
+        check((h.work / "workspace" / "conn.txt").read_text().strip() == "via-connection", "the tool did not run")
 
 
 @case

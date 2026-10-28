@@ -100,12 +100,13 @@ keep their ids.
 id           = "web"
 kind         = "local"          # local | mcp-stdio | mcp-http
 command      = "wax"
+trust        = "auto"           # auto | read
 capabilities = ["web.search"]   # optional allowlist
 ```
 
 Ids are lowercase letters, digits, `_` and `-` (1–64 characters) and unique
 across the bot. `capabilities` only narrows what a connection declares; an empty
-list enables every tool. See [docs/connections.md](../connections.md).
+list enables every tool. `trust = "read"` keeps only tools annotated read-only. See [docs/connections.md](../connections.md).
 
 A missing key uses the consumer default.
 
