@@ -219,8 +219,9 @@ across sessions. The data is readable and exportable; see
 `routines/<name>/routine.toml` declares deterministic code: an executable
 entry, an optional cron schedule, a timezone and a timeout. The model writes
 and debugs it; running it does not call the model. `webi` runs enabled
-schedules; `ax routine list` and `ax routine run NAME` work without a model or
-an API key. State and logs live under `state/routines/<name>/`. See
+schedules; `ax routine list`, `ax routine run NAME`, `ax routine runs NAME` and
+`ax routine log NAME [RUN]` work without a model or an API key. Runs, logs and
+state live under `state/routines/<name>/`. See
 [docs/routines.md](../../docs/routines.md).
 
 ### MCP servers

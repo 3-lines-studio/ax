@@ -2149,17 +2149,19 @@ async function loadRoutines() {
     const rows = (data.routines || []).map((r) => {
       const schedule = r.schedule ? esc(r.schedule) : 'manual only';
       const enabled = r.enabled ? 'on' : 'off';
+      const channel = r.channel_name ? ' <span class="routine-channel">#' + esc(r.channel_name) + '</span>' : '';
       const last = r.last
         ? '<span class="routine-status ' + esc(r.last.status) + '">' + esc(r.last.status) + ' · ' + relTime(r.last.started_at) + '</span>'
         : '<span class="routine-status">never run</span>';
       return '<div class="routine-row">' +
-        '<div class="routine-main"><div class="routine-name">' + esc(r.name) +
+        '<div class="routine-main"><div class="routine-name">' + esc(r.name) + channel +
           ' <span class="routine-meta">' + schedule + ' · ' + enabled + '</span></div>' +
           (r.description ? '<p>' + esc(r.description) + '</p>' : '') +
           '<div>' + last + '</div></div>' +
         '<div class="routine-actions">' +
-          '<button type="button" class="btn" data-action="routine-run" data-name="' + esc(r.name) + '">Run now</button>' +
-          '<button type="button" class="btn" data-action="routine-log" data-name="' + esc(r.name) + '">Log</button>' +
+          '<button type="button" class="btn" data-action="routine-run" data-name="' + esc(r.name) + '" data-channel="' + esc(r.channel || '') + '">Run now</button>' +
+          '<button type="button" class="btn" data-action="routine-history" data-name="' + esc(r.name) + '" data-channel="' + esc(r.channel || '') + '">History</button>' +
+          '<button type="button" class="btn" data-action="routine-log" data-name="' + esc(r.name) + '" data-channel="' + esc(r.channel || '') + '">Log</button>' +
         '</div></div>';
     }).join('');
     body.innerHTML = rows || '<div class="routine-empty">No routines yet. Add <code>routines/&lt;name&gt;/routine.toml</code> in the bot root.</div>';
@@ -2170,11 +2172,12 @@ async function loadRoutines() {
 
 async function runRoutine(btn) {
   const name = btn.dataset.name;
+  const channel = btn.dataset.channel || '';
   if (!name) return;
   btn.disabled = true;
   btn.textContent = 'Running…';
   try {
-    const data = await api('/api/routines/' + encodeURIComponent(name) + '/run', { method: 'POST' });
+    const data = await api('/api/routines/' + encodeURIComponent(name) + '/run?channel=' + encodeURIComponent(channel), { method: 'POST' });
     toast(name + ': ' + data.run.status);
   } catch (e) {
     toast(e.message, true);
@@ -2182,16 +2185,43 @@ async function runRoutine(btn) {
   await loadRoutines();
 }
 
-async function showRoutineLog(name) {
+async function showRoutineHistory(name, channel) {
   const body = $('#routines-body');
   if (!body) return;
   body.innerHTML = 'loading…';
   try {
-    const data = await api('/api/routines/' + encodeURIComponent(name) + '/log');
+    const data = await api('/api/routines/' + encodeURIComponent(name) + '/runs?channel=' + encodeURIComponent(channel || '') + '&limit=20');
+    const rows = (data.runs || []).map((r) =>
+      '<div class="routine-row">' +
+        '<div class="routine-main"><div class="routine-name"><span class="routine-status ' + esc(r.status) + '">' + esc(r.status) + '</span>' +
+          ' <span class="routine-meta">' + esc(r.trigger) + ' · ' + relTime(r.started_at) + ' · exit ' + esc(r.exit_code) + '</span></div>' +
+          '<div class="routine-runid">' + esc(r.id) + '</div></div>' +
+        '<div class="routine-actions"><button type="button" class="btn" data-action="routine-run-log" data-name="' + esc(name) + '" data-channel="' + esc(channel || '') + '" data-run="' + esc(r.id) + '">View log</button></div>' +
+      '</div>').join('');
+    body.innerHTML =
+      '<div class="routine-log-head"><button type="button" class="btn" data-action="routine-back">Back</button>' +
+      '<strong>' + esc(name) + ' · history</strong></div>' +
+      (rows || '<div class="routine-empty">No runs yet.</div>');
+  } catch (e) {
+    body.innerHTML = '<button type="button" class="btn" data-action="routine-back">Back</button>' +
+      '<div class="routine-empty">' + esc(e.message) + '</div>';
+  }
+}
+
+async function showRoutineLog(name, channel, runID) {
+  const body = $('#routines-body');
+  if (!body) return;
+  body.innerHTML = 'loading…';
+  const url = runID
+    ? '/api/routines/' + encodeURIComponent(name) + '/runs/' + encodeURIComponent(runID) + '?channel=' + encodeURIComponent(channel || '')
+    : '/api/routines/' + encodeURIComponent(name) + '/log?channel=' + encodeURIComponent(channel || '');
+  try {
+    const data = await api(url);
     body.innerHTML =
       '<div class="routine-log-head"><button type="button" class="btn" data-action="routine-back">Back</button>' +
       '<strong>' + esc(name) + '</strong>' +
-      '<span class="routine-status ' + esc(data.run.status) + '">' + esc(data.run.status) + '</span></div>' +
+      '<span class="routine-status ' + esc(data.run.status) + '">' + esc(data.run.status) + '</span>' +
+      '<span class="routine-runid">' + esc(data.run.id) + ' · ' + relTime(data.run.started_at) + '</span></div>' +
       '<pre class="routine-log">' + esc(data.log || '(no output)') + '</pre>';
   } catch (e) {
     body.innerHTML = '<button type="button" class="btn" data-action="routine-back">Back</button>' +
@@ -2407,7 +2437,9 @@ function wireEvents() {
       case 'routines': openRoutines(); break;
       case 'routine-close': { const dlg = $('#modal'); if (dlg) dlg.close(); break; }
       case 'routine-run': runRoutine(a); break;
-      case 'routine-log': showRoutineLog(a.dataset.name); break;
+      case 'routine-history': showRoutineHistory(a.dataset.name, a.dataset.channel); break;
+      case 'routine-run-log': showRoutineLog(a.dataset.name, a.dataset.channel, a.dataset.run); break;
+      case 'routine-log': showRoutineLog(a.dataset.name, a.dataset.channel); break;
       case 'routine-back': loadRoutines(); break;
       case 'add-key': vaultNew('global', 'DEEPSEEK_API_KEY'); break;
       case 'search': openSwitcher(); break;

@@ -20,7 +20,6 @@ import (
 
 	"github.com/3-lines-studio/ax/internal/axrun"
 	"github.com/3-lines-studio/ax/internal/botdir"
-	"github.com/3-lines-studio/ax/internal/routine"
 )
 
 func main() {
@@ -136,7 +135,7 @@ func main() {
 	announce(listener, token, *open)
 	schedCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()
-	go routine.NewScheduler(paths).Run(schedCtx)
+	go newRoutineScheduler(store).Run(schedCtx)
 	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
