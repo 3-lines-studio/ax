@@ -46,6 +46,7 @@ func (s *Server) handleVaultState(w http.ResponseWriter, r *http.Request) {
 // string "wrong PIN", so it must not be wrapped.
 func (s *Server) handleVaultAction(w http.ResponseWriter, r *http.Request) {
 	var req struct {
+		ID      string `json:"id"`
 		PIN     string `json:"pin"`
 		Confirm string `json:"confirm"`
 		Scope   string `json:"scope"`
@@ -116,8 +117,30 @@ func (s *Server) handleVaultAction(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, map[string]int{"imported": count})
 	case "secret":
-		// pixi asks for a secret mid-run; webi has no pending-secret queue.
-		writeErr(w, 400, "webi has no pending-secret requests; add the value in the vault")
+		// A tool asked for this value mid-run: store it and hand it over so the
+		// call can retry without restarting the thread.
+		request, ok := s.takePendingSecret(req.ID)
+		if !ok {
+			writeErr(w, 404, "no pending secret request for that id")
+			return
+		}
+		if req.Skip {
+			if err := s.skipSecret(request); err != nil {
+				writeErr(w, 400, err.Error())
+				return
+			}
+			writeJSON(w, 200, map[string]bool{"ok": true, "skipped": true})
+			return
+		}
+		if strings.TrimSpace(req.Value) == "" {
+			writeErr(w, 400, "the value is empty")
+			return
+		}
+		if err := s.answerSecret(request, req.Value); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
 	default:
 		writeErr(w, 400, "unknown vault action")
 	}

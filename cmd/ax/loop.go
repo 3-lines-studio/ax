@@ -179,8 +179,27 @@ func runTool(ctx context.Context, tools []Tool, call ToolCall, progress func(str
 	return fmt.Sprintf("error: unknown tool: %s", call.Name)
 }
 
+// maxSecretAsksPerCall stops a tool that asks for secret after secret from
+// holding the conversation forever.
+const maxSecretAsksPerCall = 8
+
 func execTool(ctx context.Context, tools []Tool, call ToolCall, sink runSink) string {
-	return runTool(ctx, tools, call, func(text string) { sink.toolDelta(call, text) })
+	output := runTool(ctx, tools, call, func(text string) { sink.toolDelta(call, text) })
+	for asks := 0; asks < maxSecretAsksPerCall; asks++ {
+		ask, ok := parseSecretAsk(output)
+		if !ok {
+			return output
+		}
+		sink.secretRequest(call, ask)
+		value, failure := secrets.wait(ctx, ask)
+		if failure != "" {
+			return failure
+		}
+		secrets.deliver(ask.Name, value)
+		// Retry the same call with the value now in the provider's environment.
+		output = runTool(ctx, tools, call, func(text string) { sink.toolDelta(call, text) })
+	}
+	return "error: the tool kept asking for secrets; check its output"
 }
 
 // toolRunContext turns the engine's cancel flag into a context so running

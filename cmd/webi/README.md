@@ -33,6 +33,12 @@ Open `http://127.0.0.1:8377`. Flags: `-ax` (binary), `-state` (default
   is keyed by size+mtime, so an untouched log costs one `stat` per sweep, and
   the resume turn is shown as a "run resumed" divider rather than a message the
   user typed.
+- A tool that needs a secret mid-run asks for it (`{"ask":{"name":...}}`, see
+  the [provider convention](../../docs/tools.md)). webi shows the request in
+  `state.pending_secret`, the UI banner asks for the value, and
+  `POST /api/vault/secret` stores it in the channel's vault scope **and** hands
+  it to the live ax so the call retries without restarting the thread. `skip`
+  tells ax to fail the call instead.
 - The first finished run names the thread: one small model call with the first
   exchange, best effort. The name is stored once (`title_generated`) and a
   later run never renames the thread; without a key the title stays the one

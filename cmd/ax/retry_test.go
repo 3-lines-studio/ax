@@ -19,6 +19,7 @@ type recordingSink struct {
 	assist    []Message
 	tools     []Message
 	steered   []Message
+	asks      []secretAsk
 	flushCnt  int
 }
 
@@ -36,6 +37,7 @@ func (r *recordingSink) assistant(turn int, msg Message, us Usage) { r.assist = 
 func (r *recordingSink) tool(turn int, msg Message)                { r.tools = append(r.tools, msg) }
 func (r *recordingSink) steer(msg Message)                         { r.steered = append(r.steered, msg) }
 func (r *recordingSink) flush()                                    { r.flushCnt++ }
+func (r *recordingSink) secretRequest(_ ToolCall, ask secretAsk)   { r.asks = append(r.asks, ask) }
 
 type fakeProvider struct {
 	handles []*StreamHandle
