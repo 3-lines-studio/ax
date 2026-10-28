@@ -275,7 +275,17 @@ ax --session /tmp/work.jsonl "now add the missing test"
 The log is append-only JSONL, fsynced per entry and locked while a run holds
 it. A run that lost its `run_end` is repaired on the next start: unfinished
 assistant turns are dropped and tool calls whose result was never recorded are
-reported to the model as interrupted instead of being re-run. Image blobs live
+reported to the model as interrupted instead of being re-run.
+
+To continue it instead of starting something new:
+
+```sh
+ax --resume --session /tmp/work.jsonl
+```
+
+That appends one user turn naming the interrupted calls, then keeps going under
+a new `run_id`; a session with no open run exits 2. Hosts call it on startup and
+on a timer to make execution durable across crashes and deploys. Image blobs live
 in `FILE.blobs/`. Botdir hosts route these logs under their own namespace
 (e.g. `state/ax/sessions/`). See [the session contract](../../docs/session.md).
 

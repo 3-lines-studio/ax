@@ -232,3 +232,42 @@ func TestDeriveLegacyToolMessage(t *testing.T) {
 		t.Errorf("messages = %+v", state.Messages)
 	}
 }
+
+// An interrupted call is kept in the history as an error and named in the
+// resume turn, so the model verifies instead of replaying.
+func TestDeriveSessionNamesInterruptedCalls(t *testing.T) {
+	entries := []sessionEntry{
+		{Type: entryRunStart, RunID: "r1"},
+		{Type: entryMessage, Message: &Message{Role: "user", Content: "fix it"}},
+		{Type: entryMessage, Message: &Message{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Name: "execute"}}}},
+		{Type: entryToolIntent, Call: &ToolCall{ID: "c1"}, Target: "fsx.write"},
+	}
+	state := deriveSession(entries)
+	if !state.OpenRun {
+		t.Fatal("run should be open")
+	}
+	if len(state.Interrupted) != 1 || state.Interrupted[0] != "fsx.write" {
+		t.Fatalf("interrupted = %v", state.Interrupted)
+	}
+	tool := state.Messages[len(state.Messages)-1]
+	if tool.Role != "tool" || !strings.Contains(tool.Content, "interrupted") || !strings.Contains(tool.Content, "fsx.write") {
+		t.Fatalf("last message = %+v", tool)
+	}
+	prompt := resumePrompt(state)
+	if !strings.Contains(prompt, "Resume the interrupted run") || !strings.Contains(prompt, "fsx.write") {
+		t.Fatalf("prompt = %q", prompt)
+	}
+	if !strings.Contains(prompt, "check the state") || !strings.Contains(prompt, "Do not start the task over") {
+		t.Fatalf("prompt = %q", prompt)
+	}
+}
+
+func TestResumePromptWithoutInterruptedCalls(t *testing.T) {
+	prompt := resumePrompt(sessionState{OpenRun: true})
+	if strings.Contains(prompt, "never recorded a result") {
+		t.Fatalf("prompt invented a call: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Resume the interrupted run") {
+		t.Fatalf("prompt = %q", prompt)
+	}
+}

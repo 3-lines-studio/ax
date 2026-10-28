@@ -91,3 +91,14 @@ jq -r 'select(.type=="run_end") | .outcome' session.jsonl
 
 A host that routes sessions (Botdir conventions place them under
 `state/ax/`) reads the same entries; it must not rewrite existing lines.
+
+## Resuming
+
+A log whose last `run_start` has no `run_end` is an interrupted run. `ax
+--resume --session FILE` appends one user turn describing where the run stopped
+(`resumePrompt`) and continues; the interrupted calls are already in the log as
+`tool` messages with an error that says their side effects are unknown, so the
+model verifies state instead of repeating them.
+
+The log is never rewritten to resume: a resume is one more `run_start`, one
+more user message and a final `run_end`, in that order.
