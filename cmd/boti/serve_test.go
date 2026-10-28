@@ -313,3 +313,40 @@ command = ["webi", "-listen", "127.0.0.1:8377"]
 		t.Fatalf("packages = %v, want webi once", pkgs)
 	}
 }
+
+func TestBotPackagesReadLocalConnections(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "bot.toml"), `[[connection]]
+id = "fs"
+kind = "local"
+command = "fsx"
+compute = true
+
+[[connection]]
+id = "bash"
+command = "bashx"
+
+[[connection]]
+id = "remote"
+kind = "ssh"
+host = "user@example.com"
+`)
+	pkgs, err := botPackages(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]bool{}
+	for _, pkg := range pkgs {
+		have[pkg] = true
+	}
+	for _, want := range []string{"ax", "slaxi", "fsx", "bashx"} {
+		if !have[want] {
+			t.Fatalf("missing %s in %v", want, pkgs)
+		}
+	}
+	for _, unwanted := range []string{"remote", ""} {
+		if have[unwanted] {
+			t.Fatalf("unexpected %q in %v", unwanted, pkgs)
+		}
+	}
+}
