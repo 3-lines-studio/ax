@@ -7,6 +7,14 @@ import (
 	"testing"
 )
 
+// The host exports BOT_DATA for the bot it serves; these tests read paths from
+// the package, so they must not inherit it from whoever runs the suite.
+func TestMain(m *testing.M) {
+	_ = os.Unsetenv("BOT_ROOT")
+	_ = os.Unsetenv("BOT_DATA")
+	os.Exit(m.Run())
+}
+
 type testConfig struct {
 	Model   string   `toml:"model"`
 	BaseURL string   `toml:"base_url"`

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,8 +25,11 @@ import (
 // serveConfig is bot.toml's [boti.serve] table: what the host runs and how it
 // knows the process is useful.
 type serveConfig struct {
-	Command []string `toml:"command"`
-	Health  string   `toml:"health"`
+	Command  []string `toml:"command"`
+	Health   string   `toml:"health"`
+	Idle     string   `toml:"idle"`
+	Selftest []string `toml:"selftest"`
+	Repo     string   `toml:"repo"`
 }
 
 const defaultServeListen = "127.0.0.1:8377"
@@ -78,6 +82,7 @@ type hostState struct {
 	Started   time.Time  `json:"started"`
 	Restarts  int        `json:"restarts"`
 	LastError string     `json:"last_error,omitempty"`
+	Pending   string     `json:"pending,omitempty"`
 	Child     childState `json:"child"`
 }
 
@@ -95,17 +100,22 @@ type host struct {
 	env   []string
 	log   *os.File
 
-	mu      sync.Mutex
-	state   hostState
-	restart chan struct{}
-	recent  []time.Time
-	failed  map[string]bool
+	mu       sync.Mutex
+	switchMu sync.Mutex
+	state    hostState
+	restart  chan struct{}
+	recent   []time.Time
+	failed   map[string]bool
+	pending  int // epoch of the armed activation
+	done     chan struct{}
 
 	startTimeout time.Duration
 	stopTimeout  time.Duration
 	backoff      time.Duration
 	crashWindow  time.Duration
 	crashLimit   int
+	idleInterval time.Duration
+	idleTimeout  time.Duration
 }
 
 func newHost(root string, bc botConfig) (*host, error) {
@@ -117,28 +127,27 @@ func newHost(root string, bc botConfig) (*host, error) {
 	if err != nil {
 		return nil, err
 	}
-	env := os.Environ()
-	env = setEnv(env, "BOT_ROOT", paths.root)
-	env = setEnvIfUnset(env, "BOT_DATA", paths.data)
-	for k, v := range bc.Env {
-		env = setEnvIfUnset(env, k, v)
-	}
 	h := &host{
 		paths:        paths,
 		cfg:          bc.serveSettings(),
-		env:          env,
+		env:          hostEnv(paths, bc),
 		log:          file,
 		restart:      make(chan struct{}, 1),
 		failed:       map[string]bool{},
+		done:         make(chan struct{}),
 		startTimeout: 30 * time.Second,
 		stopTimeout:  10 * time.Second,
 		backoff:      time.Second,
 		crashWindow:  time.Minute,
 		crashLimit:   3,
+		idleInterval: time.Second,
+		idleTimeout:  30 * time.Minute,
 	}
 	if data, err := os.ReadFile(paths.state); err == nil {
 		_ = json.Unmarshal(data, &h.state)
 	}
+	// An armed activation does not survive the supervisor it was armed on.
+	h.state.Pending = ""
 	h.state.PID = os.Getpid()
 	h.state.Started = time.Now().UTC()
 	h.state.Child = childState{}
@@ -196,6 +205,120 @@ func (h *host) switchBuild(id string) error {
 		return err
 	}
 	return nil
+}
+
+// signalRestart asks the loop to stop the child and start again. It never
+// blocks: a request while one is already queued is the same request.
+func (h *host) signalRestart() {
+	select {
+	case h.restart <- struct{}{}:
+	default:
+	}
+}
+
+func (h *host) hasBuild(id string) bool {
+	if id == "" || id == "." || id == ".." || strings.ContainsAny(id, "/\\") {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(h.paths.builds, id, "bin"))
+	return err == nil && info.IsDir()
+}
+
+// switchTo points the host at a build. The running child keeps the PATH it
+// started with; the next start uses the new one.
+func (h *host) switchTo(id string) error {
+	h.switchMu.Lock()
+	defer h.switchMu.Unlock()
+	h.mu.Lock()
+	current := h.state.Build
+	if id == current {
+		h.state.Pending = ""
+		h.mu.Unlock()
+		h.save()
+		return nil
+	}
+	h.mu.Unlock()
+	if !h.hasBuild(id) {
+		return fmt.Errorf("unknown build %q", id)
+	}
+	if err := h.switchBuild(id); err != nil {
+		return err
+	}
+	h.mu.Lock()
+	if current == "dev" {
+		current = ""
+	}
+	h.state.Previous = current
+	h.state.Build = id
+	h.state.Pending = ""
+	h.mu.Unlock()
+	h.save()
+	h.pruneBuilds(defaultKeep)
+	slog.Info("boti: build selected", "build", id, "previous", current)
+	return nil
+}
+
+// arm waits for the bot to be idle before switching: a promotion that runs
+// inside a conversation must not interrupt the conversation that asked for it.
+func (h *host) arm(id string) {
+	h.mu.Lock()
+	h.pending++
+	epoch := h.pending
+	h.state.Pending = id
+	h.mu.Unlock()
+	h.save()
+	go h.waitIdle(epoch, id)
+}
+
+func (h *host) waitIdle(epoch int, id string) {
+	ticker := time.NewTicker(h.idleInterval)
+	defer ticker.Stop()
+	deadline := time.Now().Add(h.idleTimeout)
+	for {
+		select {
+		case <-h.done:
+			return
+		case <-ticker.C:
+		}
+		h.mu.Lock()
+		stale := h.pending != epoch || h.state.Pending != id
+		h.mu.Unlock()
+		if stale {
+			return
+		}
+		if time.Now().After(deadline) {
+			slog.Warn("boti: idle timeout, activating anyway", "build", id)
+			break
+		}
+		if h.idle() {
+			break
+		}
+	}
+	if err := h.switchTo(id); err != nil {
+		slog.Error("boti: activate", "build", id, "err", err)
+		return
+	}
+	h.signalRestart()
+}
+
+// idle reads the transport's own state; webi reports how many threads have a
+// live ax process, and zero is what a switch can safely interrupt.
+func (h *host) idle() bool {
+	resp, err := (&http.Client{Timeout: 2 * time.Second}).Get(h.cfg.Idle)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var state struct {
+		Running *int `json:"running"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&state); err != nil {
+		return false
+	}
+	return state.Running != nil && *state.Running == 0
 }
 
 type childProc struct {
@@ -381,6 +504,7 @@ func (h *host) sleep(ctx context.Context, wait time.Duration) bool {
 
 // loop is the supervisor: start, verify, wait, repeat.
 func (h *host) loop(ctx context.Context) error {
+	defer close(h.done)
 	if err := h.control(ctx); err != nil {
 		return err
 	}
@@ -461,11 +585,48 @@ func (h *host) control(ctx context.Context) error {
 		_, _ = w.Write(data)
 	})
 	mux.HandleFunc("POST /restart", func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case h.restart <- struct{}{}:
-		default:
-		}
+		h.signalRestart()
 		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("POST /activate", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Build string `json:"build"`
+			When  string `json:"when"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if !h.hasBuild(req.Build) {
+			http.Error(w, "unknown build", http.StatusNotFound)
+			return
+		}
+		if req.When == "idle" && h.cfg.Idle != "" {
+			h.arm(req.Build)
+			writeJSON(w, http.StatusOK, activateReply{Build: req.Build, Pending: true})
+			return
+		}
+		if err := h.switchTo(req.Build); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		h.signalRestart()
+		writeJSON(w, http.StatusOK, activateReply{Build: req.Build, Activated: true})
+	})
+	mux.HandleFunc("POST /rollback", func(w http.ResponseWriter, r *http.Request) {
+		h.mu.Lock()
+		previous := h.state.Previous
+		h.mu.Unlock()
+		if previous == "" {
+			http.Error(w, "no previous build", http.StatusConflict)
+			return
+		}
+		if err := h.switchTo(previous); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		h.signalRestart()
+		writeJSON(w, http.StatusOK, map[string]string{"build": previous})
 	})
 	server := &http.Server{Handler: mux}
 	go func() {
@@ -479,6 +640,57 @@ func (h *host) control(ctx context.Context) error {
 		}
 	}()
 	return nil
+}
+
+func writeJSON(w http.ResponseWriter, code int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+// hostEnv is the environment every host-started process gets: the bot itself,
+// its data root and the variables in [env].
+func hostEnv(paths hostPaths, bc botConfig) []string {
+	env := os.Environ()
+	env = setEnv(env, "BOT_ROOT", paths.root)
+	env = setEnvIfUnset(env, "BOT_DATA", paths.data)
+	for k, v := range bc.Env {
+		env = setEnvIfUnset(env, k, v)
+	}
+	return env
+}
+
+func controlPost(sock, path string, body []byte) ([]byte, error) {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	resp, err := controlClient(sock).Post("http://unix"+path, "application/json", reader)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		if message := strings.TrimSpace(string(data)); message != "" {
+			return nil, errors.New(message)
+		}
+		return nil, errors.New(resp.Status)
+	}
+	return data, nil
+}
+
+func controlStatus(sock string) (hostState, error) {
+	resp, err := controlClient(sock).Get("http://unix/status")
+	if err != nil {
+		return hostState{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var state hostState
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&state); err != nil {
+		return hostState{}, err
+	}
+	return state, nil
 }
 
 func controlClient(sock string) *http.Client {
@@ -505,7 +717,7 @@ func runServe(ctx context.Context, root string) error {
 	if err := os.MkdirAll(paths.dir, 0o755); err != nil {
 		return err
 	}
-	lock, err := lockHost(filepath.Join(paths.dir, "lock"))
+	lock, err := lockFile(filepath.Join(paths.dir, "lock"), "another `boti serve` is running for this bot")
 	if err != nil {
 		return err
 	}
@@ -597,6 +809,9 @@ func statusText(state hostState, alive bool) string {
 	} else {
 		out.WriteString("child: none\n")
 	}
+	if state.Pending != "" {
+		fmt.Fprintf(&out, "pending: %s (waiting for idle)\n", state.Pending)
+	}
 	fmt.Fprintf(&out, "restarts: %d\n", state.Restarts)
 	if state.LastError != "" {
 		fmt.Fprintf(&out, "last error: %s\n", state.LastError)
@@ -658,16 +873,16 @@ func lookPath(name, pathEnv string) (string, error) {
 	return "", fmt.Errorf("%s: %w", name, exec.ErrNotFound)
 }
 
-// lockHost keeps a second `boti serve` for the same bot from starting a rival
-// child and rewriting the same state file.
-func lockHost(path string) (*os.File, error) {
+// lockFile keeps two processes from owning the same thing at once: a second
+// supervisor for a bot, or two promotions writing the same builds directory.
+func lockFile(path, busy string) (*os.File, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = file.Close()
-		return nil, fmt.Errorf("another `boti serve` is running for this bot")
+		return nil, errors.New(busy)
 	}
 	return file, nil
 }

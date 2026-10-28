@@ -78,16 +78,35 @@ user's call:
 
 ## Updating
 
-`boti update` is the safe path: it backs up the installed binaries, installs the
-current release and runs `boti selftest`. If the new engine does not survive it,
-the previous binaries come back and the command fails, so a bad release cannot
-leave a host that will not start.
+There are two paths, and both are transactional.
+
+From a checkout, when the host is `boti serve`:
+
+```sh
+boti -C ~/bots/example promote        # build, test, activate when idle
+boti -C ~/bots/example rollback       # back to the previous build
+```
+
+`promote` builds the bot's programs with `scripts/package.sh`, runs `go vet`,
+`go test`, `ax selftest` and the transport's own selftest, and then asks the
+supervisor to switch. Activation waits for `[boti.serve].idle` to report no
+live runs, so the promotion does not interrupt the conversation that asked for
+it. A failure at any step leaves the running host untouched. The build id is
+the short commit (`-dirty` for an uncommitted tree), and the previous build
+stays for `boti rollback` and for the crash-loop fallback.
+
+From a release, on any host:
 
 ```sh
 boti -C ~/bots/example update
 ```
 
+`update` backs up the installed binaries, installs the current release and runs
+`boti selftest`. If the new engine does not survive it, the previous binaries
+come back and the command fails, so a bad release cannot leave a host that will
+not start.
+
 A run that is in flight when a binary is replaced keeps running: the old file
-stays alive until the process exits, and the next run uses the new one. The host
-is what decides when to restart; `webi` picks up interrupted runs on its own
-(see [../cmd/webi/README.md](../cmd/webi/README.md)).
+stays alive until the process exits, and the next run uses the new one. `webi`
+picks up interrupted runs on its own (see
+[../cmd/webi/README.md](../cmd/webi/README.md)).

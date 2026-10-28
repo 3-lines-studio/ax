@@ -3,6 +3,7 @@
 #
 #   scripts/package.sh all              # every program, current platform
 #   scripts/package.sh ax fsx           # selected programs, current platform
+#   scripts/package.sh --dest DIR ax    # host binaries into DIR, named <program>
 #   scripts/package.sh --release all    # every program, all release targets
 #
 # Local runs write one loose binary per program into dist/ (plus its .sha256),
@@ -15,12 +16,31 @@ set -eu
 cd "$(dirname "$0")/.."
 
 release=false
-case "${1:-}" in
---release)
-    release=true
-    shift
-    ;;
-esac
+dest=
+while [ $# -gt 0 ]; do
+    case $1 in
+    --release)
+        release=true
+        shift
+        ;;
+    --dest)
+        if [ -z "${2:-}" ]; then
+            echo "package: --dest needs a directory" >&2
+            exit 1
+        fi
+        dest=$2
+        shift 2
+        ;;
+    *)
+        break
+        ;;
+    esac
+done
+
+if [ "$release" = true ] && [ -n "$dest" ]; then
+    echo "package: --release and --dest are mutually exclusive" >&2
+    exit 1
+fi
 
 case "${1:-}" in
 "" | all)
@@ -70,7 +90,11 @@ sha256() {
     fi
 }
 
-mkdir -p dist
+if [ -n "$dest" ]; then
+    mkdir -p "$dest"
+else
+    mkdir -p dist
+fi
 release_files=
 for target in $targets; do
     goos=${target%%:*}
@@ -96,12 +120,18 @@ for target in $targets; do
         fi
         if [ "$release" = true ]; then
             out="$stage/$program"
+        elif [ -n "$dest" ]; then
+            out="$dest/$program"
         else
             out="dist/$program-$goos-$arch"
         fi
         CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build \
             -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
             -o "$out" "./cmd/$program"
+        if [ -n "$dest" ]; then
+            printf '%s\n' "$out"
+            continue
+        fi
         if [ "$release" = true ]; then
             binaries="$binaries $program"
         else
