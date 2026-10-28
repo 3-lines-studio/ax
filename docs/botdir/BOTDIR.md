@@ -24,11 +24,11 @@ A standard path MAY be a mount point or symbolic link. This specification does n
 
 ## Runtime data root
 
-A host MAY provide a separate **runtime data root** for the runtime paths. It is communicated to consumers as the environment variable `BOT_DATA` (an absolute path). The definition paths — `bot.toml`, `bot.md`, `skills/`, and `resources/` — always live at the bot root. When `BOT_DATA` is unset, consumers resolve the runtime paths at the bot root.
+A host MAY provide a separate **runtime data root** for the runtime paths. It is communicated to consumers as the environment variable `BOT_DATA` (an absolute path). The definition paths — `bot.toml`, `bot.md`, `skills/`, `routines/`, and `resources/` — always live at the bot root. When `BOT_DATA` is unset, consumers resolve the runtime paths at the bot root.
 
 | Path | Class | Root |
 | --- | --- | --- |
-| `bot.toml`, `bot.md`, `skills/`, `resources/` | Definition | bot root |
+| `bot.toml`, `bot.md`, `skills/`, `routines/`, `resources/` | Definition | bot root |
 | `state/`, `workspace/`, `run/` | Runtime | `BOT_DATA` (default bot root) |
 | `secrets/` | Volatile | host-provided, never persisted |
 
@@ -43,6 +43,7 @@ A runtime consumer MUST resolve each runtime path relative to `BOT_DATA` when it
 ├── bot.toml
 ├── bot.md
 ├── skills/
+├── routines/
 ├── resources/
 ├── state/
 ├── workspace/
@@ -55,6 +56,7 @@ A runtime consumer MUST resolve each runtime path relative to `BOT_DATA` when it
 | `bot.toml` | Bot configuration | Read-only | Portable definition |
 | `bot.md` | Bot instructions | Read-only | Portable definition |
 | `skills/` | Agent Skills | Read-only | Portable definition |
+| `routines/` | Deterministic routines | Read-only | Portable definition |
 | `resources/` | Other bot-provided input | Read-only | Portable definition |
 | `state/` | Machine-managed runtime data | Read/write | Durable |
 | `workspace/` | User-visible input, work, and output | Read/write | Durable |
@@ -170,6 +172,13 @@ variable or as `secrets/api-key`.
 ### `skills/`
 
 `skills/` optionally contains skills using the external Agent Skills format.
+
+### `routines/`
+
+`routines/` optionally contains deterministic routine definitions. Each
+`<name>/routine.toml` declares an executable entry and an optional schedule;
+the format is defined in [docs/routines.md](../routines.md). Loading a bot MUST
+NOT run a routine; it runs only on demand or from an explicit scheduler.
 
 ### `resources/`
 

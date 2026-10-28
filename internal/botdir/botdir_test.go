@@ -163,6 +163,11 @@ func TestResolveUsesBotDataRoot(t *testing.T) {
 	if ctx.Prompt != "hi" {
 		t.Errorf("Prompt = %q, want bot-root prompt", ctx.Prompt)
 	}
+	_ = os.MkdirAll(filepath.Join(root, "routines"), 0o755)
+	ctx = Resolve(root)
+	if ctx.Routines != filepath.Join(root, "routines") {
+		t.Errorf("Routines = %q, want bot-root routines", ctx.Routines)
+	}
 }
 
 func TestWorkspace(t *testing.T) {

@@ -134,6 +134,14 @@ calling the model: the embedded UI, the state directory, the vault header and
 `ax selftest` with the engine this webi would spawn. Exit code 1 means the
 build should not be activated.
 
+## Routines
+
+webi is also the routine scheduler. Every 30 seconds it reads
+`routines/*/routine.toml` under the bot root and runs enabled cron schedules
+with no model in the loop. `ax routine list` shows them and `ax routine run
+NAME` tests one manually; logs and state are under `state/routines/<name>/`.
+See [docs/routines.md](../../docs/routines.md).
+
 ## Not here yet
 
 Slack-specific formatting and ax's supervisor. Threads compact themselves in

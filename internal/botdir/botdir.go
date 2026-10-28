@@ -24,6 +24,7 @@ type Paths struct {
 	State     string
 	Workspace string
 	Skills    string
+	Routines  string
 	Prompt    string
 	APIKey    string
 	HasAPIKey bool
@@ -66,6 +67,9 @@ func Resolve(root string) Paths {
 	}
 	if skills := filepath.Join(root, "skills"); IsDir(skills) {
 		paths.Skills = skills
+	}
+	if routines := filepath.Join(root, "routines"); IsDir(routines) {
+		paths.Routines = routines
 	}
 	if prompt := filepath.Join(root, "bot.md"); Exists(prompt) {
 		if data, err := os.ReadFile(prompt); err == nil {
