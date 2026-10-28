@@ -87,6 +87,12 @@ arrives is skipped by the lock.
 `boti` and a plain `ax` run do not schedule; use `ax routine run` from cron or
 another scheduler when there is no `webi` process.
 
+The webi UI has a **Routines** entry: it lists the routines, their schedule,
+last status and last run time; **Run now** executes one manually, and **Log**
+opens the latest output. It calls `GET /api/routines`,
+`POST /api/routines/<name>/run` and `GET /api/routines/<name>/log` behind the
+same token as the rest of the UI.
+
 ## What a routine is not
 
 - Not a chat thread or a session; no model, no tools, no catalog.
@@ -101,5 +107,5 @@ schedule on only after a manual run succeeds.
 
 ## Not implemented yet
 
-Notifications and a routines UI in `webi`. A run is visible in `run.json`,
-`output.log`, and `ax routine list`; notifying a channel is a later layer.
+Notifications. A run is visible in `run.json`, `output.log`, `ax routine list`
+and the webi Routines view; notifying a channel is a later layer.

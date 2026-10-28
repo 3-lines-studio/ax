@@ -1761,7 +1761,7 @@ function openLightbox(src) {
 
 function openModal(opts) {
   const dlg = $('#modal');
-  dlg.classList.remove('vault-dialog');
+  dlg.classList.remove('vault-dialog', 'routines-dialog');
   dlg.classList.toggle('wide-dialog', !!opts.wide);
   const fields = opts.fields || [];
   let settled = false;
@@ -2127,6 +2127,78 @@ async function openSettings() {
   } catch (e) { toast(e.message, true); }
 }
 
+/* ----------------------------------------------------------------- routines */
+
+function openRoutines() {
+  const dlg = $('#modal');
+  if (!dlg) return;
+  dlg.className = 'routines-dialog';
+  dlg.innerHTML =
+    '<div class="modal-head">Routines</div>' +
+    '<div class="modal-body" id="routines-body">loading…</div>' +
+    '<div class="modal-foot"><button type="button" class="btn" data-action="routine-close">Close</button></div>';
+  if (!dlg.open) dlg.showModal();
+  loadRoutines();
+}
+
+async function loadRoutines() {
+  const body = $('#routines-body');
+  if (!body) return;
+  try {
+    const data = await api('/api/routines');
+    const rows = (data.routines || []).map((r) => {
+      const schedule = r.schedule ? esc(r.schedule) : 'manual only';
+      const enabled = r.enabled ? 'on' : 'off';
+      const last = r.last
+        ? '<span class="routine-status ' + esc(r.last.status) + '">' + esc(r.last.status) + ' · ' + relTime(r.last.started_at) + '</span>'
+        : '<span class="routine-status">never run</span>';
+      return '<div class="routine-row">' +
+        '<div class="routine-main"><div class="routine-name">' + esc(r.name) +
+          ' <span class="routine-meta">' + schedule + ' · ' + enabled + '</span></div>' +
+          (r.description ? '<p>' + esc(r.description) + '</p>' : '') +
+          '<div>' + last + '</div></div>' +
+        '<div class="routine-actions">' +
+          '<button type="button" class="btn" data-action="routine-run" data-name="' + esc(r.name) + '">Run now</button>' +
+          '<button type="button" class="btn" data-action="routine-log" data-name="' + esc(r.name) + '">Log</button>' +
+        '</div></div>';
+    }).join('');
+    body.innerHTML = rows || '<div class="routine-empty">No routines yet. Add <code>routines/&lt;name&gt;/routine.toml</code> in the bot root.</div>';
+  } catch (e) {
+    body.innerHTML = '<div class="routine-empty">' + esc(e.message) + '</div>';
+  }
+}
+
+async function runRoutine(btn) {
+  const name = btn.dataset.name;
+  if (!name) return;
+  btn.disabled = true;
+  btn.textContent = 'Running…';
+  try {
+    const data = await api('/api/routines/' + encodeURIComponent(name) + '/run', { method: 'POST' });
+    toast(name + ': ' + data.run.status);
+  } catch (e) {
+    toast(e.message, true);
+  }
+  await loadRoutines();
+}
+
+async function showRoutineLog(name) {
+  const body = $('#routines-body');
+  if (!body) return;
+  body.innerHTML = 'loading…';
+  try {
+    const data = await api('/api/routines/' + encodeURIComponent(name) + '/log');
+    body.innerHTML =
+      '<div class="routine-log-head"><button type="button" class="btn" data-action="routine-back">Back</button>' +
+      '<strong>' + esc(name) + '</strong>' +
+      '<span class="routine-status ' + esc(data.run.status) + '">' + esc(data.run.status) + '</span></div>' +
+      '<pre class="routine-log">' + esc(data.log || '(no output)') + '</pre>';
+  } catch (e) {
+    body.innerHTML = '<button type="button" class="btn" data-action="routine-back">Back</button>' +
+      '<div class="routine-empty">' + esc(e.message) + '</div>';
+  }
+}
+
 /* ------------------------------------------------------------------- drawer */
 /* On phones the drawer is an overlay. Opening it pushes a history entry so the
    Android back gesture closes the drawer instead of leaving the app. */
@@ -2332,6 +2404,11 @@ function wireEvents() {
       case 'close-drawer': closeDrawer(); break;
       case 'back': location.hash = S.channelId ? '#/c/' + S.channelId : '#/'; break;
       case 'settings': openSettings(); break;
+      case 'routines': openRoutines(); break;
+      case 'routine-close': { const dlg = $('#modal'); if (dlg) dlg.close(); break; }
+      case 'routine-run': runRoutine(a); break;
+      case 'routine-log': showRoutineLog(a.dataset.name); break;
+      case 'routine-back': loadRoutines(); break;
       case 'add-key': vaultNew('global', 'DEEPSEEK_API_KEY'); break;
       case 'search': openSwitcher(); break;
       case 'vault': location.hash = '#/vault'; break;
