@@ -38,8 +38,8 @@
     {
       "name": "wax",
       "kind": "provider",
-      "role": "Web-fetch tool",
-      "description": "Fetches a web page as Markdown for ax and other LLM tools.",
+      "role": "Web search and fetch",
+      "description": "Searches the web (DeepSeek Search) and fetches pages as Markdown, for ax and other LLM tools.",
       "protocol": "describe/run",
       "depends_on": [],
       "doc": "cmd/wax/README.md"

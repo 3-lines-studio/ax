@@ -76,7 +76,7 @@ and `execute`, so adding integrations does not grow the prompt. See
 
 | Program | Role | Description |
 | --- | --- | --- |
-| [wax](cmd/wax/README.md) | Web-fetch tool | Fetches a web page as Markdown for ax and other LLM tools. |
+| [wax](cmd/wax/README.md) | Web search and fetch | Searches the web (DeepSeek Search) and fetches pages as Markdown, for ax and other LLM tools. |
 | [bqx](cmd/bqx/README.md) | BigQuery tool | Read-only BigQuery queries for ax. |
 | [pgx](cmd/pgx/README.md) | PostgreSQL tool | Read-only PostgreSQL queries for ax. |
 | [slackx](cmd/slackx/README.md) | Slack file-upload tool | Uploads files to Slack for ax. |
