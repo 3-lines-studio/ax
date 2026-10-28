@@ -74,7 +74,7 @@ command = "refresh-skill --name metrics"
 [boti.serve]
 command = ["webi", "-listen", "127.0.0.1:8377"]
 health = "http://127.0.0.1:8377/healthz"
-idle = "http://127.0.0.1:8377/api/state"
+idle = "http://127.0.0.1:8377/readyz"
 selftest = ["webi", "-selftest"]
 repo = "/srv/ax"
 ```
@@ -94,7 +94,7 @@ repo = "/srv/ax"
   defaults to `/healthz` on the default listen address; set it to empty to
   supervise by process liveness only (a transport without a port).
 - `[boti.serve].repo` — the ax checkout `boti promote` builds from.
-- `[boti.serve].idle` — a URL whose `running` field is the number of live
+- `[boti.serve].idle` — a URL (`/readyz` on webi) whose `running` field is the number of live
   runs. Activation waits for zero, so a promotion asked for inside a
   conversation does not interrupt that conversation; if the bot never goes
   idle, the host activates after 30 minutes. Without `idle`, promotion

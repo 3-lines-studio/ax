@@ -65,6 +65,13 @@ func main() {
 		Model:   *model,
 	}, state, staticHandler(), buildID())
 
+	token, tokenPath, err := loadToken(state)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	srv.token = token
+
 	// A promotion restarts webi; the key the host kept saves the PIN.
 	srv.adoptVaultKey()
 
@@ -73,10 +80,15 @@ func main() {
 
 	server := &http.Server{
 		Addr:              *listen,
-		Handler:           srv.Handler(),
+		Handler:           srv.auth(srv.Handler()),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    64 << 10,
 	}
 	slog.Info("webi listening", "addr", "http://"+*listen, "bot", paths.Root, "state", state, "ax", *axPath)
+	if tokenPath != "" {
+		slog.Info("webi: first visit needs ?token= from", "file", tokenPath)
+	}
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -42,6 +43,14 @@ func (s *Server) handleVaultState(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// notePINError counts only a real wrong PIN: a locked or missing vault is not
+// a guess and must not lock the user out.
+func (s *Server) notePINError(ip string, err error) {
+	if errors.Is(err, errWrongPIN) {
+		s.pins.fail(ip)
+	}
+}
+
 // handleVaultAction serves the panel's verbs. The UI checks for the exact
 // string "wrong PIN", so it must not be wrapped.
 func (s *Server) handleVaultAction(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +71,17 @@ func (s *Server) handleVaultAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	switch r.PathValue("action") {
+	action := r.PathValue("action")
+	guarded := action == "unlock" || action == "check" || action == "reveal"
+	ip := clientIP(r)
+	if guarded {
+		if wait, ok := s.pins.allow(ip); !ok {
+			w.Header().Set("Retry-After", retryAfter(wait))
+			writeErr(w, 429, pinWaitError(wait))
+			return
+		}
+	}
+	switch action {
 	case "init":
 		if err := s.vault.Create(req.PIN, req.Confirm); err != nil {
 			writeErr(w, 400, err.Error())
@@ -74,9 +93,11 @@ func (s *Server) handleVaultAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	case "unlock":
 		if err := s.vault.Unlock(req.PIN); err != nil {
+			s.notePINError(ip, err)
 			writeErr(w, 400, err.Error())
 			return
 		}
+		s.pins.ok(ip)
 		s.shareVaultKey(false)
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	case "lock":
@@ -85,16 +106,20 @@ func (s *Server) handleVaultAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	case "check":
 		if err := s.vault.Check(req.PIN); err != nil {
+			s.notePINError(ip, err)
 			writeErr(w, 400, err.Error())
 			return
 		}
+		s.pins.ok(ip)
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	case "reveal":
 		value, err := s.vault.Reveal(req.Scope, req.Name, req.PIN)
 		if err != nil {
+			s.notePINError(ip, err)
 			writeErr(w, 400, err.Error())
 			return
 		}
+		s.pins.ok(ip)
 		writeJSON(w, 200, map[string]string{"value": value})
 	case "item":
 		if req.Skip {

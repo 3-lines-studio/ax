@@ -105,6 +105,7 @@ type host struct {
 	switchMu sync.Mutex
 	vaultMu  sync.Mutex
 	vaultKey []byte
+	idleWarn sync.Once
 	state    hostState
 	restart  chan struct{}
 	recent   []time.Time
@@ -312,6 +313,12 @@ func (h *host) idle() bool {
 		return false
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		h.idleWarn.Do(func() {
+			slog.Warn("boti: idle check unauthorized; point [boti.serve].idle at /readyz", "url", h.cfg.Idle)
+		})
+		return false
+	}
 	if resp.StatusCode != http.StatusOK {
 		return false
 	}

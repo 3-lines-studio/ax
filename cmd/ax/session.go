@@ -294,13 +294,15 @@ type sessionLog struct {
 
 func openSessionLog(path string) (*sessionLog, error) {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create session dir %s: %w", dir, err)
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open session %s: %w", path, err)
 	}
+	// A session holds the whole conversation; keep older files private too.
+	_ = file.Chmod(0o600)
 	if err := lockFile(file); err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("lock session %s: %w", path, err)
