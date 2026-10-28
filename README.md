@@ -51,7 +51,9 @@ webi setup
 `setup` starts the UI at login, opens it and asks one question: whether you
 want to use it from your phone too. There is no folder or port to choose. The
 first page asks for a vault PIN (8+ characters) and an API key, once, and then
-it is just chat.
+it is just chat. The starter bot already declares every installed provider
+(`fsx`, `bashx`, `skillx`, `memoryx`), so the first conversation has files, a
+shell, skills and memory without editing anything.
 
 It works on Linux (systemd user unit) and macOS (LaunchAgent). On another
 system, run `webi` in a terminal or add it to your login items. For a bot in a
