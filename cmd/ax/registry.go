@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 )
@@ -89,13 +88,4 @@ func (e registryEntry) entry(extraArgs []string) mcpEntry {
 		entry.Auth = "none"
 	}
 	return entry
-}
-
-func registryNames(r registryFile) []string {
-	names := make([]string, 0, len(r.Servers))
-	for _, entry := range r.Servers {
-		names = append(names, entry.Name)
-	}
-	sort.Strings(names)
-	return names
 }

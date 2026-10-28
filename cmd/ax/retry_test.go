@@ -20,7 +20,6 @@ type recordingSink struct {
 	tools     []Message
 	steered   []Message
 	asks      []secretAsk
-	flushCnt  int
 }
 
 func (r *recordingSink) assistantDelta(text string)           { r.deltas = append(r.deltas, text) }
@@ -32,11 +31,9 @@ func (r *recordingSink) toolResult(call ToolCall)             { r.results = appe
 func (r *recordingSink) tokens(input, output, cached int) {
 	r.tok = append(r.tok, Usage{Input: input, Output: output, CachedInput: cached})
 }
-func (r *recordingSink) shouldCompact(input, output int) bool      { return false }
 func (r *recordingSink) assistant(turn int, msg Message, us Usage) { r.assist = append(r.assist, msg) }
 func (r *recordingSink) tool(turn int, msg Message)                { r.tools = append(r.tools, msg) }
 func (r *recordingSink) steer(msg Message)                         { r.steered = append(r.steered, msg) }
-func (r *recordingSink) flush()                                    { r.flushCnt++ }
 func (r *recordingSink) secretRequest(_ ToolCall, ask secretAsk)   { r.asks = append(r.asks, ask) }
 
 type fakeProvider struct {
