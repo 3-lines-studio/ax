@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/3-lines-studio/ax/internal/botdir"
 )
@@ -227,11 +228,13 @@ func readBotConfig(root string) (botConfig, bool, error) {
 	return bc, true, nil
 }
 
+var installerClient = &http.Client{Timeout: 30 * time.Second}
+
 func fetchInstaller(url string) (string, error) {
 	var data []byte
 	switch {
 	case strings.HasPrefix(url, "http://"), strings.HasPrefix(url, "https://"):
-		resp, err := http.Get(url)
+		resp, err := installerClient.Get(url)
 		if err != nil {
 			return "", err
 		}
