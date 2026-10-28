@@ -83,6 +83,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/routines", s.handleRoutines)
 	mux.HandleFunc("POST /api/routines/{name}/run", s.handleRunRoutine)
 	mux.HandleFunc("GET /api/routines/{name}/log", s.handleRoutineLog)
+	mux.HandleFunc("GET /api/routines/{name}/runs", s.handleRoutineRuns)
+	mux.HandleFunc("GET /api/routines/{name}/runs/{run}", s.handleRoutineRunLog)
 	mux.HandleFunc("GET /api/vault", s.handleVaultState)
 	mux.HandleFunc("POST /api/vault/{action}", s.handleVaultAction)
 	mux.HandleFunc("POST /api/channels", s.handleCreateChannel)

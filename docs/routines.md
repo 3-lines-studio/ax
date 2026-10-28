@@ -42,13 +42,17 @@ enabled = false                 # test it before turning it on
 ## Running
 
 ```sh
-ax routine list
-ax routine run inbox-digest
+ax routine list                 # name, schedule, enabled, last run
+ax routine run inbox-digest     # run now and print the output
+ax routine runs inbox-digest    # recent runs, newest first
+ax routine log inbox-digest     # output of the latest run
+ax routine log inbox-digest 20261028T081500-ab12cd34
 ```
 
 `run` works even when the routine is disabled: that is how you test it before
 enabling the schedule. It prints the status, the log path and the log content;
-a non-zero exit or a timeout exits non-zero.
+a non-zero exit or a timeout exits non-zero. `runs` and `log` read the history
+on disk, so they also show runs started by the scheduler.
 
 The execution environment:
 
@@ -80,18 +84,53 @@ A per-routine lock prevents overlapping runs; a second attempt returns
 ## Scheduling
 
 `webi` is the always-on host and runs the scheduler. Every 30 seconds it loads
-`routines/*/routine.toml`, checks the enabled cron schedules in their timezone,
-and launches the due routines. A run that is still active when the next tick
-arrives is skipped by the lock.
+`routines/*/routine.toml` for the bot root and for every channel workdir,
+checks the enabled cron schedules in their timezone, and launches the due
+routines. A run that is still active when the next tick arrives is skipped by
+the lock.
+
+A channel is a bot directory, so `routines/` and `state/routines/` are
+per-channel: two channels can define a routine with the same name without
+sharing a schedule, a lock or a history. The webi view lists every channel; to
+inspect one from the CLI, point `ax -C <channel workdir>` at it.
 
 `boti` and a plain `ax` run do not schedule; use `ax routine run` from cron or
 another scheduler when there is no `webi` process.
 
-The webi UI has a **Routines** entry: it lists the routines, their schedule,
-last status and last run time; **Run now** executes one manually, and **Log**
-opens the latest output. It calls `GET /api/routines`,
-`POST /api/routines/<name>/run` and `GET /api/routines/<name>/log` behind the
-same token as the rest of the UI.
+## Runs and results
+
+Every run leaves its result on disk, whether it came from cron or from a
+manual click:
+
+```text
+state/routines/<name>/runs/<run-id>/
+  run.json       # id, trigger, status, exit code, error, timestamps, log path
+  output.log     # stdout and stderr, truncated to the last 64 KiB in the UI
+```
+
+`status` is `ok`, `failed`, `timeout`, `interrupted` or `running`. A timeout
+also records the error; a non-zero exit keeps its exit code. If the host dies
+mid-run, the record stays `running`; the next run of that routine rewrites it
+as `interrupted` instead of pretending it finished. The state directory is part
+of the bot's runtime data (`BOT_DATA`), not the definition, so it is safe to
+delete and never travels with `bot.toml`.
+
+The webi UI has a **Routines** entry: it lists every routine with its channel,
+schedule, last status and last run time; **Run now** executes one manually,
+**History** lists the recent runs, and **Log** opens the output of the latest
+run or of a chosen one. The same data is available over HTTP behind the UI
+token:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/routines?channel=<id>` | routines, with their last run |
+| `POST /api/routines/<name>/run?channel=<id>` | run now; `409` if already running |
+| `GET /api/routines/<name>/runs?channel=<id>&limit=20` | recent runs |
+| `GET /api/routines/<name>/log?channel=<id>` | latest run and its output |
+| `GET /api/routines/<name>/runs/<run-id>?channel=<id>` | one run and its output |
+
+Without `channel=` the API falls back to the bot root, which keeps a single-bot
+setup working.
 
 ## What a routine is not
 
@@ -107,5 +146,6 @@ schedule on only after a manual run succeeds.
 
 ## Not implemented yet
 
-Notifications. A run is visible in `run.json`, `output.log`, `ax routine list`
-and the webi Routines view; notifying a channel is a later layer.
+Notifications. A run is visible in `run.json`, `output.log`, `ax routine
+runs|log` and the webi Routines view; pushing a result to a channel is a later
+layer.
