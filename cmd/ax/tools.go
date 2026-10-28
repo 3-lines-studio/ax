@@ -270,7 +270,15 @@ func runExternalTool(ctx context.Context, command, name, arguments, workdir stri
 
 	cmd := exec.CommandContext(runCtx, command, "run", name)
 	cmd.Dir = workdir
-	if len(env) > 0 {
+	// Secrets asked for during the run join the environment of every later
+	// call, never the conversation.
+	if extra := secrets.env(); len(extra) > 0 {
+		if len(env) > 0 {
+			cmd.Env = append(append([]string(nil), env...), extra...)
+		} else {
+			cmd.Env = append(os.Environ(), extra...)
+		}
+	} else if len(env) > 0 {
 		cmd.Env = env
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

@@ -35,9 +35,10 @@ type Server struct {
 	resume   resumeState
 	started  time.Time
 
-	mu   sync.Mutex
-	runs map[string]*axrun.Run
-	subs map[chan []byte]struct{}
+	mu      sync.Mutex
+	runs    map[string]*axrun.Run
+	subs    map[chan []byte]struct{}
+	pending map[string]pendingSecret
 }
 
 func NewServer(store *Store, cfg axrun.Config, stateDir string, static http.Handler) *Server {
@@ -172,13 +173,14 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 		"compact_at":  firstNonZeroFloat(settings.CompactAt, 0.5),
 	}
 	writeJSON(w, 200, map[string]any{
-		"user":     "",
-		"build":    "webi",
-		"version":  Version,
-		"uptime":   int(time.Since(s.started).Seconds()),
-		"vault":    s.vault.Status(),
-		"config":   config,
-		"channels": out,
+		"user":           "",
+		"build":          "webi",
+		"version":        Version,
+		"uptime":         int(time.Since(s.started).Seconds()),
+		"vault":          s.vault.Status(),
+		"pending_secret": s.pendingSecrets(),
+		"config":         config,
+		"channels":       out,
 	})
 }
 
@@ -552,6 +554,8 @@ func (s *Server) forwardEvent(threadID string, event axrun.Event) {
 		s.publish(map[string]any{"type": "step", "thread": threadID, "tool": target})
 	case "compaction":
 		s.publish(map[string]any{"type": "compact", "thread": threadID, "upto": event.Upto})
+	case "secret_request":
+		s.addPendingSecret(threadID, event)
 	}
 }
 

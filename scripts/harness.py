@@ -119,6 +119,11 @@ CONNECTION_SCENARIO = [
     {"stream": [content_chunk("done.", "stop"), usage_chunk(20, 8)]},
 ]
 
+ASK_SCENARIO = [
+    {"stream": [tool_chunk("execute", {"tool": "askprovider.need", "arguments": {}}), usage_chunk(10, 5)]},
+    {"stream": [content_chunk("token used.", "stop"), usage_chunk(20, 8)]},
+]
+
 DIRECT_SCENARIO = [
     {"stream": [tool_chunk("bash", {"command": "printf direct > direct.txt"}), usage_chunk(10, 5)]},
     {"stream": [content_chunk("direct done.", "stop"), usage_chunk(20, 8)]},
@@ -311,6 +316,41 @@ class Harness:
             yield srv
         finally:
             srv.stop()
+
+    def interactive(self, ax, args, respond, base=None, extra_env=None, timeout=60):
+        """Run ax with pipes and answer its events while it runs.
+
+        `respond(line, proc)` is called for every stdout line, which is how a
+        host answers a secret_request or steers a run mid-flight.
+        """
+        if base:
+            args = ["-base", base] + args
+        proc = subprocess.Popen(
+            [ax] + args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=self.env(extra=extra_env),
+            cwd=str(self.work),
+        )
+        lines = []
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            text = line.decode("utf-8", "replace")
+            lines.append(text)
+            respond(text, proc)
+        try:
+            proc.stdin.close()
+        except OSError:
+            pass
+        stderr = proc.stderr.read().decode("utf-8", "replace")
+        proc.wait(timeout=timeout)
+        return subprocess.CompletedProcess(
+            proc.args, proc.returncode, "".join(lines), stderr
+        )
 
     def oneshot(self, ax, args, stdin=None, base=None, api_key="sk-test", extra_env=None):
         if base:
@@ -808,6 +848,58 @@ def oneshot_resume(h, ax):
     again = h.oneshot(ax, ["--resume", "--session", str(session)], stdin=b"")
     check(again.returncode == 2, "resuming a finished session must fail: %s" % again.returncode)
     check("no interrupted run" in again.stderr, "stderr = %s" % again.stderr)
+
+
+@case
+def oneshot_secret_request(h, ax):
+    provider = h.root / "askprovider"
+    provider.write_text(
+        """#!/usr/bin/python3
+import json, os, sys
+if len(sys.argv) > 1 and sys.argv[1] == "describe":
+    print(json.dumps({"name": "need", "description": "Needs a token", "parameters": {"type": "object", "properties": {}}}))
+    sys.exit(0)
+if len(sys.argv) > 2 and sys.argv[1] == "run" and sys.argv[2] == "need":
+    token = os.environ.get("DEMO_TOKEN", "")
+    if not token:
+        print(json.dumps({"ask": {"name": "DEMO_TOKEN", "description": "demo token"}}))
+        sys.exit(0)
+    print("ok:%d" % len(token))
+    sys.exit(0)
+sys.exit(1)
+"""
+    )
+    provider.chmod(0o755)
+    session = h.root / "ask.jsonl"
+    answered = []
+
+    def answer(text, proc):
+        if '"type":"secret_request"' not in text or answered:
+            return
+        answered.append(True)
+        proc.stdin.write(b'{"type":"secret","name":"DEMO_TOKEN","value":"s3cret-value"}\n')
+        proc.stdin.flush()
+
+    with h.mock(ASK_SCENARIO) as srv:
+        p = h.interactive(
+            ax,
+            ["--events", "--session", str(session), "use the tool"],
+            answer,
+            base=srv.base_url,
+            extra_env={"AX_TOOLS": str(provider)},
+        )
+        check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        events = read_events(p)
+        asks = [e for e in events if e.get("type") == "secret_request"]
+        check(len(asks) == 1, "no secret_request: %s" % [e.get("type") for e in events])
+        check(asks[0]["name"] == "DEMO_TOKEN", "request = %s" % asks[0])
+        check(asks[0]["tool"] == "askprovider.need", "request tool = %s" % asks[0])
+        tool_msgs = [m.get("content", "") for m in body_msg(srv, 1, "tool")]
+        check(any("ok:" in m for m in tool_msgs), "the retry did not run: %s" % tool_msgs)
+        check(not any("ask" in m for m in tool_msgs), "the envelope reached the model: %s" % tool_msgs)
+    log = session.read_text()
+    check('"ask"' not in log, "the envelope was written to the session")
+    check("s3cret-value" not in log, "the secret leaked into the session log")
 
 
 @case

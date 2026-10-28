@@ -97,6 +97,8 @@ type runSink interface {
 	tool(turn int, msg Message)
 	// steer records a user message that arrived while the run was going.
 	steer(msg Message)
+	// secretRequest announces that a tool needs a value only the host can give.
+	secretRequest(call ToolCall, ask secretAsk)
 }
 
 type runOptions struct {
