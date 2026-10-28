@@ -214,6 +214,15 @@ fact under `state/memory/` and exposes `search`, `get`, `verify`, `upsert` and
 across sessions. The data is readable and exportable; see
 [docs/memory.md](../../docs/memory.md).
 
+### Routines
+
+`routines/<name>/routine.toml` declares deterministic code: an executable
+entry, an optional cron schedule, a timezone and a timeout. The model writes
+and debugs it; running it does not call the model. `webi` runs enabled
+schedules; `ax routine list` and `ax routine run NAME` work without a model or
+an API key. State and logs live under `state/routines/<name>/`. See
+[docs/routines.md](../../docs/routines.md).
+
 ### MCP servers
 
 ```toml

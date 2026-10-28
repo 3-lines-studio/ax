@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/3-lines-studio/ax/internal/axrun"
 	"github.com/3-lines-studio/ax/internal/botdir"
+	"github.com/3-lines-studio/ax/internal/routine"
 )
 
 func main() {
@@ -132,6 +134,9 @@ func main() {
 		slog.Info("webi: first visit needs ?token= from", "file", tokenPath)
 	}
 	announce(listener, token, *open)
+	schedCtx, stopScheduler := context.WithCancel(context.Background())
+	defer stopScheduler()
+	go routine.NewScheduler(paths).Run(schedCtx)
 	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)

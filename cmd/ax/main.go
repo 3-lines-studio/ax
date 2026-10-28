@@ -140,6 +140,9 @@ func main() {
 		case "mcp":
 			runMCPCommand(fc, bot, prompt[1:])
 			return
+		case "routine":
+			runRoutineCommand(bot, prompt[1:])
+			return
 		}
 	}
 	oneShotEvents(cfg, fc, bot, prompt)

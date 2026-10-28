@@ -157,8 +157,11 @@ LLM host ──▶ ax ──┬──▶ provider describe / provider run (fsx, 
   Slack on one side and ax's process protocol on the other.
 - **boti** is the host loader: a bot is a directory with `bot.toml`, and `boti`
   installs what it declares, wires the environment and execs the consumer.
-  Consumers, hosts and providers derive `workspace/`, `skills/`, `state/`,
-  `run/` and `secrets/` from the bot root by convention.
+  Consumers, hosts and providers derive `workspace/`, `skills/`, `routines/`,
+  `state/`, `run/` and `secrets/` from the bot root by convention.
+- **Routines** are deterministic executables under `routines/`; `webi` runs
+  enabled cron schedules with no model in the loop. See
+  [docs/routines.md](docs/routines.md).
 
 ## Repository layout
 
@@ -200,6 +203,8 @@ are no per-program tags, and no per-program assets to map by name.
 - [docs/session.md](docs/session.md) — the durable session log contract.
 - [docs/memory.md](docs/memory.md) — personal memory as runtime data and the
   `memoryx` tools.
+- [docs/routines.md](docs/routines.md) — deterministic routines: executable
+  entries, cron schedules and run logs, with no model in the loop.
 - [docs/deploy.md](docs/deploy.md) — systemd, container, and what goes in front.
 - [docs/botdir/](docs/botdir/README.md) — the Botdir specification and guide.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — development workflow and conventions.
