@@ -99,7 +99,7 @@ func TestCatalogSystemPromptAddsBotInstructions(t *testing.T) {
 	cat := testCatalog(t)
 	bot := &botCtx{Workspace: "/work", Prompt: "answer in haiku"}
 	prompt := buildCatalogSystemPrompt("/work", bot, cat, nil)
-	if !strings.Contains(prompt, "## Bot instructions\nanswer in haiku") {
+	if !strings.Contains(prompt, "## Bot instructions\nFollow these instructions exactly.\nanswer in haiku") {
 		t.Errorf("bot instructions missing:\n%s", prompt)
 	}
 }
