@@ -28,17 +28,19 @@ connection is a failure, because every run would hit it.
 
 ## systemd: the app
 
-For one bot and no supervisor, let webi write its own unit:
+For one bot and no supervisor, let webi install its own autostart entry:
 
 ```sh
-webi -C ~/bots/me -listen 0.0.0.0:8377 setup
+webi setup
 ```
 
-It writes `~/.config/systemd/user/webi.service`, enables and starts it, and
-prints the token URL. `systemctl --user status webi` and `journalctl --user
--u webi` are the familiar tools. A restart asks for the vault PIN. On a host
-where the user is not always logged in, `loginctl enable-linger <user>` keeps
-the unit running at boot.
+It asks whether other devices may connect, writes a systemd user unit on
+Linux or a LaunchAgent on macOS, starts it and prints the token URL.
+`systemctl --user status webi` (Linux) or `launchctl print
+gui/$UID/studio.3-lines.ax.webi` (macOS) are the familiar tools. A restart
+asks for the vault PIN. On Linux, where the user is not always logged in,
+`loginctl enable-linger <user>` keeps the unit running at boot. Pass `-C` to
+keep a bot in an existing directory (the migration case).
 
 ## systemd: supervised (boti serve)
 

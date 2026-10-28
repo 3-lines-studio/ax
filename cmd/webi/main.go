@@ -22,9 +22,9 @@ import (
 )
 
 func main() {
-	listen := flag.String("listen", "127.0.0.1:8377", "address to serve the UI on")
+	listen := flag.String("listen", "127.0.0.1:8377", "address to serve the UI on (setup asks about other devices)")
 	stateDir := flag.String("state", "", "state directory (default <BOT_DATA>/state/webi)")
-	botRoot := flag.String("C", "", "bot directory (default: current directory)")
+	botRoot := flag.String("C", "", "bot directory (default: the per-user app directory)")
 	axPath := flag.String("ax", "ax", "path to the ax binary")
 	baseURL := flag.String("base", "", "override the model endpoint for every run")
 	model := flag.String("model", "", "override the model for every run")

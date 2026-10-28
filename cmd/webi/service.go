@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/xml"
 	"fmt"
 	"net"
 	"os"
@@ -15,7 +18,10 @@ import (
 	"github.com/3-lines-studio/ax/internal/botdir"
 )
 
-const serviceName = "webi.service"
+const (
+	serviceName = "webi.service"
+	launchLabel = "studio.3-lines.ax.webi"
+)
 
 type setupOptions struct {
 	Root   string
@@ -26,15 +32,28 @@ type setupOptions struct {
 	Wait   time.Duration
 }
 
-// runSetup installs a systemd user unit for this webi and starts it. It is the
+type serviceSpec struct {
+	Webi   string
+	Ax     string
+	Root   string
+	State  string
+	Listen string
+}
+
+func (s serviceSpec) args() []string {
+	args := []string{s.Webi, "-C", s.Root, "-listen", s.Listen, "-ax", s.Ax, "-open=false"}
+	if s.State != "" {
+		args = append(args, "-state", s.State)
+	}
+	return args
+}
+
+// runSetup installs an autostart entry for this webi and starts it. It is the
 // one-time step that turns the command into an app: after it, the UI is at the
 // printed URL and comes back with the session.
 func runSetup(opts setupOptions) error {
-	if runtime.GOOS != "linux" {
-		return fmt.Errorf("webi setup installs a systemd user unit; on %s start webi in a terminal or add it to your login items", runtime.GOOS)
-	}
-	if _, err := exec.LookPath("systemctl"); err != nil {
-		return fmt.Errorf("systemctl not found: start webi in a terminal instead")
+	if err := checkAutostart(); err != nil {
+		return err
 	}
 	root, fresh, err := resolveRoot(opts.Root)
 	if err != nil {
@@ -82,62 +101,157 @@ func runSetup(opts setupOptions) error {
 	if resolved, err := filepath.EvalSymlinks(self); err == nil {
 		self = resolved
 	}
-	changed, err := installUnit(serviceUnit(self, ax, root, state, opts.Listen))
+	listen := opts.Listen
+	if listen == "" {
+		listen = askListen()
+	}
+	spec := serviceSpec{Webi: self, Ax: ax, Root: root, State: state, Listen: listen}
+	active, changed, err := installAutostart(spec)
 	if err != nil {
 		return err
 	}
-	if err := exec.Command("systemctl", "--user", "daemon-reload").Run(); err != nil {
-		return fmt.Errorf("systemctl daemon-reload: %w", err)
+	if !active && opts.Wait > 0 && !waitListening(listen, opts.Wait) {
+		return fmt.Errorf("the service did not answer on %s; check: %s", listen, statusHint())
 	}
-	active := exec.Command("systemctl", "--user", "is-active", "--quiet", serviceName).Run() == nil
-	if !active {
-		if portInUse(opts.Listen) {
-			return fmt.Errorf("%s is already in use; stop the service that owns it, then run webi setup again", opts.Listen)
-		}
-		if out, err := exec.Command("systemctl", "--user", "enable", "--now", serviceName).CombinedOutput(); err != nil {
-			return fmt.Errorf("systemctl enable --now %s: %v: %s", serviceName, err, strings.TrimSpace(string(out)))
-		}
-		if opts.Wait > 0 && !waitListening(opts.Listen, opts.Wait) {
-			return fmt.Errorf("the service did not answer on %s; check: systemctl --user status %s", opts.Listen, serviceName)
-		}
-	} else if changed {
-		fmt.Fprintf(os.Stderr, "unit updated; restart it with: systemctl --user restart %s\n", serviceName)
+	if active && changed {
+		fmt.Fprintf(os.Stderr, "the settings changed; restart it with: %s\n", restartHint())
 	}
-	host, port := splitListen(opts.Listen)
+	host, port := splitListen(listen)
 	printURLs(host, port, token, opts.Open, tokenPath)
-	if !active {
+	if runtime.GOOS == "linux" && !active {
 		hintLinger()
 	}
 	return nil
 }
 
-// installUnit reports whether the unit changed, so a running service can be
-// told to restart instead of silently keeping the old flags.
+// askListen chooses the one setting a consumer should not have to know. A
+// terminal gets a yes/no question; a script gets loopback.
+func askListen() string {
+	if !isTerminal(os.Stdin) {
+		return "127.0.0.1:8377"
+	}
+	fmt.Fprint(os.Stdout, "\n  Use it from your phone or another computer on this network? [y/N] ")
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
+		return "0.0.0.0:8377"
+	}
+	return "127.0.0.1:8377"
+}
+
+func checkAutostart() error {
+	switch runtime.GOOS {
+	case "linux":
+		if _, err := exec.LookPath("systemctl"); err != nil {
+			return fmt.Errorf("systemctl not found: start webi in a terminal instead")
+		}
+	case "darwin":
+		if _, err := exec.LookPath("launchctl"); err != nil {
+			return fmt.Errorf("launchctl not found: start webi in a terminal instead")
+		}
+	default:
+		return fmt.Errorf("automatic start is not available on %s; run webi at login", runtime.GOOS)
+	}
+	return nil
+}
+
+func installAutostart(spec serviceSpec) (active, changed bool, err error) {
+	switch runtime.GOOS {
+	case "linux":
+		return installSystemd(spec)
+	case "darwin":
+		return installLaunchd(spec)
+	default:
+		return false, false, fmt.Errorf("automatic start is not available on %s; run webi at login", runtime.GOOS)
+	}
+}
+
+func installSystemd(spec serviceSpec) (active, changed bool, err error) {
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return false, false, fmt.Errorf("systemctl not found: start webi in a terminal instead")
+	}
+	changed, err = installUnit(serviceUnit(spec))
+	if err != nil {
+		return false, false, err
+	}
+	if err := exec.Command("systemctl", "--user", "daemon-reload").Run(); err != nil {
+		return false, false, fmt.Errorf("systemctl daemon-reload: %w", err)
+	}
+	active = exec.Command("systemctl", "--user", "is-active", "--quiet", serviceName).Run() == nil
+	if !active {
+		if portInUse(spec.Listen) {
+			return false, changed, fmt.Errorf("%s is already in use; stop the service that owns it, then run webi setup again", spec.Listen)
+		}
+		if out, err := exec.Command("systemctl", "--user", "enable", "--now", serviceName).CombinedOutput(); err != nil {
+			return false, changed, fmt.Errorf("systemctl enable --now %s: %v: %s", serviceName, err, strings.TrimSpace(string(out)))
+		}
+	}
+	return active, changed, nil
+}
+
+func installLaunchd(spec serviceSpec) (active, changed bool, err error) {
+	if _, err := exec.LookPath("launchctl"); err != nil {
+		return false, false, fmt.Errorf("launchctl not found: start webi in a terminal instead")
+	}
+	path, err := launchAgentPath()
+	if err != nil {
+		return false, false, err
+	}
+	changed, err = installFile(path, launchAgent(spec), 0o644)
+	if err != nil {
+		return false, false, err
+	}
+	domain := fmt.Sprintf("gui/%d", os.Getuid())
+	active = exec.Command("launchctl", "print", domain+"/"+launchLabel).Run() == nil
+	if active && changed {
+		_ = exec.Command("launchctl", "bootout", domain+"/"+launchLabel).Run()
+		active = false
+	}
+	if !active {
+		if portInUse(spec.Listen) {
+			return false, changed, fmt.Errorf("%s is already in use; stop the service that owns it, then run webi setup again", spec.Listen)
+		}
+		if out, err := exec.Command("launchctl", "bootstrap", domain, path).CombinedOutput(); err != nil {
+			return false, changed, fmt.Errorf("launchctl bootstrap: %v: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+	return active, changed, nil
+}
+
 func installUnit(unit string) (bool, error) {
 	dir, err := userConfigDir()
 	if err != nil {
 		return false, err
 	}
-	dir = filepath.Join(dir, "systemd", "user")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	return installFile(filepath.Join(dir, "systemd", "user", serviceName), unit, 0o644)
+}
+
+func installFile(path, content string, mode os.FileMode) (bool, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return false, err
 	}
-	path := filepath.Join(dir, serviceName)
-	if old, err := os.ReadFile(path); err == nil && string(old) == unit {
+	if old, err := os.ReadFile(path); err == nil && string(old) == content {
 		return false, nil
 	}
-	if err := writeFileAtomic(path, []byte(unit), 0o644); err != nil {
+	if err := writeFileAtomic(path, []byte(content), mode); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func serviceUnit(webi, ax, root, state, listen string) string {
-	args := []string{systemdArg(webi), "-C", systemdArg(root), "-listen", systemdArg(listen), "-ax", systemdArg(ax), "-open=false"}
-	if state != "" {
-		args = append(args, "-state", systemdArg(state))
+func launchAgentPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
 	}
-	env := "Environment=PATH=" + systemdArg(filepath.Dir(webi)+":"+filepath.Dir(ax)+":/usr/local/bin:/usr/bin:/bin")
+	return filepath.Join(home, "Library", "LaunchAgents", launchLabel+".plist"), nil
+}
+
+func serviceUnit(spec serviceSpec) string {
+	args := make([]string, 0, len(spec.args()))
+	for _, arg := range spec.args() {
+		args = append(args, systemdArg(arg))
+	}
+	env := "Environment=PATH=" + systemdArg(filepath.Dir(spec.Webi)+":"+filepath.Dir(spec.Ax)+":/usr/local/bin:/usr/bin:/bin")
 	if data := os.Getenv("BOT_DATA"); data != "" {
 		env += "\nEnvironment=BOT_DATA=" + systemdArg(data)
 	}
@@ -158,7 +272,42 @@ TimeoutStopSec=120
 
 [Install]
 WantedBy=default.target
-`, systemdArg(root), strings.Join(args, " "), env)
+`, systemdArg(spec.Root), strings.Join(args, " "), env)
+}
+
+// launchAgent is the macOS equivalent of the systemd unit. KeepAlive brings
+// the UI back after a crash; RunAtLoad starts it with the session.
+func launchAgent(spec serviceSpec) string {
+	var args bytes.Buffer
+	for _, arg := range spec.args() {
+		fmt.Fprintf(&args, "<string>%s</string>", xmlEscape(arg))
+	}
+	env := fmt.Sprintf("<key>PATH</key><string>%s</string>", xmlEscape(filepath.Dir(spec.Webi)+":"+filepath.Dir(spec.Ax)+":/usr/local/bin:/usr/bin:/bin"))
+	if data := os.Getenv("BOT_DATA"); data != "" {
+		env += fmt.Sprintf("<key>BOT_DATA</key><string>%s</string>", xmlEscape(data))
+	}
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>%s</string>
+  <key>ProgramArguments</key><array>%s</array>
+  <key>WorkingDirectory</key><string>%s</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>StandardOutPath</key><string>%s</string>
+  <key>StandardErrorPath</key><string>%s</string>
+  <key>EnvironmentVariables</key><dict>%s</dict>
+</dict>
+</plist>
+`, launchLabel, args.String(), xmlEscape(spec.Root), xmlEscape(filepath.Join(spec.State, "webi.log")), xmlEscape(filepath.Join(spec.State, "webi.log")), env)
+}
+
+func xmlEscape(value string) string {
+	var buf bytes.Buffer
+	_ = xml.EscapeText(&buf, []byte(value))
+	return buf.String()
 }
 
 func systemdArg(value string) string {
@@ -225,6 +374,24 @@ func portInUse(addr string) bool {
 	}
 	_ = conn.Close()
 	return true
+}
+
+func statusHint() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return fmt.Sprintf("launchctl print gui/%d/%s", os.Getuid(), launchLabel)
+	default:
+		return "systemctl --user status " + serviceName
+	}
+}
+
+func restartHint() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return fmt.Sprintf("launchctl kickstart -k gui/%d/%s", os.Getuid(), launchLabel)
+	default:
+		return "systemctl --user restart " + serviceName
+	}
 }
 
 func hintLinger() {
