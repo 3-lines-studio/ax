@@ -3,11 +3,13 @@ package main
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"time"
 )
 
 // starterBot is written when webi creates a bot directory, so tools get a
@@ -63,6 +65,31 @@ func printURLs(host string, port int, token string, open bool, tokenPath string)
 	if open {
 		openBrowser(local)
 	}
+}
+
+// alreadyServes reports whether a webi with this token is already answering on
+// the address. Typing webi again then opens the running app instead of failing
+// with "address already in use".
+func alreadyServes(listen, token string) bool {
+	host, port := splitListen(listen)
+	if port == 0 {
+		return false
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	request, err := http.NewRequest(http.MethodGet, "http://"+net.JoinHostPort(host, strconv.Itoa(port))+"/api/state", nil)
+	if err != nil {
+		return false
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	client := &http.Client{Timeout: time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = response.Body.Close() }()
+	return response.StatusCode == http.StatusOK
 }
 
 func isTerminal(file *os.File) bool {

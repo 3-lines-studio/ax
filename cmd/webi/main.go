@@ -71,10 +71,6 @@ func main() {
 	if *selftest {
 		os.Exit(runSelftest(root, state, *axPath, os.Stdout, os.Stderr))
 	}
-	if _, err := exec.LookPath(*axPath); err != nil {
-		fmt.Fprintf(os.Stderr, "webi: cannot find ax (%s); install it with `install.sh ax` or pass -ax\n", *axPath)
-		os.Exit(1)
-	}
 	store, err := NewStore(state)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -97,6 +93,15 @@ func main() {
 	token, tokenPath, err := loadToken(state)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	if alreadyServes(*listen, token) {
+		host, port := splitListen(*listen)
+		printURLs(host, port, token, *open, tokenPath)
+		return
+	}
+	if _, err := exec.LookPath(*axPath); err != nil {
+		fmt.Fprintf(os.Stderr, "webi: cannot find ax (%s); install it with `install.sh ax` or pass -ax\n", *axPath)
 		os.Exit(1)
 	}
 	srv.token = token
