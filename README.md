@@ -63,17 +63,30 @@ the key kept across restarts) is in [docs/deploy.md](docs/deploy.md).
 
 ## CLI quick start
 
+In a bot directory, declare the local providers in `bot.toml`:
+
+```toml
+[[connection]]
+id = "fsx"
+kind = "local"
+command = "fsx"
+
+[[connection]]
+id = "bashx"
+kind = "local"
+command = "bashx"
+```
+
 ```sh
 DEEPSEEK_API_KEY=... ax "explain this repository"
-AX_TOOLS="fsx bashx skillx" ax
 ax catalog                     # what is on the plate
 ```
 
 `ax` defaults to DeepSeek (`deepseek-flash` at `https://api.deepseek.com`) and
 accepts any OpenAI-compatible endpoint with `-base` (OpenAI, OpenRouter, Ollama,
-vLLM). Capabilities come from a catalog: local providers (`AX_TOOLS`) and MCP
-servers (`[[connection]]` in `bot.toml`, added with `ax mcp add` or imported from an
-`mcp.json`/Cursor plugin, OAuth included). The model sees two tools, `search`
+vLLM). Capabilities come from a catalog: local providers and MCP servers are
+`[[connection]]` entries in `bot.toml` (MCP servers can be added with `ax mcp add`
+or imported from an `mcp.json`/Cursor plugin, OAuth included). The model sees two tools, `search`
 and `execute`, so adding integrations does not grow the prompt. See
 [docs/mcp.md](docs/mcp.md).
 

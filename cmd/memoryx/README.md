@@ -29,10 +29,13 @@ Search is lexical and local; there is no embedding model and no network call.
 `dedupe_key` makes an upsert update the same fact instead of duplicating it.
 `delete` is a soft delete; `force` removes the file.
 
-Add it to the bot's tools:
+Declare it as a local connection in the bot's `bot.toml`:
 
 ```toml
-tools = ["fsx", "bashx", "skillx", "memoryx"]
+[[connection]]
+id = "memoryx"
+kind = "local"
+command = "memoryx"
 ```
 
 ## Build

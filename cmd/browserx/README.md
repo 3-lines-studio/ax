@@ -20,7 +20,13 @@ Set the artifact directory and register Browserx:
 
 ```sh
 export BROWSERX_ARTIFACT_DIR="$HOME/.local/share/browserx/artifacts"
-export AX_TOOLS=browserx
+```
+
+```toml
+[[connection]]
+id = "browserx"
+kind = "local"
+command = "browserx"
 ```
 
 Override the CDP endpoint with `BROWSERX_CDP_URL`.

@@ -5,7 +5,7 @@ clients. One static binary, stdlib HTTP, no built-in tools.
 
 `ax` is the engine of the [AX ecosystem](../../README.md). It runs a prompt,
 streams JSONL events on stdout and exits. Capabilities come from a catalog:
-MCP servers plus local describe/run providers registered through `AX_TOOLS`.
+MCP servers plus local describe/run providers declared as `[[connection]]` entries.
 The model sees two tools, `search` and `execute`, instead of a tool list.
 
 The default provider is DeepSeek: `https://api.deepseek.com` with
@@ -36,13 +36,27 @@ current directory (or `-C DIR`); it reads `bot.toml` there:
 ```toml
 model = "deepseek-flash"
 base_url = "https://api.deepseek.com"
-tools = ["fsx", "bashx", "skillx"]
 core_tools = ["fsx.read", "fsx.write", "fsx.edit", "bashx.bash"]
 thinking = true
 reasoning_effort = "max"
 max_tokens = 65536
 compact_at = 0.5
 context_window = 1000000
+
+[[connection]]
+id = "fsx"
+kind = "local"
+command = "fsx"
+
+[[connection]]
+id = "bashx"
+kind = "local"
+command = "bashx"
+
+[[connection]]
+id = "skillx"
+kind = "local"
+command = "skillx"
 
 [[connection]]
 id = "github"
@@ -54,14 +68,13 @@ pass_env = ["GITHUB_TOKEN"]
 
 Every key is optional. The API key comes from `DEEPSEEK_API_KEY`, then
 `OPENAI_API_KEY`, then `secrets/api-key`, then `~/.config/ax/config`.
-Precedence is **flags > `bot.toml` > `~/.config/ax/config` > defaults**;
-`AX_TOOLS` comes from the environment and overrides `tools`. When the bot root
-has `workspace/`, the model and tools run there.
+Precedence is **flags > `bot.toml` > `~/.config/ax/config` > defaults**.
+When the bot root has `workspace/`, the model and tools run there.
 
-`~/.config/ax/config` is a plain `key=value` file with the same keys as the
-`bot.toml` fields above (`api_key`, `model`, `base`, `tools`, `thinking`,
-`effort`, `max_tokens`, `image_detail`, `tool_mode`, `core_tools`, `compact_at`,
-`context_window`).
+`~/.config/ax/config` is a plain `key=value` file with the scalar keys from
+`bot.toml` (`api_key`, `model`, `base`, `thinking`, `effort`, `max_tokens`,
+`image_detail`, `tool_mode`, `core_tools`, `compact_at`, `context_window`).
+Connections stay in `bot.toml`.
 
 ## Context compaction
 
@@ -165,9 +178,9 @@ key         = "secrets/id_ed25519"
 known_hosts = "secrets/known_hosts"
 compute     = true
 ``` The
-older spellings still work and keep their ids: `tools`/`AX_TOOLS` become
-`kind = "local"` and `[[mcp]]` becomes `kind = "mcp-*"`; `ax mcp add` and
-`ax mcp import` write the connection form.
+The legacy spellings are still accepted and keep their ids: `tools`/`AX_TOOLS`
+become `kind = "local"` and `[[mcp]]` becomes `kind = "mcp-*"`; new bots should
+use `[[connection]]`. `ax mcp add` and `ax mcp import` write the connection form.
 
 The model always sees two tools:
 
@@ -180,7 +193,7 @@ The model always sees two tools:
   arguments against the tool schema before calling anything.
 
 ```sh
-AX_TOOLS="fsx bashx skillx" ax "read main.go and add the missing test"
+ax "read main.go and add the missing test"   # bot.toml has fsx, bashx, skillx
 ax catalog                     # the same index, from the shell
 ax catalog --json              # machine-readable
 ax catalog --refresh           # bypass the MCP catalog cache
@@ -197,8 +210,9 @@ Tool mechanics belong in the tool descriptions, and long procedures belong in
 
 `memoryx` is the optional personal-memory provider. It keeps one JSON file per
 fact under `state/memory/` and exposes `search`, `get`, `verify`, `upsert` and
-`delete`; add it to `tools` when the bot should remember preferences across
-sessions. The data is readable and exportable; see [docs/memory.md](../../docs/memory.md).
+`delete`; declare a local connection when the bot should remember preferences
+across sessions. The data is readable and exportable; see
+[docs/memory.md](../../docs/memory.md).
 
 ### MCP servers
 

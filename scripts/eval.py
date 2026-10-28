@@ -36,7 +36,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # repository root
-TOOLS = ("ax", "fsx", "bashx", "skillx")
+TOOLS = ("ax", "fsx", "bashx", "skillx", "memoryx")
 BASE_URL = os.environ.get("AX_BASE_URL") or "https://api.deepseek.com"
 MODEL = os.environ.get("AX_MODEL") or "deepseek-flash"
 TOOL_MODE = os.environ.get("AX_TOOL_MODE") or "catalog"
@@ -84,11 +84,10 @@ class Bot:
         self.root = Path(root)
         for d in ("workspace", "skills", "secrets"):
             (self.root / d).mkdir(parents=True, exist_ok=True)
-        self.write("bot.toml", "model = %r\nbase_url = %r\ntools = %r\n" % (
-            MODEL,
-            BASE_URL,
-            ["fsx", "bashx", "skillx"],
-        ))
+        config = "model = %r\nbase_url = %r\n" % (MODEL, BASE_URL)
+        for name in ("fsx", "bashx", "skillx", "memoryx"):
+            config += '\n[[connection]]\nid = "%s"\nkind = "local"\ncommand = "%s"\n' % (name, name)
+        self.write("bot.toml", config)
         self.events = []
         self.runs = []
 
@@ -101,7 +100,6 @@ class Bot:
         env = os.environ.copy()
         env["DEEPSEEK_API_KEY"] = os.environ["DEEPSEEK_API_KEY"]
         env["BOT_ROOT"] = str(self.root)
-        env["AX_TOOLS"] = "fsx bashx skillx"
         env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
         for k, v in (extra_env or {}).items():
             env[k] = v
@@ -202,6 +200,17 @@ def skill_use(bot, bin_dir):
     events = bot.run("Use the hello skill.", bin_dir)
     check(outcome(events) == "done", "outcome=%s" % outcome(events))
     check(artifact(bot.root / "workspace/skill-marker.txt").strip() == "marker", "skill not followed")
+
+
+@scenario
+def memory_recall(bot, bin_dir):
+    bot.run("Remember that my timezone is UTC-3. Save it in memory.", bin_dir)
+    events = bot.run("What is my timezone?", bin_dir)
+    check(outcome(events) == "done", "outcome=%s" % outcome(events))
+    answer = assistant_text(events)
+    check("UTC-3" in answer or "UTC−3" in answer, "answer does not use memory: %r" % answer[-300:])
+    files = list((bot.root / "state" / "memory").glob("*.json"))
+    check(len(files) == 1, "memory files = %d" % len(files))
 
 
 @scenario
