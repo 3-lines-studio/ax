@@ -18,8 +18,9 @@ user can fix it instead of silently losing facts.
 
 ### Per channel
 
-A channel is a bot, and a host runs each channel with `BOT_DATA` set to the
-channel's own workdir. Memory therefore follows the channel:
+A host runs each channel with `BOT_DATA` set to the channel's own workdir, so
+memory follows the channel. The bot root (`bot.toml`, `bot.md`, `skills/`) is
+the host's unless the channel has its own `bot.toml`:
 
 ```text
 /channels/work/state/memory/       # channel "work"

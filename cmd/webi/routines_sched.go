@@ -10,18 +10,19 @@ import (
 	"github.com/3-lines-studio/ax/internal/routine"
 )
 
-// routineScheduler runs the routines of every channel, not just the bot root.
-// A channel is a bot directory, so each workdir gets its own scheduler and its
-// own per-minute dedupe state.
+// routineScheduler runs routines per channel. Definitions come from the host
+// bot.toml (or a channel's own bot.toml/routines), while every channel keeps
+// its own scheduler, run history and per-minute dedupe state.
 type routineScheduler struct {
-	store   *Store
-	publish func(Channel, routine.Routine, routine.RunResult)
-	mu      sync.Mutex
-	scheds  map[string]*routine.Scheduler
+	store    *Store
+	hostRoot string
+	publish  func(Channel, routine.Routine, routine.RunResult)
+	mu       sync.Mutex
+	scheds   map[string]*routine.Scheduler
 }
 
-func newRoutineScheduler(store *Store, publish func(Channel, routine.Routine, routine.RunResult)) *routineScheduler {
-	return &routineScheduler{store: store, publish: publish, scheds: map[string]*routine.Scheduler{}}
+func newRoutineScheduler(store *Store, hostRoot string, publish func(Channel, routine.Routine, routine.RunResult)) *routineScheduler {
+	return &routineScheduler{store: store, hostRoot: hostRoot, publish: publish, scheds: map[string]*routine.Scheduler{}}
 }
 
 func (s *routineScheduler) Run(ctx context.Context) {
@@ -40,8 +41,8 @@ func (s *routineScheduler) Run(ctx context.Context) {
 
 func (s *routineScheduler) tick(ctx context.Context, now time.Time) {
 	for _, channel := range s.store.Channels() {
-		paths := channelPaths(channel)
-		key := paths.Root
+		paths := resolveChannelPaths(s.hostRoot, channel)
+		key := paths.DataRoot
 		s.mu.Lock()
 		sched := s.scheds[key]
 		if sched == nil {
