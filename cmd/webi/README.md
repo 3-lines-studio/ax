@@ -62,8 +62,8 @@ only, no inline script), `nosniff` and no referrer.
   `bot.toml`, `bot.md` and `skills/` come from the host. A channel folder with
   its own `bot.toml` is a standalone bot and keeps using it; otherwise the host
   config is the default. The channel workdir is the data root: ax works in its
-  `workspace/` when that exists, otherwise in the folder itself, and its
-  `state/` holds memory and routines. The run also gets `AX_WEB_CHANNEL`,
+  `workspace/` subdirectory, and its `state/` holds memory and routines. You do
+  not need a `bot.toml` in a channel folder; the host's is the default. The run also gets `AX_WEB_CHANNEL`,
   `AX_WEB_THREAD`, their names and titles, the user's name and `AX_WEB_PROMPT`
   (channel instructions); ax folds them into the runtime section of its system
   prompt. Edit channel changes the folder (it must be absolute and exist).
