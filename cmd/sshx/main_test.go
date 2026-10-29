@@ -291,6 +291,21 @@ func TestPathsOutsideTheRootAreRejected(t *testing.T) {
 	}
 }
 
+func TestSplitHostTakesTheLoginOutOfTheAddress(t *testing.T) {
+	t.Setenv("USER", "fallback")
+	cases := []struct{ raw, address, login string }{
+		{"example.com:22", "example.com:22", "fallback"},
+		{"ax@example.com:22", "example.com:22", "ax"},
+		{"ax@10.0.0.1", "10.0.0.1", "ax"},
+	}
+	for _, tc := range cases {
+		address, login := splitHost(tc.raw)
+		if address != tc.address || login != tc.login {
+			t.Errorf("splitHost(%q) = %q, %q; want %q, %q", tc.raw, address, login, tc.address, tc.login)
+		}
+	}
+}
+
 func TestLoadConfigRequiresHostKey(t *testing.T) {
 	t.Setenv("SSHX_HOST", "user@example.com")
 	t.Setenv("SSHX_KNOWN_HOSTS", "")
