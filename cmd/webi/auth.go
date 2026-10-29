@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -46,11 +47,24 @@ func sameToken(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-// auth requires the token on everything but the health check. A browser opens
-// the UI once with ?token=... and gets a cookie; scripts send a bearer header.
+// publicPath is the PWA shell. A browser fetches the manifest (and the icons
+// it references) outside the page's cookie jar, and the service worker and
+// static assets carry no data: they have to load before the token is checked.
+// Everything under /api/ stays behind the token.
+func publicPath(p string) bool {
+	switch p {
+	case "/healthz", "/readyz", "/manifest.webmanifest", "/sw.js":
+		return true
+	}
+	return p == "/static" || strings.HasPrefix(p, "/static/")
+}
+
+// auth requires the token on everything but the health check and the shell. A
+// browser opens the UI once with ?token=... and gets a cookie; scripts send a
+// bearer header.
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+		if publicPath(path.Clean(r.URL.Path)) {
 			next.ServeHTTP(w, r)
 			return
 		}
