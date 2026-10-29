@@ -44,6 +44,9 @@ func TestStaticServesTheShell(t *testing.T) {
 	if ct := getStatic(t, handler, "/static/app.js").Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
 		t.Fatalf("app.js content type = %q", ct)
 	}
+	if ct := getStatic(t, handler, "/manifest.webmanifest").Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/manifest+json") {
+		t.Fatalf("manifest content type = %q", ct)
+	}
 	if ct := getStatic(t, handler, "/static/app.css").Header().Get("Content-Type"); !strings.Contains(ct, "css") {
 		t.Fatalf("app.css content type = %q", ct)
 	}

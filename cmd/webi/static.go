@@ -45,6 +45,11 @@ func staticHandler() http.Handler {
 			r.URL.Path = "/" + path
 		}
 		w.Header().Set("Cache-Control", "no-cache")
+		// Debian's /etc/mime.types does not list .webmanifest, so FileServer
+		// would fall back to text/plain and Chrome would reject the manifest.
+		if strings.HasSuffix(path, ".webmanifest") {
+			w.Header().Set("Content-Type", "application/manifest+json")
+		}
 		files.ServeHTTP(w, r)
 	})
 }
