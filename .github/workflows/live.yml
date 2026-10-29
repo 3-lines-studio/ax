@@ -1,0 +1,44 @@
+name: live
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      layers:
+        description: "Space separated layers; empty means all"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-main
+  cancel-in-progress: false
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build
+        run: go build -o bin/ax ./cmd/ax
+      - name: Live layers
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LAYERS: ${{ inputs.layers }}
+        run: python3 scripts/live.py $LAYERS
+      - name: Golden session
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: python3 scripts/golden.py bin/ax
+      - name: Quality eval
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          AX_EVAL_ATTEMPTS: "3"
+        run: AX_BIN=bin/ax python3 scripts/eval.py

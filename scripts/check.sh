@@ -73,7 +73,7 @@ else
 fi
 
 step "provider contract"
-python3 scripts/provider-contract.py "$bin/fsx" "$bin/bashx" "$bin/skillx"
+python3 scripts/provider-contract.py "$bin/fsx" "$bin/bashx" "$bin/skillx" "$bin/memoryx" "$bin/sshx" "$bin/bqx" "$bin/pgx" "$bin/slackx" "$bin/attachx" "$bin/browserx" "$bin/wax"
 
 step "harness"
 python3 scripts/harness.py --bin "$bin/ax"

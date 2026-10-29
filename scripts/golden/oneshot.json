@@ -1,0 +1,36 @@
+{
+  "model": "deepseek-flash",
+  "kinds": [
+    "protocol",
+    "usage",
+    "message",
+    "assistant_done",
+    "tool_start",
+    "tool_done",
+    "tool_result",
+    "message",
+    "usage",
+    "message",
+    "assistant_done",
+    "tool_start",
+    "tool_done",
+    "tool_result",
+    "message",
+    "assistant_delta",
+    "usage",
+    "assistant_delta",
+    "usage",
+    "usage",
+    "message",
+    "assistant_done",
+    "result",
+    "done"
+  ],
+  "tools": [
+    "execute",
+    "execute"
+  ],
+  "outcome": "done",
+  "created_file": true,
+  "exit": 0
+}

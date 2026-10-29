@@ -1,0 +1,23 @@
+checks: verify every layer, live where it matters
+
+Nothing in the suite ran a provider binary against the protocol it
+advertises, and nothing exercised the cables between the components, so a
+broken provider or transport only showed up in production.
+
+Gate (deterministic, every PR):
+- provider-contract now runs over all eleven providers instead of three. It
+  immediately found two real bugs: fsx answered a missing path with exit 1 so
+the model saw a runtime failure instead of a bad call, and sshx answered
+malformed arguments and unknown tools with the wrong exit codes because it
+resolved its host before reading stdin.
+
+Live (scripts/live.py, weekly workflow, needs DEEPSEEK_API_KEY):
+- one case per cable: ax CLI, ax events, ax tools (a real fsx write), MCP over
+  stdio and over HTTP, boti serve, webi (channel, thread, message, answer),
+  slaxi doctor and a routine run.
+- scripts/golden.py records the shape of a run (event kinds, tool names,
+  outcome, created file) and fails when it drifts, without freezing wording.
+- scripts/canary.py pings a running instance over webi, for after a promote.
+- scripts/eval.py keeps running the quality scenarios with three attempts.
+
+Gate stays green and the live layers pass 9/9 locally.
