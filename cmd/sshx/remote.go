@@ -37,8 +37,9 @@ func dial(cfg config) (*remote, error) {
 	if err != nil {
 		return nil, fmt.Errorf("known_hosts %s: %w", cfg.knownHosts, err)
 	}
-	client, err := ssh.Dial("tcp", cfg.host, &ssh.ClientConfig{
-		User:            user(cfg.host),
+	address, login := splitHost(cfg.host)
+	client, err := ssh.Dial("tcp", address, &ssh.ClientConfig{
+		User:            login,
 		Auth:            auths,
 		HostKeyCallback: hostKey,
 		Timeout:         cfg.timeout,
@@ -63,11 +64,11 @@ func (r *remote) Close() error {
 	return r.client.Close()
 }
 
-func user(host string) string {
-	if at := strings.LastIndex(host, "@"); at >= 0 {
-		return host[:at]
+func splitHost(raw string) (address, login string) {
+	if at := strings.LastIndex(raw, "@"); at >= 0 {
+		return raw[at+1:], raw[:at]
 	}
-	return os.Getenv("USER")
+	return raw, os.Getenv("USER")
 }
 
 func authMethods(cfg config) ([]ssh.AuthMethod, func(), error) {
