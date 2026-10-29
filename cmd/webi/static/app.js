@@ -1025,20 +1025,110 @@ function imagesHTML(ids) {
     '<img src="/api/blobs/' + esc(id) + '" alt="image" loading="lazy"></a>').join('') + '</div>';
 }
 
-function artifactsHTML(items) {
-  if (!items || !items.length) return '';
-  return '<div class="artifacts">' + items.map((a) =>
-    '<a class="artifact" href="/api/threads/' + esc(S.threadId) + '/artifacts/' + esc(a.id) + '"' +
-    ' download="' + esc(a.name || a.id) + '" rel="noopener">' +
-    '<span class="artifact-name">' + esc(a.name || a.id) + '</span>' +
-    (a.size ? '<span class="artifact-size">' + esc(fmtSize(a.size)) + '</span>' : '') +
-    '</a>').join('') + '</div>';
+function artifactKind(a) {
+  const type = (a.media_type || '').toLowerCase();
+  if (type.startsWith('image/') || type.startsWith('video/') || type.startsWith('audio/')) return type.split('/')[0];
+  if (isMarkdownName(a.name)) return 'markdown';
+  if (type.startsWith('text/') || /json|xml|yaml|javascript|csv|sql/.test(type)) return 'text';
+  return 'file';
 }
 
-function fmtSize(n) {
-  if (n >= 1 << 20) return (n / (1 << 20)).toFixed(1) + ' MB';
-  if (n >= 1 << 10) return (n / (1 << 10)).toFixed(1) + ' KB';
-  return n + ' B';
+function artifactExt(name) {
+  const base = String(name || '').split('/').pop();
+  const dot = base.lastIndexOf('.');
+  return dot > 0 ? base.slice(dot + 1).toLowerCase() : '';
+}
+
+function isMarkdownName(name) {
+  return /^(md|markdown|mdx)$/.test(artifactExt(name));
+}
+
+const ARTIFACT_ICONS = {
+  text: '<path d="M40,88V64A16,16,0,0,1,56,48H200a16,16,0,0,1,16,16V88" opacity=".2"/><path d="M72,216h112a16,16,0,0,0,16-16V88H56V200A16,16,0,0,0,72,216Z" opacity=".2"/><rect x="40" y="56" width="176" height="40" rx="8" opacity=".2"/><path d="M96,128h64M96,168h40"/>',
+  markdown: '<path d="M232,80V184a16,16,0,0,1-16,16H40a16,16,0,0,1-16-16V80A16,16,0,0,1,40,64H216A16,16,0,0,1,232,80Z" opacity=".2"/><path d="M144,160V96l24,32,24-32v64M48,160V96m0,32,24,24,24-24"/>',
+  image: '<rect x="32" y="56" width="192" height="144" rx="16" opacity=".2"/><circle cx="96" cy="116" r="12" opacity=".2"/><path d="M32,160l56-40,48,32,32-24,56,48"/>',
+  video: '<rect x="32" y="56" width="192" height="144" rx="16" opacity=".2"/><path d="M136,96v64l48-32Z" opacity=".2"/><circle cx="82" cy="104" r="10"/>',
+  audio: '<circle cx="128" cy="128" r="96" opacity=".15"/><path d="M176,80V160a24,24,0,0,1-24,24"/><circle cx="136" cy="160" r="16" opacity=".2"/>',
+  file: '<path d="M208,216H48a8,8,0,0,1-8-8V48a8,8,0,0,1,8-8H152l64,64V208A8,8,0,0,1,208,216Z" opacity=".2"/><path d="M152,40v64h64"/>',
+};
+
+function artifactIcon(kind) {
+  return '<svg class="artifact-ico" viewBox="0 0 256 256" fill="none" stroke="currentColor" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    (ARTIFACT_ICONS[kind] || ARTIFACT_ICONS.file) + '</svg>';
+}
+
+function artifactURL(a) {
+  return '/api/threads/' + esc(S.threadId) + '/artifacts/' + esc(a.id);
+}
+
+function artifactChip(a) {
+  const kind = artifactKind(a);
+  const size = a.size ? '<span class="artifact-size">' + esc(fmtSize(a.size)) + '</span>' : '';
+  const ext = artifactExt(a.name);
+  return '<a class="artifact" href="' + artifactURL(a) + '" download="' + esc(a.name || a.id) + '" rel="noopener">' +
+    '<span class="artifact-badge">' + artifactIcon(kind) + (ext ? '<span>' + esc(ext) + '</span>' : '') + '</span>' +
+    '<span class="artifact-meta"><span class="artifact-name">' + esc(a.name || a.id) + '</span>' + size + '</span>' +
+    '<span class="artifact-dl" aria-hidden="true"><svg viewBox="0 0 256 256" fill="currentColor"><path d="M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0Zm-101.66,5.66a8,8,0,0,0,11.32,0l40-40a8,8,0,0,0-11.32-11.32L136,124.69V40a8,8,0,0,0-16,0v84.69L93.66,98.34a8,8,0,0,0-11.32,11.32Z"/></svg></span></a>';
+}
+
+function artifactCards(items) {
+  return items.map((a) => {
+    const kind = artifactKind(a);
+    const url = artifactURL(a);
+    const name = esc(a.name || a.id);
+    if (kind === 'image') {
+      return '<figure class="artifact-figure"><a class="artifact-media" href="' + url + '" target="_blank" rel="noopener">' +
+        '<img src="' + url + '" alt="' + name + '" loading="lazy"></a>' +
+        '<figcaption>' + artifactChip(a) + '</figcaption></figure>';
+    }
+    if (kind === 'video') {
+      return '<figure class="artifact-figure"><video src="' + url + '" controls preload="metadata"></video>' +
+        '<figcaption>' + artifactChip(a) + '</figcaption></figure>';
+    }
+    if (kind === 'audio') {
+      return '<figure class="artifact-figure"><audio src="' + url + '" controls preload="metadata"></audio>' +
+        '<figcaption>' + artifactChip(a) + '</figcaption></figure>';
+    }
+    if (kind === 'markdown' || kind === 'text') {
+      return '<div class="artifact-preview" data-preview="' + esc(a.id) + '" data-kind="' + kind + '" data-url="' + url + '">' +
+        '<div class="artifact-preview-head">' + artifactIcon(kind) + '<span>' + name + '</span></div>' +
+        '<div class="artifact-preview-body"><span class="artifact-skeleton"></span><span class="artifact-skeleton short"></span><span class="artifact-skeleton"></span></div>' +
+        '</div>' + artifactChip(a);
+    }
+    return artifactChip(a);
+  }).join('');
+}
+
+function artifactsHTML(items) {
+  if (!items || !items.length) return '';
+  return '<div class="artifacts">' + artifactCards(items) + '</div>';
+}
+
+const PREVIEW_LIMIT = 64 * 1024;
+
+// Previews are fetched once per artifact and cached on the element, so a
+// re-render after streaming does not hit the endpoint again.
+async function hydratePreviews() {
+  const nodes = Array.from(document.querySelectorAll('.artifact-preview:not([data-loaded])'));
+  await Promise.all(nodes.map(async (node) => {
+    node.dataset.loaded = '1';
+    const body = node.querySelector('.artifact-preview-body');
+    try {
+      const res = await fetch(node.dataset.url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      let text = await res.text();
+      if (text.length > PREVIEW_LIMIT) {
+        text = text.slice(0, PREVIEW_LIMIT);
+        node.dataset.truncated = '1';
+      }
+      body.innerHTML = node.dataset.kind === 'markdown' ? md(text) : '<pre>' + esc(text) + '</pre>';
+      if (node.dataset.truncated) {
+        body.insertAdjacentHTML('beforeend', '<div class="artifact-truncated">preview truncated</div>');
+      }
+    } catch (e) {
+      body.innerHTML = '<div class="artifact-preview-fail">' + esc(e.message) + '</div>';
+    }
+  }));
 }
 
 function messageHTML(m) {
@@ -1081,6 +1171,7 @@ function renderMessages(forceScroll) {
   }
   if (stick) scrollToBottom(true);
   updateJumpLatest();
+  hydratePreviews();
 }
 
 function renderWorking() {

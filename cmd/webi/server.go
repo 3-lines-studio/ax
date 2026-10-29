@@ -823,7 +823,8 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "unknown artifact")
 		return
 	}
-	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(filepath.Base(path)))
+	name := strings.TrimPrefix(filepath.Base(path), r.PathValue("name")+"-")
+	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(name))
 	http.ServeFile(w, r, path)
 }
 
