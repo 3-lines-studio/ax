@@ -107,13 +107,23 @@ func main() {
 }
 
 func run(tool string) {
-	cfg, err := loadConfig()
+	switch tool {
+	case "read", "write", "edit", "bash":
+	default:
+		fmt.Fprintf(os.Stderr, "sshx: unknown tool %s\n", tool)
+		os.Exit(2)
+	}
+	input, err := io.ReadAll(io.LimitReader(os.Stdin, maxInput))
+	if err == nil && !json.Valid(input) {
+		fmt.Fprintln(os.Stderr, "sshx: invalid arguments: expected one JSON object")
+		os.Exit(2)
+	}
 	if err != nil {
 		fail(err)
 	}
-	input, err := io.ReadAll(io.LimitReader(os.Stdin, maxInput))
+	cfg, err := loadConfig()
 	if err != nil {
-		fail(fmt.Errorf("read arguments: %w", err))
+		fail(err)
 	}
 	remote, err := dial(cfg)
 	if err != nil {
@@ -154,19 +164,17 @@ func run(tool string) {
 			fail(err)
 		}
 		fmt.Print(out)
-	default:
-		fmt.Fprintf(os.Stderr, "unknown tool %s\n", tool)
-		os.Exit(3)
 	}
 }
 
 func decode(input []byte, value any) {
 	if err := json.Unmarshal(input, value); err != nil {
-		fail(fmt.Errorf("invalid arguments: %w", err))
+		fmt.Fprintf(os.Stderr, "sshx: invalid arguments: %s\n", err)
+		os.Exit(2)
 	}
 }
 
 func fail(err error) {
-	fmt.Fprintf(os.Stderr, "%s\n", err)
+	fmt.Fprintf(os.Stderr, "sshx: %s\n", err)
 	os.Exit(1)
 }

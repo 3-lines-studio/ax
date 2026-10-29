@@ -4,14 +4,16 @@ set -eu
 cd "$(dirname "$0")/.."
 
 mode=full
-case "${1:-}" in
-"") ;;
---fast) mode=fast ;;
-*)
-    echo "usage: check.sh [--fast]" >&2
-    exit 2
-    ;;
-esac
+for arg in "$@"; do
+    case $arg in
+    --fast) mode=fast ;;
+    --live) mode=live ;;
+    *)
+        echo "usage: check.sh [--fast] [--live]" >&2
+        exit 2
+        ;;
+    esac
+done
 
 bin=bin
 programs=$(ls cmd)
@@ -73,7 +75,15 @@ else
 fi
 
 step "provider contract"
-python3 scripts/provider-contract.py "$bin/fsx" "$bin/bashx" "$bin/skillx"
+python3 scripts/provider-contract.py "$bin/fsx" "$bin/bashx" "$bin/skillx" "$bin/memoryx" "$bin/sshx" "$bin/bqx" "$bin/pgx" "$bin/slackx" "$bin/attachx" "$bin/browserx" "$bin/wax"
 
 step "harness"
 python3 scripts/harness.py --bin "$bin/ax"
+
+if [ "$mode" = live ]; then
+    step "golden"
+    python3 scripts/golden.py "$bin/ax"
+
+    step "live"
+    python3 scripts/live.py
+fi

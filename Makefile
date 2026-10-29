@@ -6,7 +6,7 @@ PROGRAMS := $(notdir $(wildcard cmd/*))
 
 LDFLAGS := -s -w -buildid=
 
-.PHONY: all build test race vet fmt tidy check catalog catalog-check size contract harness eval install dist clean FORCE
+.PHONY: all build test race vet fmt tidy check catalog catalog-check size contract harness eval live golden canary install dist clean FORCE
 
 all: build
 
@@ -44,13 +44,22 @@ size: build
 	./scripts/check-size.sh $(BIN)
 
 contract: build
-	python3 scripts/provider-contract.py $(BIN)/fsx $(BIN)/bashx $(BIN)/skillx
+	python3 scripts/provider-contract.py $(BIN)/fsx $(BIN)/bashx $(BIN)/skillx $(BIN)/memoryx $(BIN)/sshx $(BIN)/bqx $(BIN)/pgx $(BIN)/slackx $(BIN)/attachx $(BIN)/browserx $(BIN)/wax
 
 harness: $(BIN)/ax
 	python3 scripts/harness.py --bin $(BIN)/ax
 
 eval: $(BIN)/ax
 	AX_BIN=$(or $(AX_BIN),$(BIN)/ax) python3 scripts/eval.py
+
+live: build
+	python3 scripts/live.py
+
+golden: $(BIN)/ax
+	python3 scripts/golden.py $(BIN)/ax
+
+canary:
+	python3 scripts/canary.py
 
 install: build
 	install -d "$(PREFIX)/bin"

@@ -83,14 +83,17 @@ func main() {
 	case "read":
 		var value readArgs
 		decode(input, &value)
+		requirePath(value.Path)
 		result, err = files.read(value)
 	case "write":
 		var value writeArgs
 		decode(input, &value)
+		requirePath(value.Path)
 		result, err = files.write(value)
 	case "edit":
 		var value editArgs
 		decode(input, &value)
+		requirePath(value.Path)
 		result, err = files.edit(value)
 	default:
 		fail(2, "unknown tool: "+args[1])
@@ -99,6 +102,12 @@ func main() {
 		fail(1, err.Error())
 	}
 	fmt.Print(result)
+}
+
+func requirePath(path string) {
+	if path == "" {
+		fail(2, "invalid input: path is required")
+	}
 }
 
 func decode(input []byte, value any) {
