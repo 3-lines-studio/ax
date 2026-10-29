@@ -99,6 +99,7 @@ func TestReadSessionProjectsMessages(t *testing.T) {
 {"type":"message","message":{"Role":"assistant","Content":"","ToolCalls":[{"ID":"c"}]}}
 {"type":"message","message":{"Role":"tool","Content":"out"}}
 {"type":"message","message":{"Role":"assistant","Content":"answer"}}
+{"type":"usage","usage":{"input":11,"output":3,"cached_input":4,"context_input":9,"model":"deepseek-flash"}}
 {"type":"compaction","upto":2,"summary":"s"}
 `
 	if err := os.WriteFile(path, []byte(lines), 0o644); err != nil {
@@ -108,11 +109,15 @@ func TestReadSessionProjectsMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 3 {
+	if len(events) != 4 {
 		t.Fatalf("events = %+v", events)
 	}
-	if events[0]["t"] != "user" || events[1]["text"] != "answer" || events[2]["t"] != "compaction" {
+	if events[0]["t"] != "user" || events[1]["text"] != "answer" || events[2]["t"] != "usage" || events[3]["t"] != "compaction" {
 		t.Fatalf("events = %+v", events)
+	}
+	usage, ok := events[2]["usage"].(map[string]any)
+	if !ok || usage["prompt_tokens"] != 9 || usage["completion_tokens"] != 3 || usage["model"] != "deepseek-flash" {
+		t.Fatalf("usage = %+v", events[2]["usage"])
 	}
 	if _, err := readSession(filepath.Join(t.TempDir(), "missing.jsonl")); err != nil {
 		t.Errorf("missing session: %v", err)
