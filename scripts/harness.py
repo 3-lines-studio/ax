@@ -302,7 +302,16 @@ class Harness:
             }
         )
         e.pop("TMUX", None)
+        # Hermetic means no ambient credentials: a shell carrying the real
+        # DEEPSEEK_API_KEY would win over the config and the sk-test key below.
         e.pop("OPENAI_API_KEY", None)
+        e.pop("DEEPSEEK_API_KEY", None)
+        # A developer running the harness from inside a served bot inherits that
+        # bot's BOT_ROOT/BOT_DATA and AX_WEB_* variables; ax would then read the
+        # bot's config, secrets and sessions instead of the scratch tree.
+        for name in list(e):
+            if name.startswith(("BOT_", "AX_WEB_")):
+                e.pop(name, None)
         if api_key is not None:
             e["OPENAI_API_KEY"] = api_key
         if extra:
