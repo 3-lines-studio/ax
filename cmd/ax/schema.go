@@ -10,10 +10,6 @@ import (
 	"strings"
 )
 
-// jsonSchema is the subset of JSON Schema that tool providers use to declare
-// parameters. The engine validates model arguments before running a tool:
-// DeepSeek warns that generated arguments can be invalid JSON or violate the
-// schema, and running a mutating tool on bad input is not recoverable.
 type jsonSchema struct {
 	raw        map[string]any
 	types      []string

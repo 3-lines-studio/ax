@@ -108,8 +108,6 @@ func main() {
 	}
 	bot := resolveBotCtx(botRoot)
 	_ = os.Setenv("BOT_ROOT", bot.Root)
-	// A broken compute root must not hide `ax conn list`/`ax conn doctor`: the
-	// run path fails on it, the diagnostics report it.
 	compute, computeErr := resolveCompute(fc, bot.Root)
 	fc.computeIDs = compute.ids
 	fc.computeErr = computeErr
@@ -242,7 +240,7 @@ func parseArgs(args []string) (cliConfig, []string, error) {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, "Usage: ax [flags] [prompt]\n\nFlags:\n  -base URL    OpenAI-compatible API base URL (default \"https://api.deepseek.com\")\n  -model NAME  model name (default \"deepseek-flash\")\n  -system TEXT  system prompt override (default: built-in + bot.md)\n  -C DIR       bot directory root (default: current directory)\n  --session FILE  append-only durable session log\n  --events      emit JSONL events on stdout\n  -thinking X  thinking mode: auto, on, off (default auto)\n  -effort X    reasoning effort: low, high, max (default max for DeepSeek)\n  -max-tokens N  maximum output tokens (default: provider default)\n  -image PATH|URL  attach an image to the prompt (repeatable)\n  -image-detail X  image detail: low, high, original, auto (default auto)\n  -tool-mode X  tool surface: catalog or direct (default catalog)\n  -compact-at X  compact when the prompt reaches this fraction of the window\n  -context-window N  context window in tokens (default 1000000)\n\nCommands:\n  ax catalog [--json] [--refresh]   print the tool catalog\n  ax compact --session FILE         summarize a session into a shorter prompt\n  ax mcp serve [--stdio | --http ADDR]  expose the catalog to MCP hosts\n  ax mcp add|import|list            connect servers (registry, mcp.json)\n  ax mcp login|logout|doctor        OAuth sessions and diagnostics\n  ax selftest                       check config, connections and catalog, no model call\n\nWith no prompt, reads the prompt from stdin.\nA prompt of the form /name [args] expands a user command from\n~/.config/ax/commands/<name>.md.\n")
+	fmt.Fprint(os.Stderr, "Usage: ax [flags] [prompt]\n\nFlags:\n -base URL OpenAI-compatible API base URL (default \"https://api.deepseek.com\")\n -model NAME model name (default \"deepseek-flash\")\n -system TEXT system prompt override (default: built-in + bot.md)\n -C DIR bot directory root (default: current directory)\n --session FILE append-only durable session log\n --events emit JSONL events on stdout\n -thinking X thinking mode: auto, on, off (default auto)\n -effort X reasoning effort: low, high, max (default max for DeepSeek)\n -max-tokens N maximum output tokens (default: provider default)\n -image PATH|URL attach an image to the prompt (repeatable)\n -image-detail X image detail: low, high, original, auto (default auto)\n -tool-mode X tool surface: catalog or direct (default catalog)\n -compact-at X compact when the prompt reaches this fraction of the window\n -context-window N context window in tokens (default 1000000)\n\nCommands:\n ax catalog [--json] [--refresh] print the tool catalog\n ax compact --session FILE summarize a session into a shorter prompt\n ax mcp serve [--stdio | --http ADDR] expose the catalog to MCP hosts\n ax mcp add|import|list connect servers (registry, mcp.json)\n ax mcp login|logout|doctor OAuth sessions and diagnostics\n ax selftest check config, connections and catalog, no model call\n\nWith no prompt, reads the prompt from stdin.\nA prompt of the form /name [args] expands a user command from\n~/.config/ax/commands/<name>.md.\n")
 }
 
 func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
@@ -451,8 +449,6 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 	}
 }
 
-// resolveCompact merges the compaction settings: flags, then bot.toml, then
-// the defaults copied from pixi (half of a one-million-token window).
 func resolveCompact(cfg cliConfig, fc fileConfig) (float64, int) {
 	compactAt, window := defaultCompactAt, defaultContextWindow
 	if fc.compactAtSet {
@@ -601,13 +597,8 @@ func toolsOrExit(config fileConfig, workdir string) []Tool {
 	return tools
 }
 
-// maxCoreTools caps the cheat sheet in the system prompt. A compute connection
-// that exposes twenty tools should not turn the prompt into a tool list.
 const maxCoreTools = 8
 
-// coreToolIDs is what the prompt suggests calling without a search: the
-// explicit core_tools, else every tool of the compute connection(s), else the
-// historical fsx/bashx ids.
 func coreToolIDs(fc fileConfig, cat *catalog.Catalog) []string {
 	if len(fc.coreTools) > 0 {
 		return fc.coreTools
@@ -645,9 +636,6 @@ func apiKey(fc fileConfig, bot *botCtx) string {
 	return fc.apiKey
 }
 
-// runtimeInfo is what ax knows about itself and the process it is running in.
-// The system prompt gets a compact version of it; the values come from flags,
-// the build and the transport's environment, never from secrets.
 type runtimeInfo struct {
 	Build         string
 	Executable    string
@@ -673,9 +661,6 @@ type runtimeInfo struct {
 	Now           time.Time
 }
 
-// axBuildID prefers the build the host activated (boti sets AX_BUILD), then
-// the VCS revision Go embeds when the binary was built from a checkout, and
-// finally "dev".
 func axBuildID() string {
 	if v := strings.TrimSpace(os.Getenv("AX_BUILD")); v != "" {
 		return v
@@ -736,9 +721,6 @@ func newRuntimeInfo(cfg cliConfig, bot *botCtx, compactAt float64, contextWindow
 	return rt
 }
 
-// channelInstructions is the per-channel prompt webi stores. It lives in the
-// environment because the channel is a transport concept; an empty value means
-// the channel has no extra instructions.
 func channelInstructions() string {
 	return strings.TrimSpace(os.Getenv("AX_WEB_PROMPT"))
 }
@@ -860,8 +842,6 @@ func buildCatalogSystemPrompt(dir string, bot *botCtx, cat *catalog.Catalog, cor
 	return out.String()
 }
 
-// coreEditTool names the editor the prompt should recommend, so a connection
-// that renames fsx keeps the precise-edit hint.
 func coreEditTool(core []string, cat *catalog.Catalog) string {
 	for _, id := range core {
 		if strings.HasSuffix(id, ".edit") {
@@ -1012,9 +992,6 @@ func stdinIsTerminal() bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-// readControls consumes the JSONL control channel on stdin: cancel stops the
-// run at the next safe point, steer adds a user message at the next turn
-// boundary.
 func readControls(cancel *atomic.Bool, steer chan<- string) {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -1045,8 +1022,6 @@ func readControls(cancel *atomic.Bool, steer chan<- string) {
 			select {
 			case steer <- control.Text:
 			default:
-				// The loop drains between turns; a burst past the buffer is
-				// better dropped than blocking the control reader.
 			}
 		}
 	}
@@ -1087,9 +1062,6 @@ func (s *eventSink) append(entry sessionEntry) {
 	}
 }
 
-// maybeFlushPartial writes the in-progress assistant turn at most once per
-// second or per 4 KiB. A crash keeps the partial for audit; recovery never
-// sends an incomplete assistant turn to the model.
 func (s *eventSink) maybeFlushPartial() {
 	if s.log == nil {
 		return
@@ -1171,15 +1143,11 @@ func (s *eventSink) toolResult(call ToolCall) {
 	s.emit(map[string]any{"type": axproto.TypeToolDone, "id": call.ID})
 }
 
-// steer records a message typed while the run was going. It belongs to the
-// same run, so the session log keeps it in order and a resume replays it.
 func (s *eventSink) steer(msg Message) {
 	s.append(sessionEntry{Type: entryMessage, Message: &msg})
 	s.emit(map[string]any{"type": axproto.TypeSteer, "text": msg.Content})
 }
 
-// secretRequest tells the host a tool needs a value. The model never sees it:
-// the call is retried once the value exists.
 func (s *eventSink) secretRequest(call ToolCall, ask secretAsk) {
 	target := s.targets[call.ID]
 	if target == "" {

@@ -161,8 +161,6 @@ func TestConnectionMCPHTTPResolves(t *testing.T) {
 	}
 }
 
-// A bot that only sets tools = [...] keeps the source name it had before
-// connections existed, so catalog ids and stored sessions stay valid.
 func TestLegacyToolsKeepTheirSourceName(t *testing.T) {
 	bin := writeMockTool(t, mockGreetTool)
 	fc := fileConfig{tools: bin}
@@ -414,12 +412,10 @@ func TestCoreToolIDsFollowTheComputeConnection(t *testing.T) {
 	if strings.Join(got, ",") != "fs.read,fs.write" {
 		t.Fatalf("core tools = %v", got)
 	}
-	// An explicit core_tools list wins.
 	explicit := coreToolIDs(fileConfig{computeIDs: []string{"fs"}, coreTools: []string{"fs.read"}}, cat)
 	if strings.Join(explicit, ",") != "fs.read" {
 		t.Fatalf("explicit core tools = %v", explicit)
 	}
-	// Without a compute connection the historical ids stay.
 	fallback := coreToolIDs(fileConfig{}, cat)
 	if strings.Join(fallback, ",") != strings.Join(defaultCoreTools, ",") {
 		t.Fatalf("fallback = %v", fallback)
@@ -495,7 +491,6 @@ func TestSSHConnectionBuildsTheProviderEnvironment(t *testing.T) {
 			t.Errorf("env missing %s=%s: %v", name, value, conn.env)
 		}
 	}
-	// A remote root is a path on the other machine: it must not be stat'ed here.
 	compute, err := resolveCompute(fc, botRoot)
 	if err != nil {
 		t.Fatal(err)

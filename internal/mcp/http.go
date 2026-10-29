@@ -159,8 +159,6 @@ func readResponse(resp *http.Response, name string) ([]byte, error) {
 	return body, nil
 }
 
-// readEventStream returns the first JSON-RPC response in an SSE stream. A
-// request may produce notifications before its response; those are ignored.
 func readEventStream(body io.Reader) ([]byte, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64<<10), maxMessage)

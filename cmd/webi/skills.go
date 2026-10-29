@@ -21,8 +21,6 @@ type skillRoot struct {
 	Source string
 }
 
-// skillRoots mirrors what skillx gives the agent: the bot's skills/ when it
-// exists, otherwise the workspace project directories and the user's.
 func skillRoots(target botTarget) []skillRoot {
 	home, _ := os.UserHomeDir()
 	var roots []skillRoot

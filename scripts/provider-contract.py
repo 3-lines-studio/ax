@@ -1,8 +1,6 @@
-#!/usr/bin/env python3
 import json
 import subprocess
 import sys
-
 
 def run(provider, arguments, data=b""):
     return subprocess.run(
@@ -14,11 +12,9 @@ def run(provider, arguments, data=b""):
         check=False,
     )
 
-
 def fail(provider, message):
     print(f"{provider}: {message}", file=sys.stderr)
     return False
-
 
 def check(provider):
     valid = True
@@ -75,7 +71,6 @@ def check(provider):
         print(f"{provider}: ok ({len(names)} tools)")
     return valid
 
-
 def main():
     if len(sys.argv) < 2:
         print("usage: provider-contract.py PROVIDER...", file=sys.stderr)
@@ -85,7 +80,6 @@ def main():
         if not check(provider):
             valid = False
     return 0 if valid else 1
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-// hasKey answers whether a run can reach a model. The environment wins; the
-// vault counts too, because that is where the UI moves the key.
 func (s *Server) hasKey() bool {
 	if strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")) != "" || strings.TrimSpace(os.Getenv("OPENAI_API_KEY")) != "" {
 		return true
@@ -21,7 +19,6 @@ func (s *Server) hasKey() bool {
 	return false
 }
 
-// handleVaultState lists scopes and names, never values.
 func (s *Server) handleVaultState(w http.ResponseWriter, r *http.Request) {
 	names, lastUsed, err := s.vault.Names()
 	if err != nil {
@@ -43,16 +40,12 @@ func (s *Server) handleVaultState(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// notePINError counts only a real wrong PIN: a locked or missing vault is not
-// a guess and must not lock the user out.
 func (s *Server) notePINError(ip string, err error) {
 	if errors.Is(err, errWrongPIN) {
 		s.pins.fail(ip)
 	}
 }
 
-// handleVaultAction serves the panel's verbs. The UI checks for the exact
-// string "wrong PIN", so it must not be wrapped.
 func (s *Server) handleVaultAction(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID      string `json:"id"`
@@ -87,8 +80,6 @@ func (s *Server) handleVaultAction(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, err.Error())
 			return
 		}
-		// move_key is accepted for the UI's sake; webi never stored the key in
-		// a file, so there is nothing to move.
 		s.shareVaultKey(false)
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	case "unlock":
@@ -145,8 +136,6 @@ func (s *Server) handleVaultAction(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, map[string]int{"imported": count})
 	case "secret":
-		// A tool asked for this value mid-run: store it and hand it over so the
-		// call can retry without restarting the thread.
 		request, ok := s.takePendingSecret(req.ID)
 		if !ok {
 			writeErr(w, 404, "no pending secret request for that id")

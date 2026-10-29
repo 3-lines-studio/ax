@@ -48,9 +48,6 @@ func (s serviceSpec) args() []string {
 	return args
 }
 
-// runSetup installs an autostart entry for this webi and starts it. It is the
-// one-time step that turns the command into an app: after it, the UI is at the
-// printed URL and comes back with the session.
 func runSetup(opts setupOptions) error {
 	if err := checkAutostart(); err != nil {
 		return err
@@ -79,8 +76,6 @@ func runSetup(opts setupOptions) error {
 	if err != nil {
 		return err
 	}
-	// A token pinned with WEBI_TOKEN exists only in the environment; the
-	// service needs a copy, so keep the same secret in the usual file.
 	if os.Getenv("WEBI_TOKEN") != "" {
 		tokenPath = filepath.Join(state, "token")
 		if err := writeFileAtomic(tokenPath, []byte(token+"\n"), 0o600); err != nil {
@@ -121,8 +116,6 @@ func runSetup(opts setupOptions) error {
 	return nil
 }
 
-// askListen chooses the one setting a consumer should not have to know. A
-// terminal gets a yes/no question; a script gets loopback.
 func askListen() string {
 	input := os.Stdin
 	if !isTerminal(input) && isTerminal(os.Stdout) {
@@ -132,10 +125,10 @@ func askListen() string {
 		}
 	}
 	if !isTerminal(input) {
-		fmt.Fprintln(os.Stderr, "  Local only (run webi setup in a terminal to share it with other devices).")
+		fmt.Fprintln(os.Stderr, " Local only (run webi setup in a terminal to share it with other devices).")
 		return "127.0.0.1:8377"
 	}
-	fmt.Fprint(os.Stdout, "\n  Use it from your phone or another computer on this network? [y/N] ")
+	fmt.Fprint(os.Stdout, "\n Use it from your phone or another computer on this network? [y/N] ")
 	line, _ := bufio.NewReader(input).ReadString('\n')
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
 		return "0.0.0.0:8377"
@@ -286,8 +279,6 @@ WantedBy=default.target
 `, systemdArg(spec.Root), strings.Join(args, " "), env)
 }
 
-// launchAgent is the macOS equivalent of the systemd unit. KeepAlive brings
-// the UI back after a crash; RunAtLoad starts it with the session.
 func launchAgent(spec serviceSpec) string {
 	var args bytes.Buffer
 	for _, arg := range spec.args() {
@@ -301,15 +292,15 @@ func launchAgent(spec serviceSpec) string {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>%s</string>
-  <key>ProgramArguments</key><array>%s</array>
-  <key>WorkingDirectory</key><string>%s</string>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>ThrottleInterval</key><integer>5</integer>
-  <key>StandardOutPath</key><string>%s</string>
-  <key>StandardErrorPath</key><string>%s</string>
-  <key>EnvironmentVariables</key><dict>%s</dict>
+ <key>Label</key><string>%s</string>
+ <key>ProgramArguments</key><array>%s</array>
+ <key>WorkingDirectory</key><string>%s</string>
+ <key>RunAtLoad</key><true/>
+ <key>KeepAlive</key><true/>
+ <key>ThrottleInterval</key><integer>5</integer>
+ <key>StandardOutPath</key><string>%s</string>
+ <key>StandardErrorPath</key><string>%s</string>
+ <key>EnvironmentVariables</key><dict>%s</dict>
 </dict>
 </plist>
 `, launchLabel, args.String(), xmlEscape(spec.Root), xmlEscape(filepath.Join(spec.State, "webi.log")), xmlEscape(filepath.Join(spec.State, "webi.log")), env)
@@ -410,5 +401,5 @@ func hintLinger() {
 	if err == nil && strings.TrimSpace(string(out)) == "yes" {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "\n  To keep it running after you log out: loginctl enable-linger %s\n", account)
+	fmt.Fprintf(os.Stderr, "\n To keep it running after you log out: loginctl enable-linger %s\n", account)
 }

@@ -30,8 +30,6 @@ func TestParseSecretAsk(t *testing.T) {
 	}
 }
 
-// The engine asks the host, retries with the value in the environment and never
-// shows the envelope to the model.
 func TestExecToolAsksForASecretAndRetries(t *testing.T) {
 	resetSecrets(t)
 	secrets.enable()
@@ -77,13 +75,11 @@ func TestExecToolSkipAndNoHost(t *testing.T) {
 			return `{"ask":{"name":"GH_TOKEN"}}`
 		},
 	}
-	// No host: the model gets advice instead of a hang.
 	out := execTool(context.Background(), []Tool{tool}, ToolCall{ID: "c1", Name: "gh"}, &recordingSink{})
 	if !strings.Contains(out, "Set it in the environment") {
 		t.Fatalf("output = %q", out)
 	}
 
-	// A host that declines.
 	secrets.enable()
 	go func() { secrets.skip("GH_TOKEN") }()
 	out = execTool(context.Background(), []Tool{tool}, ToolCall{ID: "c2", Name: "gh"}, &recordingSink{})

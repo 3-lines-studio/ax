@@ -9,8 +9,6 @@ import (
 	"github.com/3-lines-studio/ax/internal/axrun"
 )
 
-// A channel is a bot: its ax process must see the channel root as BOT_DATA, not
-// the data root of the host that serves every channel.
 func TestChannelGetsItsOwnDataRoot(t *testing.T) {
 	state := t.TempDir()
 	store, err := NewStore(state)
@@ -25,7 +23,7 @@ func TestChannelGetsItsOwnDataRoot(t *testing.T) {
 	}
 	record := filepath.Join(t.TempDir(), "seen")
 	t.Setenv("BOTI_TEST_RECORD", record)
-	t.Setenv("BOT_DATA", t.TempDir()) // the host's data root
+	t.Setenv("BOT_DATA", t.TempDir())
 
 	axPath := filepath.Join(t.TempDir(), "ax")
 	script := `#!/bin/sh

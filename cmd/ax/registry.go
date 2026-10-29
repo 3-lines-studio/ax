@@ -9,13 +9,9 @@ import (
 	"sync"
 )
 
-// mcpsJSON is the curated registry shipped with the binary. AX_MCP_REGISTRY
-// points at a replacement file, which is what the tests use.
-//
 //go:embed mcps.json
 var mcpsJSON []byte
 
-// registryEntry is one known MCP server.
 type registryEntry struct {
 	Name            string            `json:"name"`
 	Description     string            `json:"description"`
@@ -70,7 +66,6 @@ func (r registryFile) find(name string) (registryEntry, bool) {
 	return registryEntry{}, false
 }
 
-// entry converts a registry entry into the bot.toml table it would write.
 func (e registryEntry) entry(extraArgs []string) mcpEntry {
 	entry := mcpEntry{
 		Name:            e.Name,

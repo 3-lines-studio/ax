@@ -15,15 +15,6 @@ import (
 	"github.com/3-lines-studio/ax/internal/botdir"
 )
 
-// Selftest answers one question: can this binary serve this bot? It checks the
-// embedded UI, opens the state directory, parses the vault header and runs the
-// ax binary's own selftest, so a host can try a candidate build before
-// activating it (see `boti promote`). It binds no port and calls no model.
-//
-// A missing vault or settings file is fine: both are created by the UI. A
-// broken state directory or an ax that cannot start is a failure, because
-// every run would hit it.
-
 const selftestTimeout = 60 * time.Second
 
 type selftestReport struct {
@@ -56,8 +47,6 @@ func runSelftest(root, state, axPath string, stdout, stderr io.Writer) int {
 	}
 	report.ok("data %s", paths.DataRoot)
 
-	// The UI is embedded in the binary: if the embed is broken, the server
-	// answers 404 on every page and the health check would still pass.
 	if ui, err := staticRoot(); err != nil {
 		report.fail("embedded UI: %v", err)
 	} else {
@@ -74,8 +63,6 @@ func runSelftest(root, state, axPath string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	// Opening the store creates a fresh state directory the same way the
-	// server would, so a read-only path fails here and not on the first run.
 	store, err := NewStore(state)
 	if err != nil {
 		report.fail("state %s: %v", state, err)
@@ -107,7 +94,7 @@ func runSelftest(root, state, axPath string, stdout, stderr io.Writer) int {
 		report.fail("ax selftest (%s): %v", axPath, err)
 		for _, line := range strings.Split(strings.TrimRight(output, "\n"), "\n") {
 			if line != "" {
-				report.lines = append(report.lines, "      "+line)
+				report.lines = append(report.lines, " "+line)
 			}
 		}
 	} else {
@@ -130,9 +117,6 @@ func runSelftest(root, state, axPath string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// checkVault parses the header without the PIN. A wrong PIN or a corrupt blob
-// is not this test's business; an unreadable header means the UI would offer a
-// vault that cannot open.
 func checkVault(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -169,7 +153,6 @@ func checkSettings(path string) error {
 	return nil
 }
 
-// checkAX runs the engine the way webi will: same bot, same data root.
 func checkAX(paths botdir.Paths, axPath string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), selftestTimeout)
 	defer cancel()

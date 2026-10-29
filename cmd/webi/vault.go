@@ -18,17 +18,8 @@ import (
 	"golang.org/x/crypto/scrypt"
 )
 
-// The vault is one encrypted JSON file: scopes of `NAME -> value`, where a scope
-// is usually a channel and `global` is shared by all of them. The PIN derives
-// the key with scrypt; the key lives in memory until the vault is locked.
-//
-// A bot never reads the file: webi decrypts and hands the values to the ax
-// process as environment variables, which is the only interface a provider has.
-
 const vaultVersion = 1
 
-// scrypt work factors. 32768 keeps an unlock near 100 ms on a laptop, which is
-// slow enough to make a stolen file expensive and fast enough for a reload.
 const (
 	vaultScryptN = 32768
 	vaultScryptR = 8
@@ -62,8 +53,6 @@ type vaultData struct {
 	LastUsed map[string]int64             `json:"last_used"`
 }
 
-// Vault is the in-memory side: whether a file exists, whether it is unlocked,
-// and the decrypted scopes when it is.
 type Vault struct {
 	path string
 
@@ -96,12 +85,10 @@ func (v *Vault) Locked() bool {
 	return v.exists && v.key == nil
 }
 
-// Status is what /api/state reports: enough for the banner, never the secrets.
 func (v *Vault) Status() map[string]any {
 	return map[string]any{"exists": v.Exists(), "locked": v.Locked()}
 }
 
-// Names lists the scopes and variable names, never the values.
 func (v *Vault) Names() (map[string][]string, map[string]int64, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -127,7 +114,6 @@ func (v *Vault) Names() (map[string][]string, map[string]int64, error) {
 	return names, lastUsed, nil
 }
 
-// Create makes the first vault and leaves it unlocked.
 func (v *Vault) Create(pin, confirm string) error {
 	if len(pin) < 8 {
 		return errPINTooShort
@@ -145,7 +131,6 @@ func (v *Vault) Create(pin, confirm string) error {
 	return v.saveLocked(pin)
 }
 
-// Unlock derives the key and verifies it against the stored ciphertext.
 func (v *Vault) Unlock(pin string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -167,7 +152,6 @@ func (v *Vault) Lock() {
 	v.data = vaultData{}
 }
 
-// Check reports whether a PIN opens the vault without unlocking it.
 func (v *Vault) Check(pin string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -197,7 +181,6 @@ func (v *Vault) Reveal(scope, name, pin string) (string, error) {
 	return value, nil
 }
 
-// Put adds or overwrites one secret, and optionally renames it.
 func (v *Vault) Put(scope, name, value, old string) error {
 	name = strings.TrimSpace(name)
 	old = strings.TrimSpace(old)
@@ -249,8 +232,6 @@ func (v *Vault) Delete(scope, name string) error {
 	return v.save()
 }
 
-// Import merges a .env file: `KEY=value`, optional `export` and quotes.
-// Comments and keys the text does not mention stay untouched.
 func (v *Vault) Import(scope, text string) (int, error) {
 	scope = normalizeScope(scope)
 	if !validScope(scope) {
@@ -274,10 +255,6 @@ func (v *Vault) Import(scope, text string) (int, error) {
 	return len(parsed), v.save()
 }
 
-// Env builds the environment for one channel: global first, then the channel's
-// scope on top. A `@file:NAME` secret becomes a private temporary file and the
-// variable points at it, which is how a PEM or a kubeconfig reaches a tool.
-// The returned cleanup removes those files when the run ends.
 func (v *Vault) Env(scope string) ([]string, func(), error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -339,7 +316,6 @@ func (v *Vault) Env(scope string) ([]string, func(), error) {
 	return env, cleanup, nil
 }
 
-// Has reports whether a variable exists in any scope the channel sees.
 func (v *Vault) Has(scope, name string) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -353,8 +329,6 @@ func (v *Vault) Has(scope, name string) bool {
 	_, ok := v.data.Items[vaultScopeGlobal][name]
 	return ok
 }
-
-// --- storage ---------------------------------------------------------------
 
 func (v *Vault) verify(pin string) error {
 	file, err := readVaultFile(v.path)
@@ -371,16 +345,12 @@ func (v *Vault) verify(pin string) error {
 	return nil
 }
 
-// Key returns a copy of the derived key, or nil while the vault is locked.
 func (v *Vault) Key() []byte {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return append([]byte(nil), v.key...)
 }
 
-// Adopt installs a key the host kept across restarts. The key is verified
-// against the file, so a stale one leaves the vault locked instead of
-// corrupting it on the next write.
 func (v *Vault) Adopt(key []byte) error {
 	if len(key) != vaultKeyLen {
 		return errWrongPIN
@@ -413,8 +383,6 @@ func (v *Vault) Adopt(key []byte) error {
 	return nil
 }
 
-// loadLocked decrypts the file into memory and returns the key, so Unlock does
-// not have to derive it twice.
 func (v *Vault) loadLocked(pin string) ([]byte, error) {
 	file, err := readVaultFile(v.path)
 	if err != nil {
@@ -497,7 +465,6 @@ func readVaultFile(path string) (vaultFile, error) {
 func vaultKey(pin string, salt []byte) []byte {
 	key, err := scrypt.Key([]byte(pin), salt, vaultScryptN, vaultScryptR, vaultScryptP, vaultKeyLen)
 	if err != nil {
-		// scrypt only fails on impossible parameters, which are constants here.
 		panic(err)
 	}
 	return key
@@ -527,7 +494,7 @@ func encrypt(data vaultData, salt, key []byte) ([]byte, error) {
 		Nonce:   base64.StdEncoding.EncodeToString(nonce),
 		Data:    base64.StdEncoding.EncodeToString(sealed),
 	}
-	return json.MarshalIndent(file, "", "  ")
+	return json.MarshalIndent(file, "", " ")
 }
 
 func decrypt(file vaultFile, key []byte) ([]byte, error) {
@@ -553,9 +520,6 @@ func decrypt(file vaultFile, key []byte) ([]byte, error) {
 	return gcm.Open(nil, nonce, sealed, nil)
 }
 
-// --- names -----------------------------------------------------------------
-
-// normalizeScope turns an empty or channel-like value into a usable scope.
 func normalizeScope(scope string) string {
 	scope = strings.ToLower(strings.TrimSpace(scope))
 	if scope == "" {
@@ -578,8 +542,6 @@ func validScope(scope string) bool {
 	return true
 }
 
-// validSecretName accepts both plain variables and the @file: prefix, which is
-// how a multi-line secret reaches a tool as a path.
 func validSecretName(name string) bool {
 	name = strings.TrimPrefix(name, "@file:")
 	if name == "" || len(name) > 128 {
@@ -596,8 +558,6 @@ func validSecretName(name string) bool {
 	return true
 }
 
-// parseDotEnv reads the subset of .env people actually paste: comments, blank
-// lines, export, single/double quotes and inline values.
 func parseDotEnv(text string) map[string]string {
 	out := map[string]string{}
 	for _, line := range strings.Split(text, "\n") {

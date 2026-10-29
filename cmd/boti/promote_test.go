@@ -24,8 +24,6 @@ func runCommand(t *testing.T, dir, name string, args ...string) {
 	}
 }
 
-// fakeRepo is a checkout package.sh can "build" without a compiler: one
-// executable per program, and an ax that passes its selftest.
 func fakeRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
@@ -267,7 +265,6 @@ func TestActivateWaitsForIdle(t *testing.T) {
 
 	addr := freeAddr(t)
 	writeServeBot(t, root, addr)
-	// Add the idle URL to the bot after writeServeBot wrote the table.
 	path := filepath.Join(root, "bot.toml")
 	content, err := os.ReadFile(path)
 	if err != nil {

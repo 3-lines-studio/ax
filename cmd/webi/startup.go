@@ -13,15 +13,11 @@ import (
 	"time"
 )
 
-// starterBot is written when webi creates a bot directory, so tools get a
-// workspace and the file is a hint about what else a bot can hold.
 const starterBot = `# A Botdir: bot.md adds context, skills/ adds procedures,
 # workspace/ is where tools work. Any OpenAI-compatible endpoint works.
 model = "deepseek-flash"
 `
 
-// starterProviders are the local tools a fresh bot gets when they are
-// installed: without them the first conversation has no hands.
 var starterProviders = []string{"fsx", "bashx", "skillx", "memoryx"}
 
 func writeStarter(root string) error {
@@ -36,9 +32,6 @@ func writeStarter(root string) error {
 	return os.WriteFile(filepath.Join(root, "bot.toml"), []byte(starter.String()), 0o644)
 }
 
-// announce prints the one link a first visit needs. It stays off the log: the
-// supervisor's log is a file, and a token in it would outlive the terminal.
-// Only a person at a terminal sees (and opens) the link.
 func announce(listener net.Listener, token string, open bool) {
 	addr, ok := listener.Addr().(*net.TCPAddr)
 	if !ok {
@@ -51,7 +44,6 @@ func announce(listener net.Listener, token string, open bool) {
 	printURLs(host, addr.Port, token, open, "")
 }
 
-// printURLs is shared by the foreground server and `webi setup`.
 func printURLs(host string, port int, token string, open bool, tokenPath string) {
 	if !isTerminal(os.Stdout) {
 		if tokenPath != "" {
@@ -68,21 +60,18 @@ func printURLs(host string, port int, token string, open bool, tokenPath string)
 		localHost = "localhost"
 	}
 	local := "http://" + net.JoinHostPort(localHost, strconv.Itoa(port)) + "/?token=" + token
-	fmt.Fprintf(os.Stdout, "\n  webi is ready\n\n  This machine:  %s\n", local)
+	fmt.Fprintf(os.Stdout, "\n webi is ready\n\n This machine: %s\n", local)
 	if all {
 		if lan := lanAddress(); lan != "" {
-			fmt.Fprintf(os.Stdout, "  Other devices: http://%s/?token=%s\n", net.JoinHostPort(lan, strconv.Itoa(port)), token)
+			fmt.Fprintf(os.Stdout, " Other devices: http://%s/?token=%s\n", net.JoinHostPort(lan, strconv.Itoa(port)), token)
 		}
 	}
-	fmt.Fprintln(os.Stdout, "\n  The link sets a cookie, so it is needed only once. Treat it like the PIN.")
+	fmt.Fprintln(os.Stdout, "\n The link sets a cookie, so it is needed only once. Treat it like the PIN.")
 	if open {
 		openBrowser(local)
 	}
 }
 
-// alreadyServes reports whether a webi with this token is already answering on
-// the address. Typing webi again then opens the running app instead of failing
-// with "address already in use".
 func alreadyServes(listen, token string) bool {
 	host, port := splitListen(listen)
 	if port == 0 {
@@ -110,8 +99,6 @@ func isTerminal(file *os.File) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
-// lanAddress is the address to type on a phone: the first private IPv4, or a
-// global one if there is no private address.
 func lanAddress() string {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {

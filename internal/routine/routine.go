@@ -1,6 +1,3 @@
-// Package routine runs deterministic bot routines: executable code under
-// routines/<name>/ that runs on demand or on a cron schedule, with no model in
-// the loop.
 package routine
 
 import (
@@ -22,13 +19,10 @@ import (
 )
 
 var (
-	// ErrNotFound means the routine does not exist.
 	ErrNotFound = errors.New("routine not found")
-	// ErrRunning means another run of the same routine holds the lock.
-	ErrRunning = errors.New("routine is already running")
+	ErrRunning  = errors.New("routine is already running")
 )
 
-// Manifest is routines/<name>/routine.toml.
 type Manifest struct {
 	Description string `toml:"description"`
 	Entry       string `toml:"entry"`
@@ -39,7 +33,6 @@ type Manifest struct {
 	Enabled     bool   `toml:"enabled"`
 }
 
-// Routine is a validated routine definition.
 type Routine struct {
 	Name        string
 	Dir         string
@@ -48,20 +41,15 @@ type Routine struct {
 	Schedule    *Schedule
 	Location    *time.Location
 	Timeout     time.Duration
-	// KeepRuns is how many run directories survive; 0 keeps every run.
-	KeepRuns int
-	Enabled  bool
+	KeepRuns    int
+	Enabled     bool
 }
 
-// Set is the routines discovered under one bot root.
 type Set struct {
 	Paths botdir.Paths
 	Items []Routine
 }
 
-// Open discovers routines in paths.Routines (or <root>/routines). A missing
-// directory is an empty set. A malformed manifest fails the whole load so a
-// broken routine is visible instead of silently skipped.
 func Open(paths botdir.Paths) (*Set, error) {
 	dir := paths.Routines
 	if dir == "" {
@@ -92,7 +80,6 @@ func Open(paths botdir.Paths) (*Set, error) {
 	return set, nil
 }
 
-// Find returns one routine by name.
 func (s *Set) Find(name string) (Routine, error) {
 	for _, item := range s.Items {
 		if item.Name == name {
@@ -102,17 +89,14 @@ func (s *Set) Find(name string) (Routine, error) {
 	return Routine{}, ErrNotFound
 }
 
-// Runner executes routines for one bot.
 type Runner struct {
 	Paths botdir.Paths
 }
 
-// NewRunner returns a runner for paths.
 func NewRunner(paths botdir.Paths) *Runner {
 	return &Runner{Paths: paths}
 }
 
-// RunResult is the metadata of one run.
 type RunResult struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
@@ -125,8 +109,6 @@ type RunResult struct {
 	Log       string    `json:"log"`
 }
 
-// Run executes one routine. A non-zero exit is reported in the result, not as
-// a Go error; ErrRunning means the lock is held by another run.
 func (r *Runner) Run(ctx context.Context, item Routine, trigger string) (RunResult, error) {
 	entry, err := entryPath(item)
 	if err != nil {
@@ -218,8 +200,6 @@ const (
 	maxKeepRuns     = 1000
 )
 
-// prune deletes the oldest run directories beyond keep. It runs under the
-// routine lock, so it cannot race with another run.
 func (r *Runner) prune(state string, keep int) {
 	if keep <= 0 {
 		return
@@ -242,7 +222,6 @@ func (r *Runner) prune(state string, keep int) {
 		path := filepath.Join(dir, entry.Name())
 		result, err := readResult(path)
 		if err != nil {
-			// A directory without a record is a crash leftover: prune it first.
 			result = RunResult{ID: entry.Name()}
 		}
 		runs = append(runs, runEntry{dir: path, id: result.ID, started: result.StartedAt})
@@ -261,9 +240,6 @@ func (r *Runner) prune(state string, keep int) {
 	}
 }
 
-// reconcile marks runs left in the running state by a host that died as
-// interrupted. It runs while the lock is held, so any other "running" record
-// in this routine belongs to a process that is gone.
 func (r *Runner) reconcile(state string) {
 	dir := filepath.Join(state, "runs")
 	entries, err := os.ReadDir(dir)
@@ -289,8 +265,6 @@ func (r *Runner) reconcile(state string) {
 	}
 }
 
-// Runs returns recent runs for a routine, newest first. limit defaults to 20
-// and is capped at 100.
 func (r *Runner) Runs(name string, limit int) ([]RunResult, error) {
 	if !validName(name) {
 		return nil, ErrNotFound
@@ -332,7 +306,6 @@ func (r *Runner) Runs(name string, limit int) ([]RunResult, error) {
 	return results, nil
 }
 
-// RunInfo returns one run's metadata without reading its log.
 func (r *Runner) RunInfo(name, runID string) (RunResult, error) {
 	if !validName(name) || !validRunID(runID) {
 		return RunResult{}, ErrNotFound
@@ -347,7 +320,6 @@ func (r *Runner) RunInfo(name, runID string) (RunResult, error) {
 	return result, nil
 }
 
-// RunLog returns one run's metadata and log text.
 func (r *Runner) RunLog(name, runID string) (RunResult, string, error) {
 	result, err := r.RunInfo(name, runID)
 	if err != nil {
@@ -363,7 +335,6 @@ func (r *Runner) RunLog(name, runID string) (RunResult, string, error) {
 	return result, string(data), nil
 }
 
-// LastRun returns the most recent run metadata for a routine.
 func (r *Runner) LastRun(name string) (RunResult, error) {
 	runs, err := r.Runs(name, 1)
 	if err != nil {
@@ -497,7 +468,7 @@ func (r *Runner) workspace() string {
 }
 
 func (r *Runner) writeResult(dir string, result RunResult) error {
-	data, err := json.MarshalIndent(result, "", "  ")
+	data, err := json.MarshalIndent(result, "", " ")
 	if err != nil {
 		return err
 	}

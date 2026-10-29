@@ -30,16 +30,15 @@ func runConnCommand(fc fileConfig, bot *botCtx, args []string) {
 func connUsage() {
 	fmt.Fprint(os.Stderr, `usage: ax conn <command> [flags]
 
-  list [--json]        configured connections: kind, trust, capabilities, auth
-  doctor [--connection ID]
-                       connect every connection and report declared vs enabled
+ list [--json] configured connections: kind, trust, capabilities, auth
+ doctor [--connection ID]
+ connect every connection and report declared vs enabled
 
 Connections come from [[connection]] tables in bot.toml. tools/AX_TOOLS and
 [[mcp]] are legacy spellings and appear here with the same ids.
 `)
 }
 
-// connTarget is the human form of where a connection lives.
 func connTarget(conn connection) string {
 	if conn.kind == connSSH {
 		target := conn.entry.Host
@@ -123,7 +122,7 @@ func connListCommand(fc fileConfig, bot *botCtx, args []string) {
 		out = append(out, item)
 	}
 	if asJSON {
-		data, err := json.MarshalIndent(out, "", "  ")
+		data, err := json.MarshalIndent(out, "", " ")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
@@ -157,7 +156,6 @@ func connDoctorCommand(fc fileConfig, bot *botCtx, args []string) {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--refresh", "-refresh":
-			// Doctor always connects; kept for symmetry with ax catalog.
 		case "--connection", "-connection", "--server", "-server":
 			i++
 			if i >= len(args) {

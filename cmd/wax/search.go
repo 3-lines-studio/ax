@@ -14,9 +14,6 @@ import (
 	"time"
 )
 
-// DeepSeek Search and Fetch are plain JSON APIs billed per request
-// (https://api-docs.deepseek.com/guides/search). wax uses them for web_search;
-// web_fetch keeps the local renderer because it handles JavaScript.
 const (
 	deepseekDefaultBase = "https://api.deepseek.com"
 	maxSearchOutput     = 64 << 10
@@ -43,8 +40,6 @@ type searchRequest struct {
 	OriQuestion string `json:"ori_question,omitempty"`
 }
 
-// deepseekKey is the key ax would use for the model, resolved once here so a
-// bot does not have to configure the same secret twice.
 func deepseekKey() string { return resolveDeepSeekKey() }
 
 func deepseekBase() string {
@@ -57,7 +52,6 @@ func deepseekBase() string {
 	return base
 }
 
-// searchEndpoint is the tools URL for the configured base.
 func searchEndpoint(base string) string {
 	parsed, err := url.Parse(base)
 	if err != nil || parsed.Host == "" {
@@ -70,8 +64,6 @@ func searchEndpoint(base string) string {
 	return parsed.String()
 }
 
-// searchWeb runs one DeepSeek Search request, retrying the statuses the docs
-// call retryable (408, 429, 5xx).
 func searchWeb(ctx context.Context, client *http.Client, req searchRequest) ([]searchResult, error) {
 	if strings.TrimSpace(req.Query) == "" {
 		return nil, errors.New("query is required")
@@ -148,8 +140,6 @@ func apiError(status int, body []byte) error {
 	return fmt.Errorf("deepseek search: HTTP %d: %s", status, message)
 }
 
-// formatSearch renders results for the model: title, link, provenance, the
-// long summary and, when asked, a slice of the page content.
 func formatSearch(results []searchResult) string {
 	if len(results) == 0 {
 		return "No results."
@@ -169,17 +159,17 @@ func formatSearch(results []searchResult) string {
 			meta = append(meta, "authoritative")
 		}
 		if len(meta) > 0 {
-			fmt.Fprintf(&out, "   %s\n", strings.Join(meta, " · "))
+			fmt.Fprintf(&out, " %s\n", strings.Join(meta, " · "))
 		}
 		text := result.Summary
 		if text == "" {
 			text = result.Snippet
 		}
 		if text != "" {
-			fmt.Fprintf(&out, "   %s\n", strings.TrimSpace(text))
+			fmt.Fprintf(&out, " %s\n", strings.TrimSpace(text))
 		}
 		if content := strings.TrimSpace(result.Content); content != "" {
-			fmt.Fprintf(&out, "   Content: %s\n", truncateString(content, 4000))
+			fmt.Fprintf(&out, " Content: %s\n", truncateString(content, 4000))
 		}
 		out.WriteString("\n")
 		if out.Len() > maxSearchOutput {

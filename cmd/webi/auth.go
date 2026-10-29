@@ -12,13 +12,8 @@ import (
 	"strings"
 )
 
-// The token is the boundary, not the address: a page in the user's browser can
-// be pointed at 127.0.0.1 by DNS rebinding, so loopback does not mean "us".
 const tokenCookie = "webi_token"
 
-// loadToken returns the API token, creating it on first run. WEBI_TOKEN wins
-// so a unit file or a container can pin it; otherwise it lives next to the
-// vault, readable only by the user.
 func loadToken(stateDir string) (token, path string, err error) {
 	if env := strings.TrimSpace(os.Getenv("WEBI_TOKEN")); env != "" {
 		if len(env) < 16 {
@@ -47,10 +42,6 @@ func sameToken(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-// publicPath is the PWA shell. A browser fetches the manifest (and the icons
-// it references) outside the page's cookie jar, and the service worker and
-// static assets carry no data: they have to load before the token is checked.
-// Everything under /api/ stays behind the token.
 func publicPath(p string) bool {
 	switch p {
 	case "/healthz", "/readyz", "/manifest.webmanifest", "/sw.js":
@@ -59,9 +50,6 @@ func publicPath(p string) bool {
 	return p == "/static" || strings.HasPrefix(p, "/static/")
 }
 
-// auth requires the token on everything but the health check and the shell. A
-// browser opens the UI once with ?token=... and gets a cookie; scripts send a
-// bearer header.
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if publicPath(path.Clean(r.URL.Path)) {
@@ -104,8 +92,6 @@ func (s *Server) auth(next http.Handler) http.Handler {
 	})
 }
 
-// securityHeaders keeps a rendered message from becoming a page: no inline
-// scripts, no framing, no referrer leaking the token URL.
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := w.Header()

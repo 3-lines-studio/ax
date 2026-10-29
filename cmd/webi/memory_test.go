@@ -34,7 +34,6 @@ func TestMemoryAPIIsPerChannel(t *testing.T) {
 	if _, _, err := two.Upsert(memory.Memory{Subject: "Shell", Summary: "Usa fish."}); err != nil {
 		t.Fatal(err)
 	}
-	// The bot root is not a channel: it has no memory of its own here.
 	srv := &Server{store: store, cfg: axrun.Config{BotRoot: t.TempDir()}}
 
 	list := func(channel, query string) []memory.Memory {

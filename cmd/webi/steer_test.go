@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// A message sent while the run is going steers it instead of being rejected,
-// and images cannot ride along because ax has no way to attach them mid-run.
 func TestMessageWhileRunningSteers(t *testing.T) {
 	dir := t.TempDir()
 	record := filepath.Join(dir, "steer.txt")
@@ -39,7 +37,6 @@ func TestMessageWhileRunningSteers(t *testing.T) {
 	if code := call(t, srv, "POST", "/api/threads/"+thread.ID+"/messages", `{"text":"and update the docs"}`, &steer); code != 200 || !steer.Steered {
 		t.Fatalf("steer code=%d %+v", code, steer)
 	}
-	// Images cannot be steered: they would need a new prompt, not a user turn.
 	if code := call(t, srv, "POST", "/api/threads/"+thread.ID+"/messages", `{"text":"x","images":["nope"]}`, nil); code != 409 {
 		t.Fatalf("image steer code=%d", code)
 	}

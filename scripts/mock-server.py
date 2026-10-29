@@ -1,13 +1,3 @@
-#!/usr/bin/env python3
-"""Mock OpenAI-compatible endpoint for testing the ax TUI without an API key.
-
-First request: streams content then a bash tool call (echo hello).
-Second request: streams a rich markdown answer (heading, table, code).
-
-Usage:
-    python3 scripts/mock-server.py            # listens on 127.0.0.1:8787
-    OPENAI_API_KEY=test ./target/release/ax -base http://127.0.0.1:8787
-"""
 import http.server
 import json
 import threading
@@ -33,10 +23,8 @@ fn main() { println!("hello"); }
 ```
 """
 
-
 def sse(chunks):
     return "".join(f"data: {json.dumps(c)}\n\n" for c in chunks).encode()
-
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
@@ -80,7 +68,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
         else:
-            # Non-streaming: return the final rich answer as plain JSON.
             data = json.dumps(
                 {"choices": [{"message": {"role": "assistant", "content": RICH}}],
                  "usage": {"prompt_tokens": 20, "completion_tokens": 8}}
@@ -100,7 +87,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
-
 
 if __name__ == "__main__":
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler)

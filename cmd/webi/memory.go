@@ -9,8 +9,6 @@ import (
 	"github.com/3-lines-studio/ax/internal/memory"
 )
 
-// memoryTarget resolves the memory store a channel owns. Memory lives under
-// the bot's state directory, so a channel's store is its own.
 func (s *Server) memoryTarget(channelID string) (*memory.Store, botTarget, error) {
 	target, err := s.botTarget(channelID)
 	if err != nil {

@@ -106,9 +106,6 @@ func (t *stdioTransport) dispatch(line []byte) {
 		return
 	}
 	if envelope.Method != "" {
-		// Server-initiated request or notification. ax supports neither
-		// elicitation nor sampling; answer requests with MethodNotFound so a
-		// legacy server does not hang waiting for a reply.
 		if len(envelope.ID) > 0 && string(envelope.ID) != "null" {
 			result := map[string]any{}
 			if envelope.Method != "ping" {

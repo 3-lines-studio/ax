@@ -13,10 +13,6 @@ type stateName struct {
 	} `json:"config"`
 }
 
-// The UI labels the person typing. The name lives in settings.json, reaches
-// the browser as both state.user (the key the message list reads) and
-// config.name (the settings form), and falls back to "You" in the UI when it
-// is empty.
 func TestSettingsCarryTheUserName(t *testing.T) {
 	srv, _ := newTestServer(t, "/bin/true")
 

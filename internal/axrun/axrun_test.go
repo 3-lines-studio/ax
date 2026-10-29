@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// fakeAX writes a shell script that behaves like ax for the protocol under
-// test. The script echoes the arguments it saw into <dir>/args.txt.
 func fakeAX(t *testing.T, body string) (string, string) {
 	t.Helper()
 	dir := t.TempDir()

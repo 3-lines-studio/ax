@@ -1,9 +1,3 @@
-// Package botdir implements the Botdir conventions this repository's
-// programs share: where a bot keeps its definition and runtime data, how
-// bot.toml and secrets are read, and which directory a standalone tool
-// provider should work in.
-//
-// The normative specification is docs/botdir/BOTDIR.md.
 package botdir
 
 import (
@@ -15,9 +9,6 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Paths are the directories and inputs a consumer derives from a bot root.
-// Definition paths (Skills, Prompt) stay on the bot root; runtime paths
-// (Workspace) resolve under BOT_DATA when it is set.
 type Paths struct {
 	Root      string
 	DataRoot  string
@@ -31,8 +22,6 @@ type Paths struct {
 	IsBot     bool
 }
 
-// LoadTOML decodes root/bot.toml into v. A missing bot.toml is not an
-// error: standalone use simply has no bot configuration.
 func LoadTOML(root string, v any) error {
 	data, err := os.ReadFile(filepath.Join(root, "bot.toml"))
 	if err != nil {
@@ -47,15 +36,10 @@ func LoadTOML(root string, v any) error {
 	return nil
 }
 
-// Resolve derives a consumer's paths from root. When root is a bot and the
-// runtime workspace is missing, Resolve creates it.
 func Resolve(root string) Paths {
 	return ResolveData(root, DataRoot(root))
 }
 
-// ResolveData is Resolve with an explicit runtime data root. A host that
-// manages several bots uses it to read a channel's paths without changing its
-// own BOT_DATA: every channel is a bot whose runtime data is its own root.
 func ResolveData(root, dataRoot string) Paths {
 	if dataRoot == "" {
 		dataRoot = root
@@ -95,8 +79,6 @@ func ResolveData(root, dataRoot string) Paths {
 	return paths
 }
 
-// DataRoot is the runtime data root: BOT_DATA when a host provides one,
-// otherwise the bot root itself.
 func DataRoot(root string) string {
 	if d := os.Getenv("BOT_DATA"); d != "" {
 		return d
@@ -104,14 +86,10 @@ func DataRoot(root string) string {
 	return root
 }
 
-// StateRoot is the durable runtime state directory: state/ under the runtime
-// data root. Consumers keep their own subdirectories there.
 func StateRoot(root string) string {
 	return filepath.Join(DataRoot(root), "state")
 }
 
-// EnvRoot is the runtime root a host passed to this process: BOT_DATA when
-// set, otherwise BOT_ROOT, otherwise empty (standalone).
 func EnvRoot() string {
 	if data := os.Getenv("BOT_DATA"); data != "" {
 		return data
@@ -119,11 +97,6 @@ func EnvRoot() string {
 	return os.Getenv("BOT_ROOT")
 }
 
-// Workspace is the directory a tool provider works in when it was started
-// with BOT_ROOT/BOT_DATA in the environment: the runtime root's workspace/
-// when it exists, the runtime root otherwise, and ./workspace (or the current
-// directory) when running standalone. The path is not made absolute or
-// validated; callers that need a filesystem root must do that themselves.
 func Workspace() string {
 	root := EnvRoot()
 	if root != "" {
@@ -138,9 +111,6 @@ func Workspace() string {
 	return "."
 }
 
-// ReadSecret prefers the environment variable and falls back to
-// root/secrets/<fileName>. A missing file yields an empty value, not an
-// error: callers decide whether the secret is required.
 func ReadSecret(root, envName, fileName string) (string, error) {
 	if v := os.Getenv(envName); v != "" {
 		return v, nil
@@ -155,13 +125,11 @@ func ReadSecret(root, envName, fileName string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// Exists reports whether path can be stat'ed.
 func Exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
 
-// IsDir reports whether path exists and is a directory.
 func IsDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()

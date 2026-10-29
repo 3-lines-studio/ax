@@ -15,7 +15,7 @@ func doctor() int {
 	if root == "" {
 		wd, err := os.Getwd()
 		if err != nil {
-			fmt.Printf("bot root     error: %v\n", err)
+			fmt.Printf("bot rooterror: %v\n", err)
 			return 1
 		}
 		root = wd
@@ -53,9 +53,9 @@ func doctor() int {
 	missing := false
 	report := func(name string, ok bool) {
 		if ok {
-			fmt.Printf("     ok      %-32s\n", name)
+			fmt.Printf("   ok      %-32s\n", name)
 		} else {
-			fmt.Printf("     missing %-32s\n", name)
+			fmt.Printf("   missing %-32s\n", name)
 			missing = true
 		}
 	}

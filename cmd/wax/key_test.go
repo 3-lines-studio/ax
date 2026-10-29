@@ -8,7 +8,6 @@ import (
 	"testing"
 )
 
-// isolate clears every source so each case starts from nothing.
 func isolate(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()

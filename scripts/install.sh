@@ -1,16 +1,4 @@
 #!/bin/sh
-# Install AX programs. One download for the whole set: the release ships one
-# archive per platform, so asking for one program or all of them costs the same.
-#
-#   install.sh                 # every program in the release
-#   install.sh ax fsx bashx    # only these
-#   install.sh update          # re-install what is already here, if it changed
-#   install.sh uninstall ax    # remove these (no names: all installed programs)
-#
-# Environment:
-#   AX_PREFIX / PREFIX   install root; binaries go to <root>/bin (default ~/.local)
-#   VERSION              release tag to install (default: latest)
-#   INSTALL_BASE_URL     directory holding ax-<os>-<arch>.tar.gz and SHA256SUMS
 set -eu
 
 action=install
@@ -123,7 +111,6 @@ tar -xzf "$tmp/$archive" -C "$tmp/unpack"
 
 if [ "$#" -eq 0 ]; then
     if [ "$action" = update ]; then
-        # Update without names refreshes what is already in $bindir.
         set -- $(for program in $(ls "$tmp/unpack" | sort); do
             [ -f "$bindir/$program" ] && echo "$program"
         done)

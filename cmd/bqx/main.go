@@ -132,8 +132,6 @@ func copyGCSObject(ctx context.Context, bucket, object, destination string) erro
 	return nil
 }
 
-// credentialsFromJSON validates the credential type before loading it: the
-// environment variable is ours, but an unexpected type should fail loudly.
 func credentialsFromJSON(ctx context.Context, data []byte, scopes ...string) (*google.Credentials, error) {
 	var header struct {
 		Type string `json:"type"`

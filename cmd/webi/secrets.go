@@ -7,9 +7,6 @@ import (
 	"github.com/3-lines-studio/ax/internal/axrun"
 )
 
-// A provider can ask for a secret mid-run (`secret_request`). webi shows the
-// banner the UI already knows, stores the value in the channel's vault scope so
-// the next run has it for free, and hands it to the running ax for the retry.
 type pendingSecret struct {
 	ID          string `json:"id"`
 	Thread      string `json:"thread"`
@@ -71,7 +68,6 @@ func (s *Server) takePendingSecret(id string) (pendingSecret, bool) {
 	return request, ok
 }
 
-// answerSecret stores the value and delivers it to the run that asked.
 func (s *Server) answerSecret(request pendingSecret, value string) error {
 	if err := s.vault.Put(request.Scope, request.Name, value, ""); err != nil {
 		return err
@@ -88,8 +84,6 @@ func (s *Server) answerSecret(request pendingSecret, value string) error {
 	return nil
 }
 
-// skipSecret tells the running ax the user declined, so the tool call fails
-// with something readable instead of waiting for someone who left.
 func (s *Server) skipSecret(request pendingSecret) error {
 	s.mu.Lock()
 	run := s.runs[request.Thread]

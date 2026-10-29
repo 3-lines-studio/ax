@@ -8,13 +8,9 @@ import (
 	"time"
 )
 
-// A tool that asks for a secret mid-run: webi keeps the request, stores the
-// value in the channel's vault scope and hands it to the live ax, which retries.
 func TestSecretRequestRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	record := filepath.Join(dir, "secret.txt")
-	// The fake ax announces a secret_request, then reports whatever control line
-	// webi sends back.
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' '{\"type\":\"secret_request\",\"id\":\"c1\",\"tool\":\"demo.need\",\"name\":\"DEMO_TOKEN\",\"description\":\"demo\"}'\n" +
 		"read line\n" +
@@ -46,7 +42,6 @@ func TestSecretRequestRoundTrip(t *testing.T) {
 		t.Fatalf("message code=%d", code)
 	}
 
-	// The request shows up in the state the UI polls.
 	var state struct {
 		Pending []pendingSecret `json:"pending_secret"`
 	}
@@ -74,7 +69,6 @@ func TestSecretRequestRoundTrip(t *testing.T) {
 		t.Fatalf("answer code=%d %+v", code, answered)
 	}
 
-	// ax got the control line.
 	deadline = time.Now().Add(5 * time.Second)
 	for {
 		data, err := os.ReadFile(record)
@@ -87,12 +81,10 @@ func TestSecretRequestRoundTrip(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	// And the vault kept it for the next run.
 	value, err := srv.vault.Reveal("team", "DEMO_TOKEN", "long-enough")
 	if err != nil || value != "s3cret" {
 		t.Fatalf("vault value = %q err=%v", value, err)
 	}
-	// The request is gone once answered.
 	call(t, srv, "GET", "/api/state", "", &state)
 	if len(state.Pending) != 0 {
 		t.Fatalf("pending after answer = %+v", state.Pending)
@@ -150,9 +142,6 @@ func TestSecretSkip(t *testing.T) {
 	}
 }
 
-// waitIdle blocks until the thread has no live run, so a test never ends while
-// the background goroutine is still writing into the thread directory (which
-// makes TempDir cleanup fail).
 func waitIdle(t *testing.T, srv *Server, threadID string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
