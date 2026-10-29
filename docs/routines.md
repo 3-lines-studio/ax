@@ -74,9 +74,10 @@ The execution environment:
 
 The working directory is the bot workspace. State and cursors belong in
 `ROUTINE_STATE`; they are not memory and not part of the bot definition. When a
-host runs a channel, `BOT_ROOT` and `BOT_DATA` are that channel's root: every
-channel has its own workspace, state and run history, even if the host process
-itself was started with a different `BOT_DATA`. The runner creates:
+host runs a channel, `BOT_ROOT` is the host bot root (unless the channel has
+its own `bot.toml`) and `BOT_DATA` is the channel's workdir: every channel has
+its own workspace, state and run history, even if the host process itself was
+started with a different `BOT_DATA`. The runner creates:
 
 ```text
 state/routines/<name>/
@@ -92,15 +93,16 @@ A per-routine lock prevents overlapping runs; a second attempt returns
 ## Scheduling
 
 `webi` is the always-on host and runs the scheduler. Every 30 seconds it loads
-`routines/*/routine.toml` for the bot root and for every channel workdir,
-checks the enabled cron schedules in their timezone, and launches the due
-routines. A run that is still active when the next tick arrives is skipped by
-the lock.
+`routines/*/routine.toml` from the host bot root (or from a channel's own
+`bot.toml`, when it has one); a channel with a `routines/` directory overrides
+the host set. It checks the enabled cron schedules in their timezone and
+launches the due routines. A run that is still active when the next tick
+arrives is skipped by the lock.
 
-A channel is a bot directory, so `routines/` and `state/routines/` are
-per-channel: two channels can define a routine with the same name without
-sharing a schedule, a lock or a history. The webi view lists every channel; to
-inspect one from the CLI, point `ax -C <channel workdir>` at it.
+Every channel keeps its own `state/routines/`, so two channels can run a
+routine with the same name without sharing a schedule, a lock or a history.
+The webi view lists every channel; to inspect one from the CLI, point
+`ax -C <host bot root>` at the host and set `BOT_DATA=<channel workdir>`.
 
 `boti` and a plain `ax` run do not schedule; use `ax routine run` from cron or
 another scheduler when there is no `webi` process.

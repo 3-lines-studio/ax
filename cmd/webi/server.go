@@ -652,7 +652,7 @@ func (s *Server) launch(thread Thread, job axrun.Job, prompt string) error {
 	}
 	settings := s.loadSettings()
 	cfg := s.cfg
-	cfg.BotRoot = channel.Workdir
+	cfg.BotRoot = s.channelRoot(channel)
 	cfg.Model = firstNonEmpty(settings.Model, cfg.Model)
 	cfg.BaseURL = firstNonEmpty(settings.BaseURL, cfg.BaseURL)
 	// A channel is a bot: its runtime data lives at its root, not at the
@@ -790,7 +790,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	_, err = axrun.Compact(ctx, axrun.Config{
 		AXPath:  s.cfg.AXPath,
-		BotRoot: channel.Workdir,
+		BotRoot: s.channelRoot(channel),
 		Model:   firstNonEmpty(s.loadSettings().Model, s.cfg.Model),
 	}, s.store.SessionPath(thread.ID), func(event axrun.Event) {
 		s.publish(map[string]any{"type": "compact", "thread": thread.ID, "upto": event.Upto})

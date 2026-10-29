@@ -1,10 +1,12 @@
 # webi
 
 The browser transport for `ax`, the sibling of `slaxi`: one `ax` process per
-message, the same sessions and the same MCP catalog. A channel is a bot
-directory (`bot.toml`, `workspace/`, `skills/`); a thread is an ax session log.
-A fresh bot gets a `bot.toml` that declares every installed provider among
-`fsx`, `bashx`, `skillx` and `memoryx`, so the first chat can use them.
+message, the same sessions and the same MCP catalog. A channel is a workspace;
+the host's `bot.toml`, `bot.md` and `skills/` are shared by every channel, and a
+thread is an ax session log. A folder with its own `bot.toml` is a standalone
+bot and overrides the host config; you never need one per channel. A fresh bot
+gets a `bot.toml` that declares every installed provider among `fsx`, `bashx`,
+`skillx` and `memoryx`, so the first chat can use them.
 
 ```sh
 ax mcp add sentry             # whatever the bot needs
@@ -55,15 +57,16 @@ only, no inline script), `nosniff` and no referrer.
 ## How it works
 
 - `internal/axrun` starts `ax --events --session <thread>/session.jsonl -C
-  <channel workdir>` and forwards the NDJSON events. The run gets
-  `BOT_DATA=<channel workdir>`, so a channel is an independent bot: its tools
-  work there and its `workspace/`, `skills/` and `secrets/` are its own. The
-  host's `BOT_DATA` only holds webi's state (channels, threads, vault). Edit
-  channel changes that directory (it must be absolute and exist); point it at
-  the bot root, not at its `workspace/`, or ax sees no `bot.toml` and has no
-  tools. The run also gets `AX_WEB_CHANNEL`, `AX_WEB_THREAD`, their names and
-  titles, the user's name and `AX_WEB_PROMPT` (channel instructions); ax folds
-  them into the runtime section of its system prompt.
+  <host bot root>` and forwards the NDJSON events. The run gets
+  `BOT_DATA=<channel workdir>`, so tools and state follow the channel while
+  `bot.toml`, `bot.md` and `skills/` come from the host. A channel folder with
+  its own `bot.toml` is a standalone bot and keeps using it; otherwise the host
+  config is the default. The channel workdir is the data root: ax works in its
+  `workspace/` when that exists, otherwise in the folder itself, and its
+  `state/` holds memory and routines. The run also gets `AX_WEB_CHANNEL`,
+  `AX_WEB_THREAD`, their names and titles, the user's name and `AX_WEB_PROMPT`
+  (channel instructions); ax folds them into the runtime section of its system
+  prompt. Edit channel changes the folder (it must be absolute and exist).
 - The UI (the embedded static app) gets `delta`, `message`, `run`, `step`, `compact`
   and `state` events over `/api/stream`.
 - History is read straight from the ax session log, so a thread survives a

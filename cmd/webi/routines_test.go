@@ -272,7 +272,7 @@ func TestRoutineSchedulerRunsEveryChannel(t *testing.T) {
 	}
 	var mu sync.Mutex
 	published := map[string]string{}
-	sched := newRoutineScheduler(store, func(channel Channel, item routine.Routine, result routine.RunResult) {
+	sched := newRoutineScheduler(store, rootOne, func(channel Channel, item routine.Routine, result routine.RunResult) {
 		mu.Lock()
 		defer mu.Unlock()
 		published[channel.Name] = result.Status

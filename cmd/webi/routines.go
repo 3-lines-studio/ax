@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/3-lines-studio/ax/internal/botdir"
 	"github.com/3-lines-studio/ax/internal/routine"
@@ -33,10 +35,38 @@ type botTarget struct {
 	ChannelName string
 }
 
-// channelPaths resolves a channel's bot paths. A channel is a bot whose
-// runtime data is its own root, so the host's BOT_DATA never leaks into it.
-func channelPaths(channel Channel) botdir.Paths {
-	return botdir.ResolveData(channel.Workdir, channel.Workdir)
+// resolveChannelRoot picks the bot root for a channel. The host's bot.toml is
+// the default for every channel; a folder that has its own bot.toml is a
+// standalone bot and keeps overriding it. Channels no longer need a bot.toml
+// just to have tools.
+func resolveChannelRoot(hostRoot string, channel Channel) string {
+	if botdir.Exists(filepath.Join(channel.Workdir, "bot.toml")) {
+		return channel.Workdir
+	}
+	if root := strings.TrimSpace(hostRoot); root != "" {
+		return root
+	}
+	return channel.Workdir
+}
+
+// resolveChannelPaths keeps definition paths (bot.md, skills, host routines)
+// on the bot root and runtime paths (workspace, state) on the channel. A
+// channel may add its own routines/ without a full bot.toml; those win over
+// the host's.
+func resolveChannelPaths(hostRoot string, channel Channel) botdir.Paths {
+	paths := botdir.ResolveData(resolveChannelRoot(hostRoot, channel), channel.Workdir)
+	if routines := filepath.Join(channel.Workdir, "routines"); botdir.IsDir(routines) {
+		paths.Routines = routines
+	}
+	return paths
+}
+
+func (s *Server) channelRoot(channel Channel) string {
+	return resolveChannelRoot(s.cfg.BotRoot, channel)
+}
+
+func (s *Server) channelPaths(channel Channel) botdir.Paths {
+	return resolveChannelPaths(s.cfg.BotRoot, channel)
 }
 
 func (s *Server) botTarget(channelID string) (botTarget, error) {
@@ -48,7 +78,7 @@ func (s *Server) botTarget(channelID string) (botTarget, error) {
 		return botTarget{}, errors.New("channel not found")
 	}
 	return botTarget{
-		Paths:       channelPaths(channel),
+		Paths:       s.channelPaths(channel),
 		Channel:     channel.ID,
 		ChannelName: channel.Name,
 	}, nil
@@ -70,7 +100,7 @@ func (s *Server) botTargets(w http.ResponseWriter, req *http.Request) ([]botTarg
 	var targets []botTarget
 	for _, channel := range s.store.Channels() {
 		targets = append(targets, botTarget{
-			Paths:       channelPaths(channel),
+			Paths:       s.channelPaths(channel),
 			Channel:     channel.ID,
 			ChannelName: channel.Name,
 		})

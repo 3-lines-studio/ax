@@ -2007,7 +2007,7 @@ async function newChannel() {
     submit: 'Create',
     fields: [
       { name: 'name', label: 'Name', placeholder: 'my-project' },
-      { name: 'workdir', label: 'Bot directory', dir: true, placeholder: '/srv/ax/main', note: 'The channel root: ax reads bot.toml (tools), workspace/ and skills/ from here. Without a bot.toml it has no tools.' },
+      { name: 'workdir', label: 'Channel folder', dir: true, placeholder: '/home/me/code/project', note: 'The channel\'s data root. ax works in its workspace/ when that exists, otherwise in this folder. Tools, model and skills come from the host bot.toml.' },
       { name: 'prompt', label: 'Channel instructions (optional)', textarea: true, placeholder: 'Extra instructions for ax in this channel…' },
     ],
   });
@@ -2029,7 +2029,7 @@ async function editChannel(id) {
     title: 'Edit channel',
     fields: [
       { name: 'name', label: 'Name', value: ch.name },
-      { name: 'workdir', label: 'Bot directory', dir: true, value: ch.workdir, note: 'The channel root: ax reads bot.toml (tools), workspace/ and skills/ from here.' },
+      { name: 'workdir', label: 'Channel folder', dir: true, value: ch.workdir, note: 'The channel\'s data root. ax works in its workspace/ when that exists, otherwise in this folder; tools/model come from the host bot.toml.' },
       { name: 'prompt', label: 'Channel instructions', textarea: true, value: ch.prompt || '' },
     ],
   });
