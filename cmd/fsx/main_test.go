@@ -8,6 +8,15 @@ import (
 	"testing"
 )
 
+// Tests must not inherit the host bot's environment: a developer who runs the
+// suite from inside a served bot has BOT_ROOT/BOT_DATA exported, and the tests
+// below redirect those variables per case. Clear them once, before any test.
+func TestMain(m *testing.M) {
+	_ = os.Unsetenv("BOT_ROOT")
+	_ = os.Unsetenv("BOT_DATA")
+	os.Exit(m.Run())
+}
+
 func testFilesystem(t *testing.T) (*filesystem, string) {
 	t.Helper()
 	workspace := t.TempDir()
