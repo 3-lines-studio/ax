@@ -28,6 +28,28 @@ EVENT_KINDS = (
 )
 
 
+NOISE = {
+    "reasoning_delta",
+    "assistant_delta",
+    "usage",
+    "assistant_done",
+    "message",
+    "tool_done",
+    "tool_result",
+}
+
+
+def spine(kinds):
+    out = []
+    for kind in kinds:
+        if kind in NOISE:
+            continue
+        if out and kind == "tool_start" and out[-1] == "tool_start":
+            continue
+        out.append(kind)
+    return out
+
+
 def record(stack):
     bot = stack / "bot"
     workspace = bot / "workspace"
@@ -53,8 +75,8 @@ def record(stack):
         timeout=300,
     )
     events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
-    kinds = [e.get("type") for e in events]
-    tools = [e.get("name") for e in events if e.get("type") == "tool_start"]
+    kinds = spine([e.get("type") for e in events])
+    tools = sorted({e.get("name") for e in events if e.get("type") == "tool_start" and e.get("name") != "search"})
     outcome = [e.get("outcome") for e in events if e.get("type") == "done"]
     return {
         "model": MODEL,

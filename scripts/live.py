@@ -26,6 +26,9 @@ LAYERS = (
     "ax_webi",
     "ax_slaxi",
     "ax_routine",
+    "prov_pgx",
+    "prov_sshx",
+    "prov_browserx",
 )
 
 
@@ -49,6 +52,7 @@ class Stack:
         for path in (self.home, self.config, self.bot, self.bin):
             path.mkdir(parents=True, exist_ok=True)
         self.processes = []
+        self.cleanup = []
 
     def build(self):
         for program in ("ax",) + PROVIDERS + ("boti", "webi", "slaxi"):
@@ -96,8 +100,13 @@ class Stack:
         return proc
 
     def stop_all(self):
+        for hook in self.cleanup:
+            try:
+                hook()
+            except Exception:
+                pass
         for proc in self.processes:
-            if proc.poll() is None:
+            if proc is not None and proc.poll() is None:
                 try:
                     os.killpg(proc.pid, signal.SIGTERM)
                 except ProcessLookupError:
@@ -345,6 +354,195 @@ def check_ax_slaxi(stack):
         fail("ax_slaxi: doctor exited %d: %s" % (doctor.returncode, doctor.stdout[-300:]))
     if "bot root" not in doctor.stdout:
         fail("ax_slaxi: doctor printed no report: %s" % doctor.stdout[-300:])
+
+
+def download_deb(name, dest):
+    subprocess.run(["apt-get", "download", name], cwd=str(dest), check=True, capture_output=True)
+    package = next(dest.glob(name + "_*.deb"))
+    subprocess.run(["dpkg-deb", "-x", str(package), str(dest / "root")], check=True)
+    package.unlink()
+
+
+def start_postgres(stack):
+    dest = stack.root / "pg"
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in ("postgresql-17", "libpq5", "postgresql-common"):
+        download_deb(name, dest)
+    bindir = dest / "root" / "usr" / "lib" / "postgresql" / "17" / "bin"
+    if not (bindir / "postgres").is_file():
+        fail("postgres: no server binary after unpacking")
+    libdir = dest / "root" / "usr" / "lib" / "x86_64-linux-gnu"
+    env = stack.env(LD_LIBRARY_PATH=libdir)
+    subprocess.run([str(bindir / "initdb"), "-D", str(dest / "data"), "-U", "postgres", "--auth=trust"], env=env, check=True, capture_output=True)
+    port = free_port()
+    subprocess.run(
+        [str(bindir / "pg_ctl"), "-D", str(dest / "data"), "-l", str(dest / "pg.log"), "-o", "-p %d -c listen_addresses=127.0.0.1 -c unix_socket_directories=%s" % (port, dest), "start"],
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    stack.cleanup.append(lambda: subprocess.run([str(bindir / "pg_ctl"), "-D", str(dest / "data"), "stop", "-m", "immediate"], env=env, capture_output=True))
+    wait_tcp(port, timeout=30)
+    return "postgres://postgres@127.0.0.1:%d/postgres?sslmode=disable" % port
+
+
+def start_sshd(stack):
+    dest = stack.root / "sshd"
+    dest.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(dest / "host_key")], check=True)
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(dest / "user_key")], check=True)
+    (dest / "authorized_keys").write_bytes((dest / "user_key.pub").read_bytes())
+    (dest / "authorized_keys").chmod(0o600)
+    download_deb("openssh-server", dest)
+    download_deb("openssh-sftp-server", dest)
+    sshd = dest / "root" / "usr" / "sbin" / "sshd"
+    sftp = dest / "root" / "usr" / "lib" / "openssh" / "sftp-server"
+    if not sshd.is_file() or not sftp.is_file():
+        fail("sshd: binaries missing after unpacking")
+    port = free_port()
+    remote = dest / "remote"
+    remote.mkdir(exist_ok=True)
+    (dest / "sshd_config").write_text(
+        "\n".join(
+            [
+                "Port %d" % port,
+                "ListenAddress 127.0.0.1",
+                "HostKey %s" % (dest / "host_key"),
+                "AuthorizedKeysFile %s" % (dest / "authorized_keys"),
+                "PasswordAuthentication no",
+                "PubkeyAuthentication yes",
+                "StrictModes no",
+                "UsePAM no",
+                "PidFile %s" % (dest / "sshd.pid"),
+                "AuthorizedKeysCommand none",
+                "Subsystem sftp %s" % sftp,
+            ]
+        )
+        + "\n"
+    )
+    subprocess.run([str(sshd), "-f", str(dest / "sshd_config"), "-E", str(dest / "sshd.log")], check=True)
+    stack.cleanup.append(lambda: subprocess.run(["pkill", "-f", str(dest / "sshd_config")], capture_output=True))
+    wait_tcp(port, timeout=30)
+    known = subprocess.run(["ssh-keyscan", "-p", str(port), "127.0.0.1"], capture_output=True, text=True, check=True).stdout
+    hosts = dest / "known_hosts"
+    hosts.write_text(known)
+    return {
+        "SSHX_HOST": "127.0.0.1:%d" % port,
+        "USER": os.environ.get("USER") or "root",
+        "SSHX_KEY_FILE": str(dest / "user_key"),
+        "SSHX_KNOWN_HOSTS": str(hosts),
+        "SSHX_ROOT": str(remote),
+    }
+
+
+def start_chromium(stack):
+    chromium = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
+    if not chromium:
+        fail("browserx: no chromium on PATH")
+    dest = stack.root / "chrome"
+    dest.mkdir(parents=True, exist_ok=True)
+    port = free_port()
+    log = (dest / "chrome.log").open("wb")
+    proc = subprocess.Popen(
+        [
+            chromium,
+            "--headless=new",
+            "--no-sandbox",
+            "--disable-gpu",
+            "--disable-dev-shm-usage",
+            "--remote-debugging-port=%d" % port,
+            "--user-data-dir=%s" % (dest / "profile"),
+            "about:blank",
+        ],
+        stdout=log,
+        stderr=log,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    stack.processes.append(proc)
+    wait_tcp(port, timeout=30)
+    return "http://127.0.0.1:%d" % port
+
+
+def check_prov_pgx(stack):
+    url = start_postgres(stack)
+    result = subprocess.run(
+        [str(stack.bin / "pgx"), "run", "postgres_query"],
+        input=json.dumps({"sql": "select 1 as one, 2 as two"}),
+        env=stack.env(DATABASE_URL=url),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        fail("prov_pgx: exit %d: %s" % (result.returncode, result.stderr[-300:]))
+    rows = json.loads(result.stdout).get("rows") or []
+    if not rows or rows[0].get("one") != 1:
+        fail("prov_pgx: unexpected rows %r" % rows)
+    write = subprocess.run(
+        [str(stack.bin / "pgx"), "run", "postgres_query"],
+        input=json.dumps({"sql": "insert into t values (1)"}),
+        env=stack.env(DATABASE_URL=url),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if write.returncode != 2:
+        fail("prov_pgx: a write exited %d, want 2" % write.returncode)
+
+
+def check_prov_sshx(stack):
+    env = start_sshd(stack)
+    remote = stack.bin.parent / ("remote-%d" % os.getpid())
+    payloads = [
+        ("bash", {"command": "echo SSH-REMOTE-OK"}, "SSH-REMOTE-OK"),
+        ("write", {"path": "probe.txt", "content": "REMOTE-WRITE"}, "wrote"),
+        ("read", {"path": "probe.txt"}, "REMOTE-WRITE"),
+    ]
+    for tool, payload, want in payloads:
+        result = subprocess.run(
+            [str(stack.bin / "sshx"), "run", tool],
+            input=json.dumps(payload),
+            env=stack.env(**env),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            fail("prov_sshx %s: exit %d: %s" % (tool, result.returncode, result.stderr[-300:]))
+        if want not in result.stdout:
+            fail("prov_sshx %s: output %r lacks %r" % (tool, result.stdout[:120], want))
+    del remote
+
+
+def check_prov_browserx(stack):
+    cdp = start_chromium(stack)
+    artifacts = stack.root / "shots"
+    artifacts.mkdir(exist_ok=True)
+    env = stack.env(BROWSERX_CDP_URL=cdp, BROWSERX_ARTIFACT_DIR=artifacts)
+    target = os.environ.get("AX_LIVE_BROWSER_URL") or "https://example.com"
+    steps = [
+        ("browser_open", {"url": target}, "Opened"),
+        ("browser_read", {}, "URL:"),
+        ("browser_links", {}, "http"),
+        ("browser_screenshot", {"name": "smoke"}, "smoke.png"),
+    ]
+    for tool, payload, want in steps:
+        result = subprocess.run(
+            [str(stack.bin / "browserx"), "run", tool],
+            input=json.dumps(payload),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if result.returncode != 0:
+            fail("prov_browserx %s: exit %d: %s" % (tool, result.returncode, result.stderr[-300:]))
+        if want not in result.stdout:
+            fail("prov_browserx %s: output %r lacks %r" % (tool, result.stdout[:120], want))
+    shot = artifacts / "smoke.png"
+    if not shot.is_file() or shot.stat().st_size < 1000:
+        fail("prov_browserx: screenshot too small")
 
 
 def check_ax_routine(stack):
