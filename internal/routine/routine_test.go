@@ -216,7 +216,10 @@ func TestConcurrentRunIsRejected(t *testing.T) {
 func TestDisabledAndScheduled(t *testing.T) {
 	paths := testPaths(t)
 	writeRoutine(t, paths, "off", "entry = \"./run.sh\"\nschedule = \"* * * * *\"\n", "#!/bin/sh\ntrue\n")
-	writeRoutine(t, paths, "on", "entry = \"./run.sh\"\nschedule = \"0 8 * * *\"\nenabled = true\n", "#!/bin/sh\ntrue\n")
+	// The scheduler reads the wall clock in time.Local when the manifest has
+	// no timezone. Pin it, or a host east of UTC turns 08:00 UTC into 09:00
+	// local and the routine is never due.
+	writeRoutine(t, paths, "on", "entry = \"./run.sh\"\nschedule = \"0 8 * * *\"\nenabled = true\ntimezone = \"UTC\"\n", "#!/bin/sh\ntrue\n")
 	set, err := Open(paths)
 	if err != nil || len(set.Items) != 2 {
 		t.Fatalf("open = %+v err=%v", set, err)
