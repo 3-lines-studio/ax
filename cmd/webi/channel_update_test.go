@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// The channel form edits the working directory, so PATCH has to persist it:
-// it is the bot root ax runs in, and a stale value is an empty tool catalog.
 func TestUpdateChannelWorkdir(t *testing.T) {
 	fake, _ := fakeAX(t)
 	srv, channelID := newTestServer(t, fake)
@@ -29,7 +27,6 @@ func TestUpdateChannelWorkdir(t *testing.T) {
 		t.Fatalf("state workdir = %+v", state)
 	}
 
-	// Missing and relative roots are rejected and leave the channel alone.
 	for _, dir := range []string{filepath.Join(t.TempDir(), "missing"), "relative/path"} {
 		payload, _ := json.Marshal(map[string]string{"workdir": dir})
 		if code := call(t, srv, "PATCH", "/api/channels/"+channelID, string(payload), nil); code != 400 {

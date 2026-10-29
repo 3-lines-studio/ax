@@ -18,9 +18,6 @@ import (
 	"github.com/3-lines-studio/ax/internal/mcp"
 )
 
-// localSource exposes one describe/run provider as a catalog source. The
-// provider is discovered lazily so a broken binary shows up as an unavailable
-// server in the menu instead of killing every other integration.
 type localSource struct {
 	command string
 	name    string
@@ -102,8 +99,6 @@ func (s *localSource) Call(ctx context.Context, name string, args json.RawMessag
 
 func (s *localSource) Close() error { return nil }
 
-// mcpSource exposes one MCP server as a catalog source. The tool list is
-// cached on disk; search with a warm cache does not spawn the server.
 type mcpSource struct {
 	cfg         mcp.ServerConfig
 	cacheDir    string
@@ -122,7 +117,7 @@ type mcpSource struct {
 type mcpCache struct {
 	Version      int        `json:"version"`
 	Fingerprint  string     `json:"fingerprint"`
-	FetchedAt    int64      `json:"fetched_at"` // unix milliseconds
+	FetchedAt    int64      `json:"fetched_at"`
 	TTLMS        int64      `json:"ttl_ms"`
 	Instructions string     `json:"instructions,omitempty"`
 	Tools        []mcp.Tool `json:"tools"`
@@ -130,7 +125,7 @@ type mcpCache struct {
 
 const (
 	mcpCacheVersion = 1
-	mcpDefaultTTL   = 10 * 60 * 1000 // milliseconds
+	mcpDefaultTTL   = 10 * 60 * 1000
 )
 
 func newMCPSource(cfg mcp.ServerConfig, cacheDir string, refresh bool) *mcpSource {
@@ -144,14 +139,12 @@ func newMCPSource(cfg mcp.ServerConfig, cacheDir string, refresh bool) *mcpSourc
 
 func (s *mcpSource) Name() string { return s.cfg.Name }
 
-// RequiresAuth reports whether the last connect failed for lack of a login.
 func (s *mcpSource) RequiresAuth() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.authRequired
 }
 
-// Failure is the connect error behind a stale cache entry, if any.
 func (s *mcpSource) Failure() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -400,7 +393,6 @@ func configFingerprint(cfg mcp.ServerConfig) string {
 	return fmt.Sprintf("%x", sum)
 }
 
-// buildSources assembles local providers and configured MCP servers.
 func buildSources(fc fileConfig, bot *botCtx, refresh bool) ([]catalog.Source, error) {
 	runtimes, err := openConnections(fc, bot, refresh)
 	if err != nil {
@@ -413,8 +405,6 @@ func buildSources(fc fileConfig, bot *botCtx, refresh bool) ([]catalog.Source, e
 	return sources, nil
 }
 
-// connRuntime is one connection plus the source the catalog sees. Doctor keeps
-// both so it can compare what the connection declares with what it enables.
 type connRuntime struct {
 	conn   connection
 	inner  catalog.Source
@@ -443,8 +433,6 @@ func openConnections(fc fileConfig, bot *botCtx, refresh bool) ([]connRuntime, e
 	return out, nil
 }
 
-// unavailableSource keeps a misconfigured server visible in the menu instead
-// of aborting the whole catalog. It carries the reason in List and Call.
 type unavailableSource struct {
 	name string
 	err  error

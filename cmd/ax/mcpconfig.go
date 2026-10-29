@@ -10,9 +10,6 @@ import (
 	"github.com/3-lines-studio/ax/internal/mcp"
 )
 
-// mcpEntry is one [[mcp]] table in bot.toml. A server is either a stdio
-// command or an HTTP endpoint; remote servers authenticate with a token from
-// token_env, a literal header, or an OAuth login stored on disk.
 type mcpEntry struct {
 	Name            string            `toml:"name"`
 	Command         string            `toml:"command"`
@@ -40,16 +37,12 @@ func validateToolMode(cfg cliConfig, fc fileConfig) error {
 	}
 }
 
-// resolvedMCP is one configured MCP server. Entries that only fail at runtime
-// (a missing environment variable, an unreachable binary) keep their name and
-// carry err, so one broken integration cannot take the catalog down.
 type resolvedMCP struct {
 	name string
 	cfg  mcp.ServerConfig
 	err  error
 }
 
-// oauthTokenPath is where one server's OAuth session lives.
 func oauthTokenPath(authDir, name string) string {
 	return filepath.Join(authDir, name+".json")
 }
@@ -58,9 +51,6 @@ func mcpAuthDir(bot *botCtx) string {
 	return filepath.Join(bot.DataRoot, "state", "ax", "mcp", "auth")
 }
 
-// wantsOAuth reports whether a server should use ax's own OAuth login. Remote
-// servers without a static token are OAuth candidates; ax only sends a token
-// when one exists and only asks for a login after a 401.
 func wantsOAuth(entry mcpEntry) (bool, error) {
 	if entry.URL == "" || entry.TokenEnv != "" {
 		return false, nil
@@ -80,9 +70,6 @@ func wantsOAuth(entry mcpEntry) (bool, error) {
 	}
 }
 
-// oauthConfigFor resolves the pre-registered client for login. Client ids are
-// usually public and may name an environment variable; secrets never live in
-// bot.toml, only the variable that holds them.
 func oauthConfigFor(entry mcpEntry) (mcp.OAuthConfig, error) {
 	cfg := mcp.OAuthConfig{ClientID: expandOptional(entry.ClientID), Scopes: append([]string(nil), entry.Scopes...)}
 	if entry.ClientSecretEnv != "" {
@@ -94,9 +81,6 @@ func oauthConfigFor(entry mcpEntry) (mcp.OAuthConfig, error) {
 	return cfg, nil
 }
 
-// resolveMCPEntries validates bot.toml [[mcp]] tables. Structural mistakes
-// (no name, duplicate names, neither command nor url) are errors; everything
-// that depends on the environment becomes a per-entry error.
 func resolveMCPEntries(entries []mcpEntry, workdir, authDir string) ([]resolvedMCP, error) {
 	seen := map[string]bool{}
 	out := make([]resolvedMCP, 0, len(entries))
@@ -228,8 +212,6 @@ func validEnvName(name string) bool {
 	return true
 }
 
-// expandEnvValue expands ${VAR} and errors when the variable is unset. It
-// understands the ${VAR:-default} form that mcp.json files use.
 func expandEnvValue(value string) (string, error) {
 	out, missing := expandTemplate(value, os.LookupEnv)
 	if missing != "" {
@@ -238,9 +220,6 @@ func expandEnvValue(value string) (string, error) {
 	return out, nil
 }
 
-// expandOptional expands like expandEnvValue but treats a missing variable as
-// empty. Used for optional values such as a pre-registered client id, where an
-// unset variable means "register a client automatically instead".
 func expandOptional(value string) string {
 	out, _ := expandTemplate(value, func(key string) (string, bool) {
 		resolved, ok := os.LookupEnv(key)
@@ -249,8 +228,6 @@ func expandOptional(value string) string {
 	return out
 }
 
-// expandTemplate rewrites ${VAR} and ${VAR:-default}. It returns the first
-// unresolved variable so callers can decide between an error and a fallback.
 func expandTemplate(value string, lookup func(string) (string, bool)) (string, string) {
 	var missing string
 	var out strings.Builder

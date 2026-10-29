@@ -17,10 +17,9 @@ import (
 	"time"
 )
 
-// promoteOptions are the flags `boti promote` accepts.
 type promoteOptions struct {
-	Repo string // override [boti.serve].repo
-	Now  bool   // activate without waiting for idle
+	Repo string
+	Now  bool
 }
 
 const (
@@ -31,10 +30,6 @@ const (
 	buildDirPrefix = ".stage-"
 )
 
-// promote builds the bot's programs from a checkout, checks them and asks the
-// supervisor to activate the result. It never swaps anything itself: if this
-// process dies (the run that promoted may be the run being interrupted), the
-// supervisor still owns the switch and the rollback.
 func promote(root string, opts promoteOptions) error {
 	bc, found, err := readBotConfig(root)
 	if err != nil {
@@ -170,8 +165,6 @@ type activateReply struct {
 	Pending   bool   `json:"pending"`
 }
 
-// gitInfo labels a build with the commit it came from. A dirty tree is still
-// promotable; the id says so, because the code will not be in the commit.
 func gitInfo(repo string) (string, bool, error) {
 	out, err := exec.Command("git", "-C", repo, "rev-parse", "--short=7", "HEAD").Output()
 	if err != nil {
@@ -188,8 +181,6 @@ func gitInfo(repo string) (string, bool, error) {
 	return rev, strings.TrimSpace(string(status)) != "", nil
 }
 
-// buildPrograms is the bot's package list clipped to what the checkout can
-// build. A tool from another repository stays on the host PATH.
 func buildPrograms(root, repo string) ([]string, error) {
 	pkgs, err := botPackages(root)
 	if err != nil {
@@ -222,9 +213,6 @@ func uniqueBuild(builds, id string) string {
 	}
 }
 
-// installBuild places the staged binaries in the build directory. Files that
-// are byte-identical to one already on disk become hard links, so a promotion
-// that changes one program does not cost a full copy of the others.
 func installBuild(stage, binDir string, donors []string) error {
 	entries, err := os.ReadDir(stage)
 	if err != nil {
@@ -293,8 +281,6 @@ func fileHash(path string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-// buildDonors are the build directories a new build may hard-link from: the
-// active one and the one a rollback would return to.
 func buildDonors(builds string) []string {
 	var donors []string
 	if id := currentBuild(builds); id != "" {
@@ -320,7 +306,7 @@ type buildMeta struct {
 }
 
 func writeMeta(path string, meta buildMeta) error {
-	data, err := json.MarshalIndent(meta, "", "  ")
+	data, err := json.MarshalIndent(meta, "", " ")
 	if err != nil {
 		return err
 	}
@@ -335,8 +321,6 @@ func readMeta(path string) buildMeta {
 	return meta
 }
 
-// validateBuild runs the candidate the way the host will: same bot, same data
-// root, with the build first on PATH.
 func validateBuild(root string, bc botConfig, cfg serveConfig, id, binDir string) error {
 	paths := newHostPaths(root)
 	env := hostEnv(paths, bc)
@@ -370,8 +354,6 @@ func prependPath(dir, path string) string {
 	return dir + string(os.PathListSeparator) + path
 }
 
-// cleanEnv drops the bot's runtime variables before the repository's own
-// commands run: `go test` must see the tree, not the host that is serving it.
 func cleanEnv(env []string) []string {
 	drop := map[string]bool{
 		"BOT_ROOT":         true,
@@ -391,8 +373,6 @@ func cleanEnv(env []string) []string {
 	return out
 }
 
-// runStep runs one command in a directory, printing its output only when it
-// fails. Promote is a transaction: a passing step stays quiet.
 func runStep(dir string, timeout time.Duration, name string, args ...string) error {
 	return runStepEnv(dir, cleanEnv(os.Environ()), timeout, name, args...)
 }
@@ -418,8 +398,6 @@ func runStepEnv(dir string, env []string, timeout time.Duration, name string, ar
 	return nil
 }
 
-// pruneBuilds keeps the active build, the rollback target and the newest
-// `keep-2` others. Hard links make the survivors cheap.
 func (h *host) pruneBuilds(keep int) {
 	entries, err := os.ReadDir(h.paths.builds)
 	if err != nil {

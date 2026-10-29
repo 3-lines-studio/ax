@@ -92,8 +92,6 @@ func TestVaultKeyCountsAsAKey(t *testing.T) {
 	}
 }
 
-// A run gets the channel's secrets, and a @file secret becomes a path the tool
-// can open. The temporary file is gone when the run ends.
 func TestRunReceivesVaultSecrets(t *testing.T) {
 	dir := t.TempDir()
 	record := filepath.Join(dir, "env.txt")
@@ -111,7 +109,6 @@ func TestRunReceivesVaultSecrets(t *testing.T) {
 	if code := call(t, srv, "POST", "/api/vault/init", `{"pin":"long-enough","confirm":"long-enough"}`, nil); code != 200 {
 		t.Fatalf("init code=%d", code)
 	}
-	// The channel owns one scope; global is shared with everyone.
 	channels := srv.store.Channels()
 	for i := range channels {
 		if channels[i].ID == channel {
@@ -138,8 +135,6 @@ func TestRunReceivesVaultSecrets(t *testing.T) {
 	if code := call(t, srv, "POST", "/api/threads/"+thread.ID+"/messages", `{"text":"hi"}`, nil); code != 200 {
 		t.Fatalf("message code=%d", code)
 	}
-	// Wait for the run to finish: the fake ax writes the record while it runs,
-	// and the @file secret is deleted only when the run ends.
 	deadline := time.Now().Add(10 * time.Second)
 	for srv.running(thread.ID) {
 		if time.Now().After(deadline) {
@@ -164,7 +159,6 @@ func TestRunReceivesVaultSecrets(t *testing.T) {
 	if _, err := os.Stat(lines[2]); !os.IsNotExist(err) {
 		t.Fatalf("secret file outlived the run: %v", err)
 	}
-	// last_used is recorded for the UI.
 	var vaultState struct {
 		LastUsed map[string]int64 `json:"last_used"`
 	}

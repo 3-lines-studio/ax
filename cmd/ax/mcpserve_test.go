@@ -71,7 +71,6 @@ func TestMCPSourceUsesCache(t *testing.T) {
 	}
 	_ = source.Close()
 
-	// With the binary gone, a warm cache must still list tools.
 	if err := os.Remove(bin); err != nil {
 		t.Fatal(err)
 	}

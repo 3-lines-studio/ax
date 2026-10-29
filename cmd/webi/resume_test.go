@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// A thread whose ax process died keeps a run_start with no run_end; webi has to
-// pick it up on its own, without a user opening the thread.
 func TestResumeLoopPicksUpInterruptedThreads(t *testing.T) {
 	dir := t.TempDir()
 	record := filepath.Join(dir, "args.txt")
@@ -56,7 +54,6 @@ func TestResumeLoopPicksUpInterruptedThreads(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	// A finished thread is not resumed again.
 	if err := os.WriteFile(session, []byte(entries+`{"type":"run_end","run_id":"r1","outcome":"done"}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -90,8 +87,6 @@ func TestScanOpenRun(t *testing.T) {
 	}
 }
 
-// The resume turn belongs to ax, not to the user: the projection renders it as
-// a divider instead of a message bubble.
 func TestReadSessionHidesTheResumeTurn(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	lines := `{"type":"message","message":{"Role":"user","Content":"do the work"}}

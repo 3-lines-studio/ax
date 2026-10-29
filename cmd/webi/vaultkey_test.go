@@ -114,7 +114,6 @@ func TestAdoptVaultKeyFromFD(t *testing.T) {
 	}
 	key := srv.vault.Key()
 
-	// The supervisor starts a new process with the key on fd 3.
 	other, err := NewStore(state)
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +133,6 @@ func TestAdoptVaultKeyFromFD(t *testing.T) {
 		t.Fatal("the key from the supervisor was not adopted")
 	}
 
-	// A short read (the host died mid-write) leaves it locked.
 	short, swrite, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)

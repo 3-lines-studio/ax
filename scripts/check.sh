@@ -1,9 +1,4 @@
 #!/bin/sh
-# Quality gate. Same steps as `make check`, without requiring make.
-#
-#   scripts/check.sh          full gate (CI on code changes)
-#   scripts/check.sh --fast   formatting, module and catalog only (docs-only
-#                             changes, quick local loop)
 set -eu
 
 cd "$(dirname "$0")/.."

@@ -1,8 +1,4 @@
 #!/bin/sh
-# Enforce the per-binary size budgets. Called with the directory holding the
-# built programs (default: bin). Keeping every binary small is part of the
-# ecosystem's design: each release artifact must stay easy to download and
-# audit. Raise a budget deliberately, in the same change that grows a binary.
 set -eu
 
 dir=${1:-bin}
@@ -10,12 +6,7 @@ status=0
 
 budget() {
     case $1 in
-    # Context compaction, the MCP catalog and the OAuth client live in ax;
-    # the extra megabyte keeps room for the transport in cmd/webi.
     ax) echo 8800000 ;;
-    # Host supervisor: net/http server for the control socket, state JSON and
-    # the serve loop. The engine and transports stay lean; this one pays for
-    # the supervisor.
     boti) echo 8200000 ;;
     webi) echo 9500000 ;;
     slaxi) echo 8063000 ;;
@@ -24,10 +15,8 @@ budget() {
     attachx) echo 8000000 ;;
     browserx) echo 9589000 ;;
     wax) echo 14369000 ;;
-    # SSH transport client (x/crypto/ssh + sftp) for remote compute.
     sshx) echo 9000000 ;;
     skillx) echo 2934000 ;;
-    # Personal memory store + provider; JSON files, no database driver.
     memoryx) echo 3200000 ;;
     slackx) echo 7543000 ;;
     bqx) echo 24789000 ;;

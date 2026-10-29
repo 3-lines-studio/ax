@@ -18,9 +18,6 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
-// testServer is a real SSH server in the test process: key auth, an sftp
-// subsystem and an exec channel. sshx talks to it the same way it talks to a
-// host, so the test covers the client path instead of a fake of it.
 type testServer struct {
 	dir        string
 	host       string

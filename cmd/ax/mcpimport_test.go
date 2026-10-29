@@ -178,7 +178,6 @@ func TestAppendMCPEntriesRoundTrip(t *testing.T) {
 	if err := botdir.LoadTOML(root, &config); err != nil {
 		t.Fatalf("parse written bot.toml: %v", err)
 	}
-	// Servers are written as connections, not as the legacy [[mcp]] table.
 	if len(config.MCP) != 0 {
 		t.Fatalf("bot.toml still uses [[mcp]]: %+v", config.MCP)
 	}

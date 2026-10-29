@@ -30,16 +30,11 @@ type botConfig struct {
 	Connections []connectionEntry `toml:"connection"`
 }
 
-// connectionEntry is only what the host needs from a [[connection]]: where the
-// provider lives and how to start it. The engine owns the rest.
 type connectionEntry struct {
 	Kind    string `toml:"kind"`
 	Command string `toml:"command"`
 }
 
-// botiConfig is bot.toml's [boti] table, the host's own configuration. Botdir
-// reserves root keys for the specification, so the loader keeps its settings in
-// a table named after itself.
 type botiConfig struct {
 	Serve serveConfig `toml:"serve"`
 }
@@ -177,8 +172,6 @@ func install(root, installURL string) error {
 	}
 	defer func() { _ = os.Remove(installer) }()
 
-	// One call: the release is one archive per platform, so naming every
-	// missing program still costs a single download.
 	fmt.Fprintf(os.Stderr, "boti: installing %s\n", strings.Join(missing, " "))
 	if err := runInstaller(installer, missing...); err != nil {
 		return fmt.Errorf("install %s: %w", strings.Join(missing, " "), err)
@@ -319,8 +312,6 @@ func fatal(format string, args ...any) {
 	os.Exit(1)
 }
 
-// botPackages is what a bot needs on this host: the engine, its default
-// transport and every tool the bot lists.
 func botPackages(root string) ([]string, error) {
 	bc, found, err := readBotConfig(root)
 	if err != nil {
@@ -339,16 +330,12 @@ func botPackages(root string) ([]string, error) {
 		seen[name] = true
 		pkgs = append(pkgs, name)
 	}
-	// A bot that names its own consumer or transport needs that program too,
-	// even when it is not a tool provider.
 	if bc.Consumer != "" {
 		add(bc.Consumer)
 	}
 	if len(bc.Boti.Serve.Command) > 0 {
 		add(bc.Boti.Serve.Command[0])
 	}
-	// Connections are the unit: a local provider is a program the host has to
-	// install and check, exactly like a legacy tools entry.
 	for _, connection := range bc.Connections {
 		kind := strings.ToLower(strings.TrimSpace(connection.Kind))
 		if kind != "" && kind != "local" {
@@ -362,8 +349,6 @@ func botPackages(root string) ([]string, error) {
 	return pkgs, nil
 }
 
-// selftest answers "can this host run this bot": every program is on PATH and
-// the engine can parse the bot, resolve its connections and load its catalog.
 func selftest(root string) error {
 	pkgs, err := botPackages(root)
 	if err != nil {
@@ -377,7 +362,7 @@ func selftest(root string) error {
 			fmt.Fprintf(os.Stderr, "fail: %s is not on PATH\n", pkg)
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "ok:   %s %s\n", pkg, path)
+		fmt.Fprintf(os.Stderr, "ok: %s %s\n", pkg, path)
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing programs: %s (run boti install)", strings.Join(missing, " "))
@@ -395,17 +380,12 @@ func selftest(root string) error {
 	return nil
 }
 
-// backup is one installed binary kept next to nothing: enough to put the host
-// back the way it was when a new build does not survive its selftest.
 type backup struct {
 	path string
 	data []byte
 	mode os.FileMode
 }
 
-// update installs the current release over what is here, then checks the new
-// engine. If the check fails, the previous binaries come back and the error
-// says so: a bad release must not leave a host that cannot start.
 func update(root, installerURL string) error {
 	pkgs, err := botPackages(root)
 	if err != nil {

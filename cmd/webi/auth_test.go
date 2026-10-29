@@ -34,8 +34,6 @@ func TestAuthToken(t *testing.T) {
 	if got := do("GET", "/healthz", nil).Code; got != http.StatusOK {
 		t.Fatalf("healthz = %d", got)
 	}
-	// The PWA shell loads before the cookie does: manifest, service worker and
-	// static assets are public; the API is not.
 	for _, path := range []string{"/manifest.webmanifest", "/sw.js", "/static/app.js", "/static/icon-192.png"} {
 		if got := do("GET", path, nil).Code; got != http.StatusOK {
 			t.Fatalf("%s = %d", path, got)

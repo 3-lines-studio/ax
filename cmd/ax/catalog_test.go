@@ -88,10 +88,6 @@ func TestCatalogSystemPrompt(t *testing.T) {
 	if strings.Contains(prompt, "You have two tools") || strings.Contains(prompt, "Args:") {
 		t.Errorf("prompt still explains the tool surface:\n%s", prompt)
 	}
-	// The prompt is a policy layer, not a tool manual. The schemas stay in the
-	// catalog; core tools only contribute an id and an argument signature.
-	// Runtime facts (build, host, paths, model) are not a tool manual, but
-	// they are part of the prompt now; keep the budget generous and explicit.
 	if len(prompt) > 1600 {
 		t.Errorf("prompt is %d chars, want <= 1600:\n%s", len(prompt), prompt)
 	}

@@ -11,15 +11,6 @@ import (
 	"github.com/3-lines-studio/ax/internal/catalog"
 )
 
-// Selftest answers one question: can this binary serve this bot? It parses the
-// config, resolves every connection and loads the catalog, then reports what it
-// found. It never calls the model, so a host can run it before trusting a new
-// build (see `boti update`).
-//
-// A dead integration is a warning, not a failure: the binary is fine, the
-// server is not. A broken compute root or an unparseable connection is a
-// failure, because every run would hit it.
-
 const selftestLoadTimeout = 20 * time.Second
 
 type selftestReport struct {
@@ -48,7 +39,6 @@ func (s *selftestReport) print() {
 	}
 }
 
-// runSelftest is the `ax selftest` command.
 func runSelftest(cfg cliConfig, fc fileConfig, bot *botCtx) {
 	report := &selftestReport{}
 	report.ok("ax protocol v%d", axproto.Version)

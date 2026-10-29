@@ -9,8 +9,6 @@ permissions:
 
 jobs:
   release:
-    # One Linux runner cross-compiles all three targets: no macOS runner
-    # (10x minutes), no artifact upload/download, no artifact storage.
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:

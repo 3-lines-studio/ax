@@ -11,7 +11,7 @@ func TestSchemaValidationCases(t *testing.T) {
 		name   string
 		schema string
 		args   string
-		want   string // empty means valid
+		want   string
 	}{
 		{
 			name:   "valid object",

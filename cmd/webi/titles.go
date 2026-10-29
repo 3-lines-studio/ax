@@ -14,14 +14,8 @@ import (
 	"unicode/utf8"
 )
 
-// titlePrompt keeps the model on a short task: a title, nothing else. The
-// conversation language wins, so a Spanish thread does not get an English name.
 const titleSystem = "You name chat threads. Reply with the title only: no quotes, no markdown, no trailing period, at most six words, in the language of the conversation."
 
-// generateTitle asks the model for a name and stores it. It runs after a run
-// finishes, in the background: a thread that already has a derived title from
-// its first message simply gets a better one, and a failure leaves that title
-// in place.
 func (s *Server) generateTitle(thread Thread, prompt, answer string) {
 	key := titleKey()
 	if key == "" {
@@ -86,7 +80,6 @@ func (s *Server) generateTitle(thread Thread, prompt, answer string) {
 	s.publish(map[string]any{"type": "state"})
 }
 
-// cleanTitle makes a model answer safe to show: one line, no quoting, bounded.
 func cleanTitle(raw string) string {
 	title := strings.TrimSpace(raw)
 	title = strings.TrimPrefix(title, "Title:")
@@ -108,8 +101,6 @@ func clip(text string, max int) string {
 	return string(runes[:max]) + "…"
 }
 
-// titleKey resolves the key the same way ax does, so webi does not ask for the
-// secret twice.
 func titleKey() string {
 	for _, name := range []string{"DEEPSEEK_API_KEY", "OPENAI_API_KEY"} {
 		if value := strings.TrimSpace(os.Getenv(name)); value != "" {

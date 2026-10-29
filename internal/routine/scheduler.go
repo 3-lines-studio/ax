@@ -8,25 +8,18 @@ import (
 	"github.com/3-lines-studio/ax/internal/botdir"
 )
 
-// Scheduler runs enabled routines on their cron schedules. It is used by the
-// always-on host (webi); manual runs go through Runner directly.
 type Scheduler struct {
 	Paths botdir.Paths
 	Now   func() time.Time
 	Logf  func(string, ...any)
-	// OnRun observes a finished scheduled run. The host uses it to push the
-	// result to a UI; it is not called when the routine is already running.
 	OnRun func(Routine, RunResult)
 	last  map[string]time.Time
 }
 
-// NewScheduler returns a scheduler for one bot.
 func NewScheduler(paths botdir.Paths) *Scheduler {
 	return &Scheduler{Paths: paths, Now: time.Now, last: map[string]time.Time{}}
 }
 
-// Due returns the enabled routines whose schedule matches now and that have
-// not already been launched for this minute.
 func (s *Scheduler) Due(now time.Time) []Routine {
 	set, err := Open(s.Paths)
 	if err != nil {
@@ -45,8 +38,6 @@ func (s *Scheduler) Due(now time.Time) []Routine {
 		if !item.Schedule.Match(local) {
 			continue
 		}
-		// Use the local wall-clock minute as the dedupe key, so a DST
-		// transition does not run the same wall time twice.
 		minute := local.Truncate(time.Minute)
 		if s.last[item.Name].Equal(minute) {
 			continue
@@ -57,8 +48,6 @@ func (s *Scheduler) Due(now time.Time) []Routine {
 	return due
 }
 
-// Run ticks every 30 seconds and launches due routines. A run that is still
-// active when the next tick arrives is skipped by the runner's lock.
 func (s *Scheduler) Run(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -73,8 +62,6 @@ func (s *Scheduler) Run(ctx context.Context) {
 	}
 }
 
-// Tick runs the routines due at now. It is exported for hosts that schedule
-// several bot roots from one loop.
 func (s *Scheduler) Tick(ctx context.Context, now time.Time) {
 	for _, item := range s.Due(now) {
 		item := item

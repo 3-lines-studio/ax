@@ -14,13 +14,10 @@ import (
 )
 
 const (
-	maxImageBytes = 32 << 20 // DeepSeek per-image limit for inline images
+	maxImageBytes = 32 << 20
 	maxImageURL   = 8192
 )
 
-// buildUserMessage turns the CLI prompt and images into one user message.
-// Content stays the plain-text prompt; ContentParts is authoritative when it
-// contains images.
 func buildUserMessage(prompt string, images []ImageRef) Message {
 	message := Message{Role: "user", Content: prompt}
 	if len(images) == 0 {
@@ -38,9 +35,6 @@ func buildUserMessage(prompt string, images []ImageRef) Message {
 	return message
 }
 
-// loadImages turns -image arguments into references. Local files are stored
-// as content-addressed blobs next to the session (or inlined as data URLs
-// when there is no session); http(s) URLs are kept as references.
 func loadImages(specs []string, detail, sessionPath string) ([]ImageRef, error) {
 	if detail == "" {
 		detail = "auto"
@@ -124,8 +118,6 @@ func blobDir(sessionPath string) string {
 	return sessionPath + ".blobs"
 }
 
-// storeBlob writes data under its sha256 and returns the digest. Blobs are
-// immutable and deduplicated, so re-adding an image is free.
 func storeBlob(sessionPath string, data []byte) (string, error) {
 	sum := sha256.Sum256(data)
 	name := hex.EncodeToString(sum[:])
@@ -186,8 +178,6 @@ func readBlob(sessionPath, name string) ([]byte, error) {
 	return data, nil
 }
 
-// imageURL resolves an image reference for the provider. Blobs become data
-// URLs at request time; the session log keeps only the digest.
 func imageURL(ref ImageRef, sessionPath string) (string, error) {
 	if ref.URL != "" {
 		return ref.URL, nil

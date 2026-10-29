@@ -479,8 +479,6 @@ func TestRunSuccess(t *testing.T) {
 }
 
 func TestMainDescribeInProcess(t *testing.T) {
-	// describe only lists web_search when a key resolves; drop every source so
-	// the expected output does not depend on the machine running the suite.
 	isolate(t)
 	oldArgs := os.Args
 	os.Args = []string{"wax", "describe"}

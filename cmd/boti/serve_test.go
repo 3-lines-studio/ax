@@ -17,9 +17,6 @@ import (
 	"time"
 )
 
-// TestServeChildHelper is not a test: it is the child process the supervisor
-// starts. It answers /healthz until SIGTERM, and fails at once when
-// BOTI_CHILD_FAIL is set, which is how the crash tests work.
 func TestServeChildHelper(t *testing.T) {
 	addr := os.Getenv("BOTI_CHILD_ADDR")
 	if addr == "" {
@@ -182,7 +179,6 @@ func TestSuperviseRestartsAfterCrash(t *testing.T) {
 		t.Fatalf("build = %q, want dev without a current symlink", first.Build)
 	}
 
-	// A crash is an exit, and the supervisor starts the same build again.
 	if err := syscall.Kill(first.Child.PID, syscall.SIGKILL); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +189,6 @@ func TestSuperviseRestartsAfterCrash(t *testing.T) {
 		t.Fatalf("restarts = %d", second.Restarts)
 	}
 
-	// The control socket restarts without waiting for a crash.
 	if err := restart(root); err != nil {
 		t.Fatal(err)
 	}
@@ -218,8 +213,6 @@ func TestCrashLoopRollsBack(t *testing.T) {
 	addr := freeAddr(t)
 	paths := newHostPaths(root)
 
-	// Two builds of a program named "transport"; the old one is healthy and
-	// the new one dies at once.
 	for _, build := range []struct{ id, body string }{
 		{"a", fmt.Sprintf("#!/bin/sh\nexec %q -test.run=TestServeChildHelper\n", testBinary(t))},
 		{"b", fmt.Sprintf("#!/bin/sh\nBOTI_CHILD_FAIL=1 exec %q -test.run=TestServeChildHelper\n", testBinary(t))},

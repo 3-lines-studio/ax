@@ -18,8 +18,6 @@ import (
 	"time"
 )
 
-// fakeAuthServer is a small OAuth authorization server plus a protected MCP
-// endpoint that only answers requests carrying the current access token.
 type fakeAuthServer struct {
 	srv *httptest.Server
 
@@ -236,8 +234,6 @@ func (a *fakeAuthServer) mcp(w http.ResponseWriter, r *http.Request) {
 	a.writeJSON(w, map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
 }
 
-// redirect asks the authorization endpoint for the browser redirect without
-// following it.
 func (a *fakeAuthServer) redirect(authURL string) (string, error) {
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -253,8 +249,6 @@ func (a *fakeAuthServer) redirect(authURL string) (string, error) {
 	return resp.Header.Get("Location"), nil
 }
 
-// visit plays the browser: it follows the authorization URL once and then
-// delivers the redirect to the loopback callback.
 func (a *fakeAuthServer) visit(authURL string) (string, error) {
 	location, err := a.redirect(authURL)
 	if err != nil {
@@ -283,7 +277,6 @@ func (a *fakeAuthServer) setAccess(token string) {
 	a.mu.Unlock()
 }
 
-// loginFake runs the interactive flow against the fake server.
 func loginFake(t *testing.T, a *fakeAuthServer, store string) StoredToken {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -498,7 +491,6 @@ func TestHTTPTransportRefreshesAfter401(t *testing.T) {
 	a := newFakeAuthServer(t)
 	store := filepath.Join(t.TempDir(), "fake.json")
 	loginFake(t, a, store)
-	// Revoke the access token the store holds.
 	a.setAccess("revoked")
 
 	client, err := New(ServerConfig{
@@ -582,8 +574,6 @@ func TestCanonicalResource(t *testing.T) {
 	}
 }
 
-// captureWriter collects output until the marker appears, then hands the
-// authorization URL to a waiting goroutine.
 type captureWriter struct {
 	marker string
 	ready  chan string

@@ -10,8 +10,6 @@ import (
 	"github.com/3-lines-studio/ax/internal/axrun"
 )
 
-// One bot.toml serves every channel: a channel folder without one inherits the
-// host config; a folder with one is a standalone bot and keeps overriding it.
 func TestChannelFallsBackToHostBotConfig(t *testing.T) {
 	host := t.TempDir()
 	channelDir := t.TempDir()

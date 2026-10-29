@@ -1,16 +1,3 @@
-// Package main is sshx: the filesystem and shell provider for a remote host.
-//
-// It speaks the same describe/run contract as fsx and bashx, so a connection
-// can point at a remote workspace without the model noticing: the tool names,
-// the schemas and the text handling are the same, only the transport changes.
-//
-// Configuration comes from the environment the connection sets:
-//
-//	SSHX_HOST        user@host or user@host:port (required)
-//	SSHX_KNOWN_HOSTS file with the host keys to trust (required)
-//	SSHX_KEY_FILE    private key file (optional; agent and ~/.ssh are tried)
-//	SSHX_ROOT        remote directory all paths are relative to (optional)
-//	SSHX_TIMEOUT     connect timeout in seconds (default 30)
 package main
 
 import (

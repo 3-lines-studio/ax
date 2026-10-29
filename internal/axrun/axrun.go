@@ -1,6 +1,3 @@
-// Package axrun runs one ax process and streams the events it prints. It is
-// the shared half of every transport: slaxi and webi drive ax the same way, so
-// a conversation behaves identically on Slack and in the browser.
 package axrun
 
 import (
@@ -16,8 +13,6 @@ import (
 	"time"
 )
 
-// Config is everything about the engine that a transport can override. Empty
-// fields fall back to the bot's own bot.toml.
 type Config struct {
 	AXPath  string
 	BotRoot string
@@ -27,21 +22,13 @@ type Config struct {
 	Env     []string
 }
 
-// Job is one user turn.
 type Job struct {
 	Session string
 	Prompt  string
 	Images  []string
-	// Resume continues the interrupted run recorded in Session; Prompt is
-	// then unused, because ax writes the resume turn itself.
-	Resume bool
+	Resume  bool
 }
 
-// Event is one line of the process protocol. Fields that do not apply to a
-// type stay empty; Raw keeps the whole line for hosts that want everything.
-//
-// The protocol reuses "output" for the tool result text (string) and for the
-// completion token count (number), so UnmarshalJSON decides by shape.
 type Event struct {
 	Type         string          `json:"type"`
 	Text         string          `json:"text,omitempty"`
@@ -58,9 +45,8 @@ type Event struct {
 	Outcome      string          `json:"outcome,omitempty"`
 	Summary      string          `json:"summary,omitempty"`
 	Upto         int             `json:"upto,omitempty"`
-	// secret_request
-	Description string          `json:"description,omitempty"`
-	Raw         json.RawMessage `json:"-"`
+	Description  string          `json:"description,omitempty"`
+	Raw          json.RawMessage `json:"-"`
 }
 
 func (e *Event) UnmarshalJSON(data []byte) error {
@@ -101,14 +87,12 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Usage is the token accounting carried by usage and result events.
 type Usage struct {
 	Input       int `json:"input"`
 	Output      int `json:"output"`
 	CachedInput int `json:"cached_input"`
 }
 
-// ErrorMessage returns the text of an error event.
 func (e Event) ErrorMessage() string {
 	var text string
 	if err := json.Unmarshal(e.Message, &text); err == nil {
@@ -117,7 +101,6 @@ func (e Event) ErrorMessage() string {
 	return strings.TrimSpace(string(e.Message))
 }
 
-// MessageBody decodes the message carried by a message event.
 func (e Event) MessageBody() (Message, bool) {
 	var msg Message
 	if len(e.Message) == 0 || json.Unmarshal(e.Message, &msg) != nil {
@@ -126,7 +109,6 @@ func (e Event) MessageBody() (Message, bool) {
 	return msg, true
 }
 
-// Message is the stored shape of a conversation entry as ax prints it.
 type Message struct {
 	Role       string          `json:"Role"`
 	Content    string          `json:"Content"`
@@ -134,7 +116,6 @@ type Message struct {
 	ToolCallID string          `json:"ToolCallID,omitempty"`
 }
 
-// Result is what a finished run leaves behind.
 type Result struct {
 	Text     string
 	Outcome  string
@@ -143,7 +124,6 @@ type Result struct {
 	Messages []Message
 }
 
-// Run is a started ax process.
 type Run struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
@@ -158,8 +138,6 @@ type Run struct {
 	err    error
 }
 
-// Start launches ax. Events are delivered on Events until it closes; Wait
-// reports the outcome. The caller must always Wait.
 func Start(ctx context.Context, cfg Config, job Job, onEvent func(Event)) (*Run, error) {
 	if strings.TrimSpace(job.Prompt) == "" && !job.Resume {
 		return nil, errors.New("axrun: empty prompt")
@@ -199,8 +177,6 @@ func Start(ctx context.Context, cfg Config, job Job, onEvent func(Event)) (*Run,
 	return start(ctx, path, args, cfg.Env, onEvent)
 }
 
-// Compact summarizes a session in place with `ax compact`. The host gets the
-// compaction event and, when it finishes, the compaction outcome.
 func Compact(ctx context.Context, cfg Config, session string, onEvent func(Event)) (Result, error) {
 	if strings.TrimSpace(session) == "" {
 		return Result{}, errors.New("axrun: empty session")
@@ -284,12 +260,8 @@ func (r *Run) pump(onEvent func(Event)) {
 	}
 }
 
-// Events is a lossy copy of the stream, for callers that would rather range
-// than take a callback.
 func (r *Run) Events() <-chan Event { return r.events }
 
-// Steer adds a user message to the running conversation. ax applies it at the
-// next turn boundary and confirms with a "steer" event.
 func (r *Run) Steer(text string) error {
 	if strings.TrimSpace(text) == "" {
 		return errors.New("axrun: empty steer")
@@ -307,14 +279,10 @@ func (r *Run) Steer(text string) error {
 	return err
 }
 
-// Secret answers a secret_request: the next call to the asking tool sees the
-// value in its environment. The value is not part of the conversation.
 func (r *Run) Secret(name, value string) error {
 	return r.control(map[string]any{"type": "secret", "name": name, "value": value})
 }
 
-// SkipSecret tells ax the user declined, so the tool call fails with a message
-// the model can read instead of waiting.
 func (r *Run) SkipSecret(name string) error {
 	return r.control(map[string]any{"type": "secret", "name": name, "skip": true})
 }
@@ -333,7 +301,6 @@ func (r *Run) control(payload map[string]any) error {
 	return err
 }
 
-// Cancel asks ax to stop at the next safe point.
 func (r *Run) Cancel() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -344,7 +311,6 @@ func (r *Run) Cancel() error {
 	return err
 }
 
-// Wait closes stdin and collects the run's outcome.
 func (r *Run) Wait() (Result, error) {
 	<-r.wait
 	_ = r.stdin.Close()
@@ -354,8 +320,6 @@ func (r *Run) Wait() (Result, error) {
 	r.mu.Unlock()
 
 	result := Result{}
-	// The result event carries the final history; pick the last assistant
-	// message that is not only a tool call.
 	for {
 		select {
 		case event, ok := <-r.events:
@@ -391,9 +355,6 @@ done:
 	}
 }
 
-// applyEvent folds one event into the result. It is duplicated by the pump
-// path on purpose: the result must be right even if the caller never read
-// Events.
 func applyEvent(result *Result, event Event) {
 	switch event.Type {
 	case "error":
@@ -401,8 +362,6 @@ func applyEvent(result *Result, event Event) {
 	case "done":
 		result.Outcome = event.Outcome
 	case "usage":
-		// The usage event carries the numbers at the top level; result
-		// carries them nested. Accept both.
 		if event.Usage != nil {
 			result.Usage = *event.Usage
 		} else {
@@ -435,7 +394,6 @@ func applyResult(result *Result, raw json.RawMessage) {
 	}
 }
 
-// RunOne is Start + Wait for callers that do not need to cancel.
 func RunOne(ctx context.Context, cfg Config, job Job, onEvent func(Event)) (Result, error) {
 	run, err := Start(ctx, cfg, job, onEvent)
 	if err != nil {
@@ -444,8 +402,6 @@ func RunOne(ctx context.Context, cfg Config, job Job, onEvent func(Event)) (Resu
 	return run.Wait()
 }
 
-// Kill terminates the process if it is still running; used when a run is
-// abandoned. Safe to call after Wait.
 func (r *Run) Kill() {
 	r.mu.Lock()
 	done := r.done

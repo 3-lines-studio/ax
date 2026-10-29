@@ -403,7 +403,6 @@ func visibleText(node *html.Node) string {
 	return strings.Join(strings.Fields(text.String()), " ")
 }
 
-// runSearch implements the provider side of web_search.
 func runSearch() {
 	var input struct {
 		Query       string `json:"query"`
@@ -428,7 +427,6 @@ func runSearch() {
 	fmt.Println(formatSearch(results))
 }
 
-// searchCLI is the human entry point: wax search "query" [-count N] [-content].
 func searchCLI(args []string) {
 	count := 0
 	needContent := false
@@ -470,15 +468,13 @@ func searchCLI(args []string) {
 		os.Exit(1)
 	}
 	if asJSON {
-		data, _ := json.MarshalIndent(results, "", "  ")
+		data, _ := json.MarshalIndent(results, "", " ")
 		fmt.Println(string(data))
 		return
 	}
 	fmt.Println(formatSearch(results))
 }
 
-// describe prints the tools this build can run. web_search depends on a paid
-// API, so it only appears when DEEPSEEK_API_KEY is configured.
 func describe(w io.Writer) {
 	fmt.Fprintln(w, `{"name":"web_fetch","description":"Fetch a URL as Markdown with automatic Chromium rendering","parameters":{"type":"object","properties":{"url":{"type":"string","description":"HTTP or HTTPS URL"}},"required":["url"]},"read_only":true,"open_world":true,"snippet":"Fetch URL as Markdown with Wax"}`)
 	if deepseekKey() == "" {

@@ -11,9 +11,6 @@ import (
 	"time"
 )
 
-// Session log entry types. The file is append-only JSONL: every line is one
-// event, older lines are never rewritten, and a reader tolerates a torn final
-// line left by a crash mid-append.
 const (
 	entryMessage          = "message"
 	entryUsage            = "usage"
@@ -25,23 +22,18 @@ const (
 	entryCompaction       = "compaction"
 )
 
-// interruptedToolOutput is what the model sees for a tool call whose outcome
-// was never recorded. The side effects are unknown, so it is never re-run.
 const interruptedToolOutput = "error: tool call interrupted: the result was never recorded and its side effects are unknown."
 
 type sessionEntry struct {
 	Type string `json:"type"`
 
-	// message / assistant_partial
 	Message *Message `json:"message,omitempty"`
 
-	// usage
 	Usage *usageInfo `json:"usage,omitempty"`
 
-	// run lifecycle and tool records
 	RunID       string    `json:"run_id,omitempty"`
 	Turn        int       `json:"turn,omitempty"`
-	At          int64     `json:"at,omitempty"` // unix milliseconds
+	At          int64     `json:"at,omitempty"`
 	Call        *ToolCall `json:"call,omitempty"`
 	Target      string    `json:"target,omitempty"`
 	Output      string    `json:"output,omitempty"`
@@ -49,12 +41,8 @@ type sessionEntry struct {
 	Interrupted bool      `json:"interrupted,omitempty"`
 	Outcome     string    `json:"outcome,omitempty"`
 	Prompt      string    `json:"prompt,omitempty"`
-	// Resume marks the synthetic user turn that `ax --resume` appends, so a
-	// host can show it as a resume instead of something the user typed.
-	Resume bool `json:"resume,omitempty"`
+	Resume      bool      `json:"resume,omitempty"`
 
-	// compaction: how many projected messages the summary replaces, and the
-	// summary itself. Older entries stay in the log; readers drop the prefix.
 	Upto    int      `json:"upto,omitempty"`
 	Summary string   `json:"summary,omitempty"`
 	Model   string   `json:"model,omitempty"`
@@ -73,9 +61,6 @@ type usageInfo struct {
 	Model         string `json:"model"`
 }
 
-// sessionState is the projection of the append-only log that the engine
-// needs: the message history for the next request, whether the previous run
-// ended, and how many interrupted tool calls had to be repaired.
 type sessionState struct {
 	Messages    []Message
 	Summary     string
@@ -83,15 +68,10 @@ type sessionState struct {
 	LastRunID   string
 	LastPartial *Message
 	Repaired    int
-	// Interrupted names the targets whose tool call never recorded a result,
-	// in call order. It is what the resume turn tells the model to verify.
 	Interrupted []string
 	Usage       Usage
 }
 
-// contextMessages projects the durable log into a provider-valid message
-// history. Incomplete assistant turns are dropped, and every tool call
-// without a recorded result gets an interrupted result in call order.
 func contextMessages(entries []sessionEntry) []Message {
 	return deriveSession(entries).Messages
 }
@@ -163,8 +143,6 @@ func deriveSession(entries []sessionEntry) sessionState {
 					pending = pending[1:]
 				}
 			}
-			// A tool result without a matching call is stale or duplicated;
-			// dropping it keeps the history valid for the provider.
 		default:
 			if len(pending) > 0 {
 				drain(true)
@@ -184,8 +162,6 @@ func deriveSession(entries []sessionEntry) sessionState {
 			default:
 				state.Messages = append([]Message(nil), state.Messages[entry.Upto:]...)
 			}
-			// A tool result whose call was summarized away is not a valid
-			// message for the provider; drop the orphaned prefix.
 			for len(state.Messages) > 0 && state.Messages[0].Role == "tool" {
 				state.Messages = state.Messages[1:]
 			}
@@ -251,8 +227,6 @@ func parseEntryLine(line string) (sessionEntry, bool) {
 	return sessionEntry{}, false
 }
 
-// loadPath reads a session log. A torn final line (a crash between write and
-// fsync) is ignored; a corrupt line anywhere else is an error.
 func loadPath(path string) ([]sessionEntry, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -283,9 +257,6 @@ func loadPath(path string) ([]sessionEntry, error) {
 	return entries, nil
 }
 
-// sessionLog appends to a session file. Every append hits the file with
-// O_APPEND and fsyncs before returning: once the engine acts on an event
-// (starts a tool, sends a request), the record is durable.
 type sessionLog struct {
 	path string
 	file *os.File
@@ -301,7 +272,6 @@ func openSessionLog(path string) (*sessionLog, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open session %s: %w", path, err)
 	}
-	// A session holds the whole conversation; keep older files private too.
 	_ = file.Chmod(0o600)
 	if err := lockFile(file); err != nil {
 		_ = file.Close()
@@ -341,10 +311,6 @@ func (l *sessionLog) close() error {
 	return l.file.Close()
 }
 
-// resumePrompt is the synthetic user turn that restarts a run whose process
-// died. It names the calls that never recorded a result so the model verifies
-// the state instead of blindly repeating them: ax reports the interruption, it
-// never replays a call.
 func resumePrompt(state sessionState) string {
 	var out strings.Builder
 	out.WriteString("Resume the interrupted run from where it stopped.")

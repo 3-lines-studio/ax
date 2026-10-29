@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// The channel picker creates folders through POST /api/dirs and relies on a
-// 404 (not a 400) to offer the "Create <path>" button for a typed path.
 func TestDirsCreateAndMissing(t *testing.T) {
 	srv, _ := newTestServer(t, "/bin/true")
 	parent := t.TempDir()
@@ -27,7 +25,6 @@ func TestDirsCreateAndMissing(t *testing.T) {
 		t.Fatalf("directory not created: %v", err)
 	}
 
-	// Creating it again is a no-op, not an error.
 	if code := call(t, srv, "POST", "/api/dirs", `{"path":"`+target+`"}`, nil); code != 200 {
 		t.Fatalf("mkdir existing code = %d", code)
 	}

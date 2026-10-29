@@ -14,8 +14,6 @@ import (
 	"time"
 )
 
-// adoptVaultKey takes the key boti serve kept from an earlier unlock. The
-// supervisor passes it on fd 3, so it never sits in the environment or on disk.
 func (s *Server) adoptVaultKey() {
 	raw := strings.TrimSpace(os.Getenv("AX_VAULT_FD"))
 	if raw == "" {
@@ -42,8 +40,6 @@ func (s *Server) adoptVaultKey() {
 	slog.Info("webi: vault unlocked by the host key")
 }
 
-// shareVaultKey hands the derived key to the supervisor, or tells it to forget
-// it. Without AX_HOST_SOCK (webi run by hand) there is nowhere to send it.
 func (s *Server) shareVaultKey(forget bool) {
 	sock := strings.TrimSpace(os.Getenv("AX_HOST_SOCK"))
 	if sock == "" {

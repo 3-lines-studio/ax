@@ -1,13 +1,4 @@
-#!/usr/bin/env python3
-"""Render the program tables in README.md from catalog.json.
-
-The catalog is the single source of truth for what lives in this repository.
-`--check` verifies that README.md is in sync and that every program has a
-command (except the specification) and a document; CI runs it so the table
-cannot drift from the tree.
-"""
-import json
-import sys
+import json, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -16,14 +7,13 @@ README = ROOT / "README.md"
 BEGIN = "<!-- programs:begin -->"
 END = "<!-- programs:end -->"
 
-KIND_ORDER = ["engine", "host", "transport", "provider", "bridge", "spec"]
+KIND_ORDER = ["engine", "host", "transport", "provider", "bridge"]
 KIND_TITLE = {
     "engine": "Engine",
-    "host": "Host loader",
-    "transport": "Transport",
+    "host": "Bot host",
+    "transport": "Transports",
     "provider": "Tool providers",
     "bridge": "Protocol bridges",
-    "spec": "Specification",
 }
 
 
@@ -38,13 +28,10 @@ def render(programs):
             continue
         lines.append(f"### {KIND_TITLE[kind]}")
         lines.append("")
-        lines.append("| Program | Role | Description |")
-        lines.append("| --- | --- | --- |")
+        lines.append("| Program | Description |")
+        lines.append("| --- | --- |")
         for program in entries:
-            name = program["name"]
-            lines.append(
-                f"| [{name}]({program['doc']}) | {program['role']} | {program['description']} |"
-            )
+            lines.append(f"| `{program['name']}` | {program['description']} |")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -57,10 +44,7 @@ def main():
     for program in programs:
         name = program["name"]
         names.add(name)
-        doc = ROOT / program["doc"]
-        if not doc.is_file():
-            errors.append(f"{name}: missing document {program['doc']}")
-        if program["kind"] != "spec" and not (ROOT / "cmd" / name).is_dir():
+        if not (ROOT / "cmd" / name).is_dir():
             errors.append(f"{name}: missing cmd/{name}")
     for cmd in sorted((ROOT / "cmd").iterdir()):
         if cmd.is_dir() and cmd.name not in names:

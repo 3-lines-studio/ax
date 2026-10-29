@@ -10,19 +10,6 @@ import (
 	"time"
 )
 
-// A provider can ask for a secret instead of failing: instead of a result it
-// prints
-//
-//	{"ask":{"name":"GH_TOKEN","description":"the gh CLI reads it"}}
-//
-// ax does not show that to the model. It asks the host (`secret_request`
-// event), waits for `{"type":"secret",...}` on stdin, retries the call with the
-// value in the provider's environment and keeps it only in memory: the value
-// never enters the conversation or the session log.
-
-// secretWaitLimit bounds a single request when the host stays connected but
-// nobody answers. A host that died takes ax with it, which leaves the run open
-// for `ax --resume`.
 const secretWaitLimit = 10 * time.Minute
 
 type secretAsk struct {
@@ -52,16 +39,12 @@ func newSecretBroker() *secretBroker {
 	}
 }
 
-// enable turns on the ask flow: the process has a control channel to ask
-// through. Without it a request fails fast with advice instead of hanging.
 func (b *secretBroker) enable() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.enabled = true
 }
 
-// hostGone fails whatever is pending: the control channel closed, so no answer
-// can arrive.
 func (b *secretBroker) hostGone() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -94,8 +77,6 @@ func (b *secretBroker) skip(name string) bool {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	// A skip can arrive before the tool asks; remembering it means the answer
-	// is not lost to a scheduling race.
 	b.skipped[name] = true
 	if waiter, ok := b.waiters[name]; ok {
 		waiter <- secretAnswer{Skip: true}
@@ -104,7 +85,6 @@ func (b *secretBroker) skip(name string) bool {
 	return true
 }
 
-// env is the environment every provider call gets: the values collected so far.
 func (b *secretBroker) env() []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -119,9 +99,6 @@ func (b *secretBroker) env() []string {
 	return out
 }
 
-// wait blocks until the value for ask arrives, the run is cancelled, the host
-// goes away or the limit expires. It returns the value and, when it cannot, the
-// text the model should read.
 func (b *secretBroker) wait(ctx context.Context, ask secretAsk) (string, string) {
 	name := strings.TrimSpace(ask.Name)
 	if name == "" {
@@ -187,8 +164,6 @@ func descriptionOr(ask secretAsk, fallback string) string {
 	return fallback
 }
 
-// parseSecretAsk reads a provider output as a secret request. Only the exact
-// envelope counts: a tool that prints prose mentioning "ask" is just a tool.
 func parseSecretAsk(output string) (secretAsk, bool) {
 	trimmed := strings.TrimSpace(output)
 	if !strings.HasPrefix(trimmed, "{") || !strings.Contains(trimmed, `"ask"`) {
@@ -206,6 +181,4 @@ func parseSecretAsk(output string) (secretAsk, bool) {
 	return *envelope.Ask, true
 }
 
-// secrets is the process-wide broker: ax runs one conversation per process, and
-// providers need the same values across calls.
 var secrets = newSecretBroker()

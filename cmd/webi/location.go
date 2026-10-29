@@ -8,10 +8,6 @@ import (
 	"strings"
 )
 
-// resolveRoot picks the bot directory. The normal path is the per-user app
-// directory: a consumer never chooses a folder. -C remains for a project bot,
-// and a host that starts webi (boti) can pass BOT_ROOT so the child stays in
-// the bot it was given.
 func resolveRoot(explicit string) (root string, fresh bool, err error) {
 	switch {
 	case explicit != "":
@@ -46,8 +42,6 @@ func resolveRoot(explicit string) (root string, fresh bool, err error) {
 	return root, true, nil
 }
 
-// appDataRoot is where an app keeps its files, per platform. It is an
-// implementation detail: the UI is the product, this directory is not.
 func appDataRoot() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

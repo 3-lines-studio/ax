@@ -13,32 +13,25 @@ import (
 	"time"
 )
 
-// Store keeps webi's own metadata: channels (bot directories) and threads
-// (an ax session plus a title). The conversation itself lives in the ax
-// session file, which is the same format slaxi uses.
 type Store struct {
 	dir string
 	mu  sync.Mutex
 }
 
 type Channel struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Workdir string `json:"workdir"`
-	Prompt  string `json:"prompt,omitempty"`
-	Pinned  bool   `json:"pinned,omitempty"`
-	// VaultScope picks which secrets reach this channel's runs. Empty means
-	// the shared `global` scope.
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Workdir    string    `json:"workdir"`
+	Prompt     string    `json:"prompt,omitempty"`
+	Pinned     bool      `json:"pinned,omitempty"`
 	VaultScope string    `json:"vault_scope,omitempty"`
 	Created    time.Time `json:"created"`
 }
 
 type Thread struct {
-	ID      string `json:"id"`
-	Channel string `json:"channel"`
-	Title   string `json:"title"`
-	// TitleGenerated marks a model-written title, so a thread keeps the name it
-	// earned instead of being renamed after every run.
+	ID             string    `json:"id"`
+	Channel        string    `json:"channel"`
+	Title          string    `json:"title"`
 	TitleGenerated bool      `json:"title_generated,omitempty"`
 	Created        time.Time `json:"created"`
 	Updated        time.Time `json:"updated"`
@@ -102,7 +95,7 @@ func (s *Store) PutChannel(channel Channel) error {
 	if !replaced {
 		channels = append(channels, channel)
 	}
-	data, err := json.MarshalIndent(channelsFile{Channels: channels}, "", "  ")
+	data, err := json.MarshalIndent(channelsFile{Channels: channels}, "", " ")
 	if err != nil {
 		return err
 	}
@@ -119,7 +112,7 @@ func (s *Store) DeleteChannel(id string) error {
 			out = append(out, channel)
 		}
 	}
-	data, err := json.MarshalIndent(channelsFile{Channels: out}, "", "  ")
+	data, err := json.MarshalIndent(channelsFile{Channels: out}, "", " ")
 	if err != nil {
 		return err
 	}
@@ -128,7 +121,6 @@ func (s *Store) DeleteChannel(id string) error {
 
 func (s *Store) threadDir(id string) string { return filepath.Join(s.dir, "threads", id) }
 
-// SessionPath is the ax log of one thread.
 func (s *Store) SessionPath(id string) string { return filepath.Join(s.threadDir(id), "session.jsonl") }
 
 func (s *Store) CreateThread(channel string, title string) (Thread, error) {
@@ -153,7 +145,7 @@ func (s *Store) CreateThread(channel string, title string) (Thread, error) {
 func (s *Store) PutThread(thread Thread) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	data, err := json.MarshalIndent(thread, "", "  ")
+	data, err := json.MarshalIndent(thread, "", " ")
 	if err != nil {
 		return err
 	}
@@ -200,11 +192,10 @@ func (s *Store) DeleteThread(id string) error {
 	if err != nil {
 		return err
 	}
-	_ = s.Blobs(thread) // keeps blobs alive until the thread is gone
+	_ = s.Blobs(thread)
 	return os.RemoveAll(s.threadDir(id))
 }
 
-// Touch records activity and derives a title from the first user message.
 func (s *Store) Touch(id string, text string) {
 	thread, err := s.Thread(id)
 	if err != nil {
@@ -218,8 +209,6 @@ func (s *Store) Touch(id string, text string) {
 	_ = s.PutThread(thread)
 }
 
-// SetTitle stores a generated title once. A later run does not rename a thread
-// that already has one.
 func (s *Store) SetTitle(id, title string) error {
 	thread, err := s.Thread(id)
 	if err != nil {
@@ -234,8 +223,6 @@ func (s *Store) SetTitle(id, title string) error {
 	return s.PutThread(thread)
 }
 
-// Blobs returns the image files of a thread, the ones ax resolves with
-// -image. webi keeps them next to the session so a thread is self-contained.
 func (s *Store) Blobs(thread Thread) string {
 	dir := filepath.Join(s.threadDir(thread.ID), "images")
 	_ = os.MkdirAll(dir, 0o700)

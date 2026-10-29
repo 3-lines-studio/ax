@@ -14,9 +14,6 @@ func getStatic(t *testing.T, handler http.Handler, path string) *httptest.Respon
 	return rec
 }
 
-// The UI asks for /static/..., but the embed keeps the files at the root of
-// the sub-filesystem. Serving index.html for app.js is how the page ends up
-// unstyled with "Unexpected token '<'".
 func TestStaticServesTheShell(t *testing.T) {
 	handler := staticHandler()
 	if handler == nil {

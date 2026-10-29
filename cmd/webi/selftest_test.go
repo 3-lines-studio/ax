@@ -12,7 +12,6 @@ import (
 	"github.com/3-lines-studio/ax/internal/axrun"
 )
 
-// fakeSelftestAX is an ax that answers `selftest` with the given status.
 func fakeSelftestAX(t *testing.T, status int) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "ax")
@@ -112,8 +111,6 @@ func TestStateReportsBuildAndRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A run in the map is what the UI calls running; the count is what an
-	// idle gate reads before restarting the process.
 	srv.runs[thread.ID] = &axrun.Run{}
 	if !srv.running(thread.ID) {
 		t.Fatal("a live run must count as running")
