@@ -81,6 +81,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("POST /api/settings", s.handlePostSettings)
 	mux.HandleFunc("GET /api/dirs", s.handleDirs)
+	mux.HandleFunc("POST /api/dirs", s.handleMkdir)
 	mux.HandleFunc("GET /api/routines", s.handleRoutines)
 	mux.HandleFunc("POST /api/routines/{name}/run", s.handleRunRoutine)
 	mux.HandleFunc("GET /api/routines/{name}/log", s.handleRoutineLog)
@@ -292,6 +293,12 @@ func (s *Server) handleDirs(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
+		// The picker turns a missing folder into a "Create <path>" button, so
+		// "does not exist" has to stay distinguishable from "not allowed".
+		if os.IsNotExist(err) {
+			writeErr(w, 404, "no such directory: "+root)
+			return
+		}
 		writeErr(w, 400, err.Error())
 		return
 	}
@@ -305,6 +312,48 @@ func (s *Server) handleDirs(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(dirs, func(i, j int) bool { return dirs[i]["name"] < dirs[j]["name"] })
 	parent := filepath.Dir(root)
 	writeJSON(w, 200, map[string]any{"path": root, "parent": parent, "dirs": dirs})
+}
+
+// handleMkdir creates the folder a channel will run in. The picker sends an
+// absolute path: either the name typed under the folder on screen or a path
+// the user typed that does not exist yet.
+func (s *Server) handleMkdir(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	path := strings.TrimSpace(req.Path)
+	if path == "" {
+		writeErr(w, 400, "path is required")
+		return
+	}
+	if !filepath.IsAbs(path) {
+		writeErr(w, 400, "path must be absolute")
+		return
+	}
+	path = filepath.Clean(path)
+	if path == "/" {
+		writeErr(w, 400, "refusing to create the root directory")
+		return
+	}
+	if info, err := os.Stat(path); err == nil {
+		if info.IsDir() {
+			writeJSON(w, 200, map[string]string{"path": path})
+			return
+		}
+		writeErr(w, 400, "path exists and is not a directory: "+path)
+		return
+	} else if !os.IsNotExist(err) {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]string{"path": path})
 }
 
 // --- channels --------------------------------------------------------------
