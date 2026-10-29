@@ -30,7 +30,7 @@ const (
 	buildDirPrefix = ".stage-"
 )
 
-func promote(root string, opts promoteOptions) error {
+func promote(root string, paths hostPaths, opts promoteOptions) error {
 	bc, found, err := readBotConfig(root)
 	if err != nil {
 		return err
@@ -47,7 +47,6 @@ func promote(root string, opts promoteOptions) error {
 	if err != nil {
 		return err
 	}
-	paths := newHostPaths(root)
 	if _, err := controlStatus(paths.sock); err != nil {
 		return fmt.Errorf("`boti serve` is not running in %s: %w", root, err)
 	}
@@ -130,8 +129,7 @@ func promote(root string, opts promoteOptions) error {
 	return nil
 }
 
-func rollback(root string) error {
-	paths := newHostPaths(root)
+func rollback(root string, paths hostPaths) error {
 	reply, err := controlPost(paths.sock, "/rollback", nil)
 	if err != nil {
 		return err

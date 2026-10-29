@@ -83,28 +83,44 @@ func main() {
 			fatal("serve: %v", err)
 		}
 	case "status":
-		if err := status(root, *asJSON); err != nil {
+		if err := status(root, hostPathsFor(root), *asJSON); err != nil {
 			fatal("%v", err)
 		}
 	case "logs":
-		if err := logs(root, *lines); err != nil {
+		if err := logs(root, hostPathsFor(root), *lines); err != nil {
 			fatal("logs: %v", err)
 		}
 	case "restart":
-		if err := restart(root); err != nil {
+		if err := restart(root, hostPathsFor(root)); err != nil {
 			fatal("%v", err)
 		}
 	case "promote":
-		if err := promote(root, promoteOptions{Repo: *repo, Now: *now}); err != nil {
+		if err := promote(root, hostPathsFor(root), promoteOptions{Repo: *repo, Now: *now}); err != nil {
 			fatal("promote: %v", err)
 		}
 	case "rollback":
-		if err := rollback(root); err != nil {
+		if err := rollback(root, hostPathsFor(root)); err != nil {
 			fatal("rollback: %v", err)
 		}
 	default:
 		fatal("unknown mode %q (want install, run, selftest, update, serve, status, logs, restart, promote or rollback)", mode)
 	}
+}
+
+func hostPathsFor(root string) hostPaths {
+	root = filepath.Clean(root)
+	bc, found, err := readBotConfig(root)
+	if err == nil && found {
+		data := strings.TrimSpace(bc.Boti.Serve.Data)
+		if data == "" {
+			return newHostPaths(root)
+		}
+		if !filepath.IsAbs(data) {
+			data = filepath.Join(root, data)
+		}
+		return newHostPathsAt(root, data)
+	}
+	return newHostPaths(root)
 }
 
 func resolveRoot(dir string) string {

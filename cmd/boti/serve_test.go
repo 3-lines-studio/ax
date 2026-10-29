@@ -11,11 +11,25 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
+
+func TestHostPathsForUsesServeData(t *testing.T) {
+	root := t.TempDir()
+	data := t.TempDir()
+	writeFile(t, filepath.Join(root, "bot.toml"), "[boti.serve]\ndata = "+strconv.Quote(data)+"\n")
+	paths := hostPathsFor(root)
+	if paths.data != data {
+		t.Fatalf("data = %q, want %q", paths.data, data)
+	}
+	if paths.sock != filepath.Join(data, "state", "host", "sock") {
+		t.Fatalf("sock = %q", paths.sock)
+	}
+}
 
 func TestServeChildHelper(t *testing.T) {
 	addr := os.Getenv("BOTI_CHILD_ADDR")
@@ -189,7 +203,7 @@ func TestSuperviseRestartsAfterCrash(t *testing.T) {
 		t.Fatalf("restarts = %d", second.Restarts)
 	}
 
-	if err := restart(root); err != nil {
+	if err := restart(root, hostPathsFor(root)); err != nil {
 		t.Fatal(err)
 	}
 	waitState(t, paths.state, 10*time.Second, func(s hostState) bool {
@@ -403,7 +417,7 @@ func TestServePassesVaultKey(t *testing.T) {
 	if _, err := controlDo(paths.sock, "PUT", "/vault-key", body); err != nil {
 		t.Fatal(err)
 	}
-	if err := restart(root); err != nil {
+	if err := restart(root, hostPathsFor(root)); err != nil {
 		t.Fatal(err)
 	}
 	waitState(t, paths.state, 10*time.Second, func(s hostState) bool {
@@ -417,7 +431,7 @@ func TestServePassesVaultKey(t *testing.T) {
 	if err := os.Remove(record); err != nil {
 		t.Fatal(err)
 	}
-	if err := restart(root); err != nil {
+	if err := restart(root, hostPathsFor(root)); err != nil {
 		t.Fatal(err)
 	}
 	waitFile(t, record, 5*time.Second, func(s string) bool { return s == "none" })

@@ -29,6 +29,7 @@ type serveConfig struct {
 	Idle     string   `toml:"idle"`
 	Selftest []string `toml:"selftest"`
 	Repo     string   `toml:"repo"`
+	Data     string   `toml:"data"`
 }
 
 const defaultServeListen = "127.0.0.1:8377"
@@ -55,7 +56,10 @@ type hostPaths struct {
 }
 
 func newHostPaths(root string) hostPaths {
-	data := botdir.DataRoot(root)
+	return newHostPathsAt(root, botdir.DataRoot(root))
+}
+
+func newHostPathsAt(root, data string) hostPaths {
 	dir := filepath.Join(data, "state", "host")
 	return hostPaths{
 		root:   root,
@@ -765,7 +769,7 @@ func runServe(ctx context.Context, root string) error {
 	if !found {
 		fmt.Fprintf(os.Stderr, "boti: no bot.toml in %s; serving the default webi\n", root)
 	}
-	paths := newHostPaths(root)
+	paths := hostPathsFor(root)
 	if err := os.MkdirAll(paths.dir, 0o755); err != nil {
 		return err
 	}
@@ -810,8 +814,7 @@ func openHostLog(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 }
 
-func status(root string, asJSON bool) error {
-	paths := newHostPaths(root)
+func status(root string, paths hostPaths, asJSON bool) error {
 	data, err := os.ReadFile(paths.state)
 	if err != nil {
 		return fmt.Errorf("no supervisor state in %s (is `boti serve` running?)", paths.dir)
@@ -867,8 +870,7 @@ func statusText(state hostState, alive bool) string {
 	return out.String()
 }
 
-func logs(root string, lines int) error {
-	paths := newHostPaths(root)
+func logs(root string, paths hostPaths, lines int) error {
 	text, err := tailFile(paths.log, lines)
 	if err != nil {
 		return fmt.Errorf("no log in %s (is `boti serve` running?)", paths.dir)
@@ -889,8 +891,7 @@ func tailFile(path string, lines int) (string, error) {
 	return strings.Join(all, "\n") + "\n", nil
 }
 
-func restart(root string) error {
-	paths := newHostPaths(root)
+func restart(root string, paths hostPaths) error {
 	resp, err := controlClient(paths.sock).Post("http://unix/restart", "application/json", nil)
 	if err != nil {
 		return fmt.Errorf("restart: %w", err)
