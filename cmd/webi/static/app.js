@@ -1425,10 +1425,18 @@ function onDelta(ev) {
 function onMessage(ev) {
   const m = ev.message;
   if (!m) return;
-  if (S.messages.some((x) => x.id === m.id)) return;
-  S.live.delete(m.id);
-  const live = document.getElementById('live-' + m.id);
-  if (live) live.remove();
+  // Session messages have no id. Compare ids only when the event carries one:
+  // undefined === undefined would otherwise hide every live message once a
+  // thread has loaded its history.
+  if (m.id && S.messages.some((x) => x.id === m.id)) return;
+  if (m.t === 'assistant') {
+    // The final text replaces the streaming bubble for this turn.
+    S.live.clear();
+  } else {
+    S.live.delete(m.id);
+    const live = document.getElementById('live-' + m.id);
+    if (live) live.remove();
+  }
   S.messages.push(m);
   renderMessages(false);
   renderWorking();
@@ -1999,7 +2007,7 @@ async function newChannel() {
     submit: 'Create',
     fields: [
       { name: 'name', label: 'Name', placeholder: 'my-project' },
-      { name: 'workdir', label: 'Working directory', dir: true, placeholder: '/home/me/code/project', note: 'Where ax runs tools in this channel.' },
+      { name: 'workdir', label: 'Bot directory', dir: true, placeholder: '/srv/ax/main', note: 'The channel root: ax reads bot.toml (tools), workspace/ and skills/ from here. Without a bot.toml it has no tools.' },
       { name: 'prompt', label: 'Channel instructions (optional)', textarea: true, placeholder: 'Extra instructions for ax in this channel…' },
     ],
   });
@@ -2021,7 +2029,7 @@ async function editChannel(id) {
     title: 'Edit channel',
     fields: [
       { name: 'name', label: 'Name', value: ch.name },
-      { name: 'workdir', label: 'Working directory', dir: true, value: ch.workdir },
+      { name: 'workdir', label: 'Bot directory', dir: true, value: ch.workdir, note: 'The channel root: ax reads bot.toml (tools), workspace/ and skills/ from here.' },
       { name: 'prompt', label: 'Channel instructions', textarea: true, value: ch.prompt || '' },
     ],
   });
