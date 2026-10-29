@@ -724,6 +724,24 @@ func (s *Server) forwardEvent(threadID string, event axrun.Event) {
 			target = event.Name
 		}
 		s.publish(map[string]any{"type": "step", "thread": threadID, "tool": target})
+	case "usage":
+		usage := event.Usage
+		if usage == nil && (event.InputTokens > 0 || event.OutputTokens > 0) {
+			usage = &axrun.Usage{Input: event.InputTokens, Output: event.OutputTokens}
+		}
+		if usage == nil || usage.Input <= 0 {
+			return
+		}
+		s.publish(map[string]any{"type": "message", "thread": threadID, "message": map[string]any{
+			"t": "usage",
+			"usage": map[string]any{
+				"prompt_tokens":       usage.Input,
+				"completion_tokens":   usage.Output,
+				"cached_input_tokens": usage.CachedInput,
+				"total_tokens":        usage.Input + usage.Output,
+			},
+			"ts": time.Now().UTC(),
+		}})
 	case "compaction":
 		s.publish(map[string]any{"type": "compact", "thread": threadID, "upto": event.Upto})
 	case "secret_request":

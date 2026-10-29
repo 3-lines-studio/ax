@@ -67,10 +67,12 @@ only, no inline script), `nosniff` and no referrer.
   `AX_WEB_THREAD`, their names and titles, the user's name and `AX_WEB_PROMPT`
   (channel instructions); ax folds them into the runtime section of its system
   prompt. Edit channel changes the folder (it must be absolute and exist).
-- The UI (the embedded static app) gets `delta`, `message`, `run`, `step`, `compact`
-  and `state` events over `/api/stream`.
-- History is read straight from the ax session log, so a thread survives a
-  restart and `slaxi` can read the same conversation format.
+- The UI (the embedded static app) gets `delta`, `message` (including token
+  usage), `run`, `step`, `compact` and `state` events over `/api/stream`.
+- History is read straight from the ax session log, including `usage` entries,
+  so a thread survives a restart and `slaxi` can read the same conversation
+  format. The thread header shows the channel, its folder and `ctx N%` from the
+  latest turn.
 - `POST /api/threads/{id}/stop` writes the `cancel` control to ax's stdin;
   `POST /api/threads/{id}/compact` runs `ax compact --session ...`.
 - A message sent while the thread is running steers the run: webi writes

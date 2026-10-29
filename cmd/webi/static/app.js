@@ -892,7 +892,7 @@ function renderChannelView() {
   $('#main').innerHTML =
     '<header class="topbar">' +
     '<button class="icon-btn menu-btn" data-action="drawer" aria-label="Channels" aria-expanded="false">' + ico('list') + '</button>' +
-    '<div class="titles" role="button" tabindex="0" aria-haspopup="menu" data-action="channel-menu" data-id="' + ch.id + '"><h1># ' + esc(ch.name) + '</h1><p>' + threads.length + (threads.length === 1 ? ' thread' : ' threads') + '</p></div>' +
+    '<div class="titles" role="button" tabindex="0" aria-haspopup="menu" data-action="channel-menu" data-id="' + ch.id + '"><h1># ' + esc(ch.name) + '</h1><p>' + esc(ch.workdir || 'no working directory') + ' · ' + threads.length + (threads.length === 1 ? ' thread' : ' threads') + '</p></div>' +
     '<div class="actions">' +
     '<button class="btn primary" data-action="new-thread">New thread</button>' +
     '</div></header>' +
@@ -954,7 +954,7 @@ function renderThreadView() {
     '<header class="topbar">' +
     '<button class="icon-btn back" data-action="back" aria-label="Back">' + ico('arrow-left') + '</button>' +
     '<div class="titles" role="button" tabindex="0" aria-haspopup="menu" data-action="thread-menu" data-id="' + th.id + '"><h1 id="thread-title">' + esc(th.title) + '</h1>' +
-    '<p id="thread-sub">#' + esc(ch ? ch.name : '') + ctxLabel() + '</p></div>' +
+    '<p id="thread-sub">#' + esc(ch ? ch.name : '') + (ch && ch.workdir ? ' · ' + esc(ch.workdir) : '') + ctxLabel() + '</p></div>' +
     '</header>' + keyBannerHTML() + vaultBannerHTML() + secretBannerHTML() +
     '<div class="scroll" id="messages-scroll"><div class="messages" id="messages"></div></div>' +
     '<div class="composer-wrap">' + jumpLatestHTML() + '<div class="pending" id="pending"></div>' +
@@ -992,7 +992,7 @@ function ctxLabel() {
   const cfg = (S.state && S.state.config) || {};
   let last = null;
   for (const m of S.messages) {
-    if (m.t === 'assistant' && m.usage && m.usage.prompt_tokens) last = m.usage.prompt_tokens;
+    if (m.usage && m.usage.prompt_tokens) last = m.usage.prompt_tokens;
   }
   if (!last || !cfg.max_context) return '';
   return ' · ctx ' + Math.min(100, Math.round((last / cfg.max_context) * 100)) + '%';
@@ -1026,6 +1026,7 @@ function imagesHTML(ids) {
 }
 
 function messageHTML(m) {
+  if (m.t === 'usage') return '';
   if (m.t === 'compaction') return '<div class="divider">context compacted</div>';
   if (m.t === 'resume') return '<div class="divider">run resumed after an interruption</div>';
   if (m.t === 'error') {
@@ -1059,7 +1060,7 @@ function renderMessages(forceScroll) {
   const sub = $('#thread-sub');
   if (sub && S.thread) {
     const ch = findChannel(S.thread.channel);
-    sub.textContent = '#' + (ch ? ch.name : '') + ctxLabel();
+    sub.textContent = '#' + (ch ? ch.name : '') + (ch && ch.workdir ? ' · ' + ch.workdir : '') + ctxLabel();
   }
   if (stick) scrollToBottom(true);
   updateJumpLatest();

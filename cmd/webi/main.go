@@ -152,8 +152,8 @@ func buildID() string {
 }
 
 // readSession projects an ax session log into the events the UI renders. It
-// knows only what the UI needs: who said what, and where the context was
-// compacted.
+// knows only what the UI needs: who said what, where the context was
+// compacted, and how many tokens the latest turn used.
 func readSession(path string) ([]map[string]any, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -178,6 +178,13 @@ func readSession(path string) ([]map[string]any, error) {
 			Upto    int             `json:"upto"`
 			At      int64           `json:"at,omitempty"`
 			Resume  bool            `json:"resume,omitempty"`
+			Usage   *struct {
+				Input        int    `json:"input"`
+				Output       int    `json:"output"`
+				CachedInput  int    `json:"cached_input"`
+				ContextInput int    `json:"context_input"`
+				Model        string `json:"model"`
+			} `json:"usage,omitempty"`
 		}
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			continue
@@ -201,6 +208,28 @@ func readSession(path string) ([]map[string]any, error) {
 			}
 			events = append(events, map[string]any{
 				"t": msg.Role, "text": msg.Content, "ts": eventTime(entry.At),
+			})
+		case "usage":
+			if entry.Usage == nil {
+				continue
+			}
+			used := entry.Usage.ContextInput
+			if used == 0 {
+				used = entry.Usage.Input
+			}
+			if used <= 0 {
+				continue
+			}
+			events = append(events, map[string]any{
+				"t": "usage",
+				"usage": map[string]any{
+					"prompt_tokens":       used,
+					"completion_tokens":   entry.Usage.Output,
+					"cached_input_tokens": entry.Usage.CachedInput,
+					"total_tokens":        used + entry.Usage.Output,
+					"model":               entry.Usage.Model,
+				},
+				"ts": eventTime(entry.At),
 			})
 		case "compaction":
 			events = append(events, map[string]any{"t": "compaction", "upto": entry.Upto, "ts": eventTime(entry.At)})
