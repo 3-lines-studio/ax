@@ -47,6 +47,16 @@ function fmtTime(iso) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function fmtSize(n) {
+  const v = Number(n) || 0;
+  if (v < 1024) return v + ' B';
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let x = v;
+  let u = -1;
+  do { x /= 1024; u += 1; } while (x >= 1024 && u < units.length - 1);
+  return (x >= 10 ? Math.round(x) : Math.round(x * 10) / 10) + ' ' + units[u];
+}
+
 function relTime(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return '';
