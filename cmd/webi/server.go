@@ -617,6 +617,30 @@ func (s *Server) startResume(thread Thread) error {
 	}, "")
 }
 
+// runEnv is the context ax gets for one run: the channel/thread identity, the
+// user's name and the channel instructions. Paths and secrets are separate;
+// this is what the model needs to know where it is.
+func runEnv(thread Thread, channel Channel, user string) []string {
+	env := []string{
+		"AX_WEB_THREAD=" + thread.ID,
+		"AX_WEB_CHANNEL=" + channel.ID,
+		"BOT_DATA=" + channel.Workdir,
+	}
+	if channel.Name != "" {
+		env = append(env, "AX_WEB_CHANNEL_NAME="+channel.Name)
+	}
+	if thread.Title != "" {
+		env = append(env, "AX_WEB_THREAD_TITLE="+thread.Title)
+	}
+	if user = strings.TrimSpace(user); user != "" {
+		env = append(env, "AX_WEB_USER="+user)
+	}
+	if channel.Prompt != "" {
+		env = append(env, "AX_WEB_PROMPT="+channel.Prompt)
+	}
+	return env
+}
+
 func (s *Server) launch(thread Thread, job axrun.Job, prompt string) error {
 	if !s.reserveRun(thread.ID) {
 		return errThreadRunning
@@ -633,14 +657,7 @@ func (s *Server) launch(thread Thread, job axrun.Job, prompt string) error {
 	cfg.BaseURL = firstNonEmpty(settings.BaseURL, cfg.BaseURL)
 	// A channel is a bot: its runtime data lives at its root, not at the
 	// host's BOT_DATA. Without this every channel would share one workspace.
-	env := []string{
-		"AX_WEB_THREAD=" + thread.ID,
-		"AX_WEB_CHANNEL=" + channel.ID,
-		"BOT_DATA=" + channel.Workdir,
-	}
-	if channel.Prompt != "" {
-		env = append(env, "AX_WEB_PROMPT="+channel.Prompt)
-	}
+	env := runEnv(thread, channel, settings.Name)
 	vaultEnv, cleanupVault, err := s.vault.Env(channel.VaultScope)
 	if err != nil {
 		s.releaseRun(thread.ID)

@@ -3,8 +3,10 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuildSystemPromptListsTools(t *testing.T) {
@@ -84,7 +86,7 @@ func TestBuildSystemPromptNoUserPrompt(t *testing.T) {
 func TestResolveSystemOverride(t *testing.T) {
 	cfg := cliConfig{system: "override"}
 	bot := &botCtx{Workspace: "/ws", Prompt: "bot"}
-	if got := resolveSystem(cfg, nil, bot, nil, nil); got != "override" {
+	if got := resolveSystem(cfg, nil, bot, nil, nil, defaultCompactAt, defaultContextWindow); got != "override" {
 		t.Errorf("resolveSystem = %q", got)
 	}
 }
@@ -92,7 +94,7 @@ func TestResolveSystemOverride(t *testing.T) {
 func TestResolveSystemFallsBackToBuild(t *testing.T) {
 	cfg := cliConfig{}
 	bot := &botCtx{Workspace: "/ws", Prompt: "bot"}
-	got := resolveSystem(cfg, nil, bot, nil, nil)
+	got := resolveSystem(cfg, nil, bot, nil, nil, defaultCompactAt, defaultContextWindow)
 	if !strings.Contains(got, "You are an expert assistant") {
 		t.Errorf("resolveSystem did not build prompt: %q", got)
 	}
@@ -130,5 +132,45 @@ func TestUserSystemPromptMissingFile(t *testing.T) {
 	t.Setenv("HOME", "")
 	if got := userSystemPrompt(); got != "" {
 		t.Errorf("no file = %q", got)
+	}
+}
+
+func TestRuntimeSectionNamesTheEngineAndHost(t *testing.T) {
+	t.Setenv("AX_BUILD", "b955fe2")
+	t.Setenv("AX_HOST_SOCK", "/tmp/boti.sock")
+	t.Setenv("AX_WEB_CHANNEL", "c1")
+	t.Setenv("AX_WEB_CHANNEL_NAME", "general")
+	t.Setenv("AX_WEB_THREAD", "t1")
+	t.Setenv("AX_WEB_THREAD_TITLE", "hola")
+	t.Setenv("AX_WEB_USER", "Don")
+	bot := &botCtx{Root: "/srv/ax/main", DataRoot: "/srv/ax/main", Workspace: "/srv/ax/main/workspace"}
+	rt := newRuntimeInfo(cliConfig{
+		model:    "deepseek-flash",
+		base:     "https://api.deepseek.com",
+		toolMode: "catalog",
+		session:  "/tmp/s.jsonl",
+	}, bot, 0.5, 1_000_000)
+	rt.Now = time.Date(2026, 10, 29, 16, 0, 0, 0, time.UTC)
+	got := runtimeSection(rt)
+	for _, want := range []string{
+		"You are ax, the assistant running on the AX engine",
+		"build b955fe2",
+		runtime.GOOS + "/" + runtime.GOARCH,
+		"Transport: webi",
+		"supervisor: boti",
+		"Bot root: /srv/ax/main",
+		"Channel: general (c1)",
+		"thread: hola (t1)",
+		"User: Don",
+		"Model: deepseek-flash at https://api.deepseek.com",
+		"context 1000000 tokens",
+		"compact at 50%",
+		"tools: catalog",
+		"Session: /tmp/s.jsonl",
+		"Time: 2026-10-29T16:00:00Z",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("runtime section missing %q:\n%s", want, got)
+		}
 	}
 }
