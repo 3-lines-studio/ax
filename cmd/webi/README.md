@@ -61,7 +61,9 @@ only, no inline script), `nosniff` and no referrer.
   host's `BOT_DATA` only holds webi's state (channels, threads, vault). Edit
   channel changes that directory (it must be absolute and exist); point it at
   the bot root, not at its `workspace/`, or ax sees no `bot.toml` and has no
-  tools.
+  tools. The run also gets `AX_WEB_CHANNEL`, `AX_WEB_THREAD`, their names and
+  titles, the user's name and `AX_WEB_PROMPT` (channel instructions); ax folds
+  them into the runtime section of its system prompt.
 - The UI (the embedded static app) gets `delta`, `message`, `run`, `step`, `compact`
   and `state` events over `/api/stream`.
 - History is read straight from the ax session log, so a thread survives a

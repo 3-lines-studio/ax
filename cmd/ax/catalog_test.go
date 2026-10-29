@@ -90,8 +90,10 @@ func TestCatalogSystemPrompt(t *testing.T) {
 	}
 	// The prompt is a policy layer, not a tool manual. The schemas stay in the
 	// catalog; core tools only contribute an id and an argument signature.
-	if len(prompt) > 1000 {
-		t.Errorf("prompt is %d chars, want <= 1000:\n%s", len(prompt), prompt)
+	// Runtime facts (build, host, paths, model) are not a tool manual, but
+	// they are part of the prompt now; keep the budget generous and explicit.
+	if len(prompt) > 1600 {
+		t.Errorf("prompt is %d chars, want <= 1600:\n%s", len(prompt), prompt)
 	}
 }
 
@@ -114,6 +116,15 @@ func TestCatalogSystemPromptMentionsMemoryWhenConfigured(t *testing.T) {
 	prompt := buildCatalogSystemPrompt("/work", nil, cat, nil)
 	if !strings.Contains(prompt, "Check memory for personal facts") {
 		t.Errorf("memory hint missing:\n%s", prompt)
+	}
+}
+
+func TestCatalogSystemPromptAddsChannelInstructions(t *testing.T) {
+	t.Setenv("AX_WEB_PROMPT", "always answer in Spanish")
+	cat := testCatalog(t)
+	prompt := buildCatalogSystemPrompt("/work", nil, cat, nil)
+	if !strings.Contains(prompt, "## Channel instructions\nalways answer in Spanish") {
+		t.Errorf("channel instructions missing:\n%s", prompt)
 	}
 }
 

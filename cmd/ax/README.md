@@ -76,6 +76,16 @@ When the bot root has `workspace/`, the model and tools run there.
 `image_detail`, `tool_mode`, `core_tools`, `compact_at`, `context_window`).
 Connections stay in `bot.toml`.
 
+## Runtime awareness
+
+The system prompt ends with a **Runtime** block assembled per run: the build
+(`AX_BUILD`, else the VCS revision), OS/arch/Go version, transport and
+supervisor, bot and data roots, channel/thread/user, model endpoint,
+context/compaction settings, session path and the current UTC time. `bot.md`,
+`~/.config/ax/SYSTEM.md` and the transport's channel instructions
+(`AX_WEB_PROMPT`) sit above it. The block describes the process; it is not a
+new capability. An explicit `-system` still replaces the whole prompt.
+
 ## Context compaction
 
 Long sessions compact themselves. When the projected prompt reaches

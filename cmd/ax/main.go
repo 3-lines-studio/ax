@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -320,7 +322,8 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 		}
 	}
 	defer closeCatalog()
-	system := resolveSystem(cfg, tools, bot, cat, coreToolIDs(fc, cat))
+	compactAt, contextWindow := resolveCompact(cfg, fc)
+	system := resolveSystem(cfg, tools, bot, cat, coreToolIDs(fc, cat), compactAt, contextWindow)
 	baseSystem := system
 	if state.Summary != "" {
 		system += summarySection(state.Summary)
@@ -375,7 +378,6 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 		log: log, runID: runID, model: model,
 		calls: map[string]ToolCall{},
 	}
-	compactAt, contextWindow := resolveCompact(cfg, fc)
 	var compact func(context.Context, []Message, bool) ([]Message, string, error)
 	if compactAt > 0 && contextWindow > 0 {
 		summarizer := NewOpenAI(base, apiKey(fc, bot))
@@ -643,17 +645,189 @@ func apiKey(fc fileConfig, bot *botCtx) string {
 	return fc.apiKey
 }
 
-func resolveSystem(cfg cliConfig, tools []Tool, bot *botCtx, cat *catalog.Catalog, core []string) string {
+// runtimeInfo is what ax knows about itself and the process it is running in.
+// The system prompt gets a compact version of it; the values come from flags,
+// the build and the transport's environment, never from secrets.
+type runtimeInfo struct {
+	Build         string
+	Executable    string
+	Module        string
+	GOOS          string
+	GOARCH        string
+	GoVersion     string
+	Transport     string
+	Supervisor    string
+	BotRoot       string
+	DataRoot      string
+	ChannelID     string
+	ChannelName   string
+	ThreadID      string
+	ThreadTitle   string
+	User          string
+	Model         string
+	BaseURL       string
+	ContextWindow int
+	CompactAt     float64
+	ToolMode      string
+	Session       string
+	Now           time.Time
+}
+
+// axBuildID prefers the build the host activated (boti sets AX_BUILD), then
+// the VCS revision Go embeds when the binary was built from a checkout, and
+// finally "dev".
+func axBuildID() string {
+	if v := strings.TrimSpace(os.Getenv("AX_BUILD")); v != "" {
+		return v
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" && setting.Value != "" {
+				if len(setting.Value) > 7 {
+					return setting.Value[:7]
+				}
+				return setting.Value
+			}
+		}
+	}
+	return "dev"
+}
+
+func newRuntimeInfo(cfg cliConfig, bot *botCtx, compactAt float64, contextWindow int) runtimeInfo {
+	rt := runtimeInfo{
+		Build:         axBuildID(),
+		GOOS:          runtime.GOOS,
+		GOARCH:        runtime.GOARCH,
+		GoVersion:     runtime.Version(),
+		Transport:     "cli",
+		Supervisor:    "standalone",
+		Model:         cfg.model,
+		BaseURL:       cfg.base,
+		ContextWindow: contextWindow,
+		CompactAt:     compactAt,
+		ToolMode:      cfg.toolMode,
+		Session:       cfg.session,
+		Now:           time.Now().UTC(),
+	}
+	if bot != nil {
+		rt.BotRoot = bot.Root
+		rt.DataRoot = bot.DataRoot
+	}
+	if exe, err := os.Executable(); err == nil {
+		rt.Executable = exe
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		rt.Module = info.Main.Path
+	}
+	if id := strings.TrimSpace(os.Getenv("AX_WEB_CHANNEL")); id != "" {
+		rt.ChannelID = id
+		rt.Transport = "webi"
+	}
+	rt.ChannelName = strings.TrimSpace(os.Getenv("AX_WEB_CHANNEL_NAME"))
+	rt.ThreadID = strings.TrimSpace(os.Getenv("AX_WEB_THREAD"))
+	rt.ThreadTitle = strings.TrimSpace(os.Getenv("AX_WEB_THREAD_TITLE"))
+	rt.User = strings.TrimSpace(os.Getenv("AX_WEB_USER"))
+	if strings.TrimSpace(os.Getenv("AX_HOST_SOCK")) != "" {
+		rt.Supervisor = "boti"
+	}
+	if v := strings.TrimSpace(os.Getenv("AX_TRANSPORT")); v != "" {
+		rt.Transport = v
+	}
+	return rt
+}
+
+// channelInstructions is the per-channel prompt webi stores. It lives in the
+// environment because the channel is a transport concept; an empty value means
+// the channel has no extra instructions.
+func channelInstructions() string {
+	return strings.TrimSpace(os.Getenv("AX_WEB_PROMPT"))
+}
+
+func runtimeSection(rt runtimeInfo) string {
+	var out strings.Builder
+	out.WriteString("\n\n## Runtime\n")
+	fmt.Fprintf(&out, "You are ax, the assistant running on the AX engine (build %s, %s/%s, %s).\n",
+		firstNonEmpty(rt.Build, "dev"), firstNonEmpty(rt.GOOS, "unknown"), firstNonEmpty(rt.GOARCH, "unknown"), firstNonEmpty(rt.GoVersion, "unknown"))
+	if rt.Executable != "" {
+		fmt.Fprintf(&out, "Binary: %s.\n", rt.Executable)
+	}
+	if rt.Transport != "" {
+		fmt.Fprintf(&out, "Transport: %s", rt.Transport)
+		if rt.Supervisor != "" {
+			fmt.Fprintf(&out, "; supervisor: %s", rt.Supervisor)
+		}
+		out.WriteString(".\n")
+	}
+	if rt.BotRoot != "" {
+		fmt.Fprintf(&out, "Bot root: %s; data root: %s.\n", rt.BotRoot, rt.DataRoot)
+	}
+	if rt.ChannelID != "" {
+		channel := rt.ChannelID
+		if rt.ChannelName != "" {
+			channel = rt.ChannelName + " (" + rt.ChannelID + ")"
+		}
+		if rt.ThreadID != "" {
+			thread := rt.ThreadID
+			if rt.ThreadTitle != "" {
+				thread = rt.ThreadTitle + " (" + rt.ThreadID + ")"
+			}
+			fmt.Fprintf(&out, "Channel: %s; thread: %s.\n", channel, thread)
+		} else {
+			fmt.Fprintf(&out, "Channel: %s.\n", channel)
+		}
+	}
+	if rt.User != "" {
+		fmt.Fprintf(&out, "User: %s.\n", rt.User)
+	}
+	if rt.Model != "" {
+		fmt.Fprintf(&out, "Model: %s", rt.Model)
+		if rt.BaseURL != "" {
+			fmt.Fprintf(&out, " at %s", rt.BaseURL)
+		}
+		if rt.ContextWindow > 0 {
+			fmt.Fprintf(&out, "; context %d tokens", rt.ContextWindow)
+		}
+		if rt.CompactAt > 0 {
+			fmt.Fprintf(&out, " (compact at %.0f%%)", rt.CompactAt*100)
+		}
+		if rt.ToolMode != "" {
+			fmt.Fprintf(&out, "; tools: %s", rt.ToolMode)
+		}
+		out.WriteString(".\n")
+	}
+	if rt.Session != "" {
+		fmt.Fprintf(&out, "Session: %s.\n", rt.Session)
+	}
+	if rt.Module != "" {
+		fmt.Fprintf(&out, "Source module: %s (checkout: the repo in bot.toml [boti.serve], if set).\n", rt.Module)
+	}
+	now := rt.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	fmt.Fprintf(&out, "Time: %s. Use tools to check live state before guessing.\n", now.UTC().Format(time.RFC3339))
+	return out.String()
+}
+
+func resolveSystem(cfg cliConfig, tools []Tool, bot *botCtx, cat *catalog.Catalog, core []string, compactAt float64, contextWindow int) string {
 	if cfg.system != "" {
 		return cfg.system
 	}
+	rt := newRuntimeInfo(cfg, bot, compactAt, contextWindow)
 	if cat != nil {
-		return buildCatalogSystemPrompt(bot.Workspace, bot, cat, core)
+		return buildCatalogSystemPrompt(bot.Workspace, bot, cat, core, rt)
 	}
-	return buildSystemPrompt(tools, bot.Workspace, bot)
+	return buildSystemPrompt(tools, bot.Workspace, bot, rt)
 }
 
-func buildCatalogSystemPrompt(dir string, bot *botCtx, cat *catalog.Catalog, core []string) string {
+func runtimeOrEnv(rt []runtimeInfo, bot *botCtx) runtimeInfo {
+	if len(rt) > 0 {
+		return rt[0]
+	}
+	return newRuntimeInfo(cliConfig{}, bot, defaultCompactAt, defaultContextWindow)
+}
+
+func buildCatalogSystemPrompt(dir string, bot *botCtx, cat *catalog.Catalog, core []string, rt ...runtimeInfo) string {
 	var out strings.Builder
 	out.WriteString("You are an expert assistant operating inside ax. Use tools to find facts; do not guess.\n\n")
 	fmt.Fprintf(&out, "Current working directory: %s\n", dir)
@@ -678,6 +852,11 @@ func buildCatalogSystemPrompt(dir string, bot *botCtx, cat *catalog.Catalog, cor
 		out.WriteString("\n\n## User instructions\n")
 		out.WriteString(up)
 	}
+	if ci := channelInstructions(); ci != "" {
+		out.WriteString("\n\n## Channel instructions\n")
+		out.WriteString(ci)
+	}
+	out.WriteString(runtimeSection(runtimeOrEnv(rt, bot)))
 	return out.String()
 }
 
@@ -694,7 +873,7 @@ func coreEditTool(core []string, cat *catalog.Catalog) string {
 	return ""
 }
 
-func buildSystemPrompt(tools []Tool, dir string, bot *botCtx) string {
+func buildSystemPrompt(tools []Tool, dir string, bot *botCtx, rt ...runtimeInfo) string {
 	var out strings.Builder
 	out.WriteString("You are an expert assistant operating inside ax.\n\nAvailable tools:\n")
 	for _, tool := range tools {
@@ -718,6 +897,11 @@ func buildSystemPrompt(tools []Tool, dir string, bot *botCtx) string {
 	if up := userSystemPrompt(); up != "" {
 		out.WriteString("\n\n" + up)
 	}
+	if ci := channelInstructions(); ci != "" {
+		out.WriteString("\n\n## Channel instructions\n")
+		out.WriteString(ci)
+	}
+	out.WriteString(runtimeSection(runtimeOrEnv(rt, bot)))
 	return out.String()
 }
 
