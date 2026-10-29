@@ -8,6 +8,12 @@ import (
 	"testing"
 )
 
+func TestMain(m *testing.M) {
+	os.Unsetenv("BOT_ROOT")
+	os.Unsetenv("BOT_DATA")
+	os.Exit(m.Run())
+}
+
 func testFilesystem(t *testing.T) (*filesystem, string) {
 	t.Helper()
 	workspace := t.TempDir()

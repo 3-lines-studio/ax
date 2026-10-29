@@ -18,9 +18,6 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
-// testServer is a real SSH server in the test process: key auth, an sftp
-// subsystem and an exec channel. sshx talks to it the same way it talks to a
-// host, so the test covers the client path instead of a fake of it.
 type testServer struct {
 	dir        string
 	host       string
@@ -291,6 +288,21 @@ func TestPathsOutsideTheRootAreRejected(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(server.dir, "..", "escape")); err == nil {
 		t.Fatal("write escaped the root")
+	}
+}
+
+func TestSplitHostTakesTheLoginOutOfTheAddress(t *testing.T) {
+	t.Setenv("USER", "fallback")
+	cases := []struct{ raw, address, login string }{
+		{"example.com:22", "example.com:22", "fallback"},
+		{"ax@example.com:22", "example.com:22", "ax"},
+		{"ax@10.0.0.1", "10.0.0.1", "ax"},
+	}
+	for _, tc := range cases {
+		address, login := splitHost(tc.raw)
+		if address != tc.address || login != tc.login {
+			t.Errorf("splitHost(%q) = %q, %q; want %q, %q", tc.raw, address, login, tc.address, tc.login)
+		}
 	}
 }
 

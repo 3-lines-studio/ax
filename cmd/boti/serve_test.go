@@ -11,15 +11,26 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
 
-// TestServeChildHelper is not a test: it is the child process the supervisor
-// starts. It answers /healthz until SIGTERM, and fails at once when
-// BOTI_CHILD_FAIL is set, which is how the crash tests work.
+func TestHostPathsForUsesServeData(t *testing.T) {
+	root := t.TempDir()
+	data := t.TempDir()
+	writeFile(t, filepath.Join(root, "bot.toml"), "[boti.serve]\ndata = "+strconv.Quote(data)+"\n")
+	paths := hostPathsFor(root)
+	if paths.data != data {
+		t.Fatalf("data = %q, want %q", paths.data, data)
+	}
+	if paths.sock != filepath.Join(data, "state", "host", "sock") {
+		t.Fatalf("sock = %q", paths.sock)
+	}
+}
+
 func TestServeChildHelper(t *testing.T) {
 	addr := os.Getenv("BOTI_CHILD_ADDR")
 	if addr == "" {
@@ -182,7 +193,6 @@ func TestSuperviseRestartsAfterCrash(t *testing.T) {
 		t.Fatalf("build = %q, want dev without a current symlink", first.Build)
 	}
 
-	// A crash is an exit, and the supervisor starts the same build again.
 	if err := syscall.Kill(first.Child.PID, syscall.SIGKILL); err != nil {
 		t.Fatal(err)
 	}
@@ -193,8 +203,7 @@ func TestSuperviseRestartsAfterCrash(t *testing.T) {
 		t.Fatalf("restarts = %d", second.Restarts)
 	}
 
-	// The control socket restarts without waiting for a crash.
-	if err := restart(root); err != nil {
+	if err := restart(root, hostPathsFor(root)); err != nil {
 		t.Fatal(err)
 	}
 	waitState(t, paths.state, 10*time.Second, func(s hostState) bool {
@@ -218,8 +227,6 @@ func TestCrashLoopRollsBack(t *testing.T) {
 	addr := freeAddr(t)
 	paths := newHostPaths(root)
 
-	// Two builds of a program named "transport"; the old one is healthy and
-	// the new one dies at once.
 	for _, build := range []struct{ id, body string }{
 		{"a", fmt.Sprintf("#!/bin/sh\nexec %q -test.run=TestServeChildHelper\n", testBinary(t))},
 		{"b", fmt.Sprintf("#!/bin/sh\nBOTI_CHILD_FAIL=1 exec %q -test.run=TestServeChildHelper\n", testBinary(t))},
@@ -410,7 +417,7 @@ func TestServePassesVaultKey(t *testing.T) {
 	if _, err := controlDo(paths.sock, "PUT", "/vault-key", body); err != nil {
 		t.Fatal(err)
 	}
-	if err := restart(root); err != nil {
+	if err := restart(root, hostPathsFor(root)); err != nil {
 		t.Fatal(err)
 	}
 	waitState(t, paths.state, 10*time.Second, func(s hostState) bool {
@@ -424,7 +431,7 @@ func TestServePassesVaultKey(t *testing.T) {
 	if err := os.Remove(record); err != nil {
 		t.Fatal(err)
 	}
-	if err := restart(root); err != nil {
+	if err := restart(root, hostPathsFor(root)); err != nil {
 		t.Fatal(err)
 	}
 	waitFile(t, record, 5*time.Second, func(s string) bool { return s == "none" })

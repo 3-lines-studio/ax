@@ -1,0 +1,15 @@
+{
+  "model": "deepseek-flash",
+  "kinds": [
+    "protocol",
+    "tool_start",
+    "result",
+    "done"
+  ],
+  "tools": [
+    "execute"
+  ],
+  "outcome": "done",
+  "created_file": true,
+  "exit": 0
+}

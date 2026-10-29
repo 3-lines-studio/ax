@@ -1,9 +1,3 @@
-// Package filetext is the text side of the filesystem tools: how a file is
-// shown to the model and how an exact-match edit is applied.
-//
-// fsx runs it against a local workspace and sshx against a remote one. Keeping
-// it here means a bot can switch compute backends without the read/edit
-// behaviour changing under the model.
 package filetext
 
 import (
@@ -13,17 +7,13 @@ import (
 	"strings"
 )
 
-// MaxOutput is how much text one read may return before it pages.
 const MaxOutput = 16 * 1024
 
-// Edit is one exact replacement.
 type Edit struct {
 	OldText string
 	NewText string
 }
 
-// Read renders a file for the model: UTF-8, LF line endings, control characters
-// removed, truncated to MaxOutput with a hint about how to continue.
 func Read(content []byte, offset, limit *int) (string, error) {
 	text := strings.ToValidUTF8(string(content), "�")
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
@@ -79,9 +69,6 @@ func Read(content []byte, offset, limit *int) (string, error) {
 	return fmt.Sprintf("%s\n\n[Showing lines %d-%d of %d (%d byte limit). Use offset=%d to continue.]", strings.Join(shown, "\n"), start+1, last, len(lines), MaxOutput, last+1), nil
 }
 
-// Apply replaces every edit in content. Each oldText must match exactly one
-// region and the regions must not overlap; anything else is an error, so an
-// ambiguous edit never silently changes the wrong place.
 func Apply(content []byte, path string, edits []Edit) ([]byte, string, error) {
 	if len(edits) == 0 {
 		return nil, "", errors.New("edits must not be empty")
@@ -163,8 +150,6 @@ func normalizeWithOffsets(content string) (string, []int) {
 	return string(output), offsets
 }
 
-// Sanitize drops control characters the model cannot use, keeping tabs and
-// newlines.
 func Sanitize(value string) string {
 	return strings.Map(func(character rune) rune {
 		if character == '\t' || character == '\n' || character == '\r' {

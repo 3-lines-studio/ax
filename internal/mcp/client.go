@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// Version is reported to servers as the client version.
 const Version = "1.0.0"
 
 const defaultTimeout = 30 * time.Second
@@ -24,7 +23,6 @@ type transport interface {
 	SetSessionID(id string)
 }
 
-// Client is one connected MCP server.
 type Client struct {
 	cfg     ServerConfig
 	session transport
@@ -38,7 +36,6 @@ type Client struct {
 	closed   bool
 }
 
-// New validates a server configuration. Call Connect to start it.
 func New(cfg ServerConfig) (*Client, error) {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return nil, errors.New("mcp: server name is required")
@@ -61,7 +58,6 @@ func New(cfg ServerConfig) (*Client, error) {
 	return &Client{cfg: cfg}, nil
 }
 
-// Connect starts the server and negotiates a protocol version.
 func (c *Client) Connect(ctx context.Context) error {
 	if c.session != nil {
 		return nil
@@ -87,7 +83,6 @@ func (c *Client) Connect(ctx context.Context) error {
 	return nil
 }
 
-// Close terminates the server process or connection.
 func (c *Client) Close() error {
 	c.mu.Lock()
 	if c.closed {
@@ -103,16 +98,12 @@ func (c *Client) Close() error {
 	return s.Close()
 }
 
-// Protocol returns the negotiated protocol version.
 func (c *Client) Protocol() string { return c.protocol }
 
-// Info returns the server identity.
 func (c *Client) Info() ServerInfo { return c.info }
 
-// Instructions returns the server's usage instructions, if any.
 func (c *Client) Instructions() string { return c.prompt }
 
-// TTL returns the server's suggested catalog freshness hint.
 func (c *Client) TTL() time.Duration { return c.ttl }
 
 type discoverResult struct {
@@ -151,15 +142,11 @@ func (c *Client) negotiate(ctx context.Context) error {
 		return nil
 	}
 
-	// A missing login is not something initialize will fix: report it as is.
 	var authErr *AuthRequiredError
 	if errors.As(discoverErr, &authErr) {
 		return discoverErr
 	}
 
-	// Older servers do not know server/discover. Fall back to the initialize
-	// handshake; the error from discover is only reported if initialize also
-	// fails.
 	raw, initErr := c.call(ctx, "initialize", map[string]any{
 		"protocolVersion": LegacyProtocol,
 		"capabilities":    map[string]any{},
@@ -230,9 +217,6 @@ func (c *Client) meta(protocol string) map[string]any {
 	}
 }
 
-// call sends one JSON-RPC request and returns its result. Requests are
-// serialized per server; MCP servers are small and the engine's catalog work
-// is not latency-sensitive at that granularity.
 func (c *Client) call(ctx context.Context, method string, params map[string]any, forceMeta bool) (json.RawMessage, error) {
 	c.mu.Lock()
 	id := c.nextID
@@ -307,7 +291,6 @@ func (c *Client) notify(ctx context.Context, method string, params map[string]an
 	return session.Notify(callCtx, data)
 }
 
-// ListTools reads every page of tools/list.
 func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 	var tools []Tool
 	cursor := ""
@@ -348,8 +331,6 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 	return tools, nil
 }
 
-// CallTool runs one tool. A tool-level failure is a Result with IsError set,
-// not a Go error: the model needs to see the output to recover.
 func (c *Client) CallTool(ctx context.Context, name string, arguments json.RawMessage) (Result, error) {
 	var args any = map[string]any{}
 	if len(arguments) > 0 && string(arguments) != "null" {

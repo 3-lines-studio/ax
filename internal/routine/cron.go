@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// Schedule is a five-field cron expression. It supports *, lists, ranges,
-// ranges with a step, and the common @hourly/@daily aliases. Names (JAN, MON)
-// are not supported; the manifest uses numbers.
 type Schedule struct {
 	spec    string
 	minute  field
@@ -24,8 +21,6 @@ type field struct {
 	star bool
 }
 
-// ParseSchedule parses a cron expression in local time. The timezone is a
-// property of the routine, not of the expression.
 func ParseSchedule(spec string) (Schedule, error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
@@ -69,7 +64,6 @@ var cronAliases = map[string]string{
 	"@annually": "0 0 1 1 *",
 }
 
-// Match reports whether t falls on this schedule, to minute precision.
 func (s Schedule) Match(t time.Time) bool {
 	if !s.minute.set[t.Minute()] || !s.hour.set[t.Hour()] || !s.month.set[int(t.Month())] {
 		return false
@@ -84,7 +78,6 @@ func (s Schedule) Match(t time.Time) bool {
 	case s.weekday.star:
 		return day
 	default:
-		// Vixie cron: when both are restricted, either may match.
 		return day || weekday
 	}
 }
@@ -114,7 +107,6 @@ func parseField(text string, min, max int) (field, error) {
 		lo, hi := min, max
 		switch {
 		case base == "*":
-			// full range
 		case strings.Contains(base, "-"):
 			left, right, ok := strings.Cut(base, "-")
 			if !ok {
@@ -134,7 +126,6 @@ func parseField(text string, min, max int) (field, error) {
 			}
 			lo, hi = n, n
 			if hasStep {
-				// Cron's "5/10" means 5,15,25,... through the field maximum.
 				hi = max
 			}
 		}

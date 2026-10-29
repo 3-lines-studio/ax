@@ -10,8 +10,6 @@ import (
 	"github.com/3-lines-studio/ax/internal/axproto"
 )
 
-// runCompactCommand summarizes a session on demand: the "Compact context"
-// button of a UI, without waiting for the automatic threshold.
 func runCompactCommand(cfg cliConfig, fc fileConfig, bot *botCtx, args []string) {
 	path := cfg.session
 	dryRun := false
@@ -62,8 +60,6 @@ func runCompactCommand(cfg cliConfig, fc fileConfig, bot *botCtx, args []string)
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
-	// Summarize everything except the trailing user turn, like the automatic
-	// path: the next run still has a request to answer.
 	upto := len(state.Messages)
 	if index := lastUserIndex(state.Messages); index > 0 {
 		upto = index

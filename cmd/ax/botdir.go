@@ -21,7 +21,6 @@ type botConfig struct {
 	ContextWindow   *int              `toml:"context_window"`
 }
 
-// botCtx is what the engine needs from the Botdir conventions.
 type botCtx = botdir.Paths
 
 func loadBotConfig(root string) (botConfig, error) {

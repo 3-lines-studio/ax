@@ -1,8 +1,3 @@
-// Package memory stores small personal facts under the bot's runtime state.
-//
-// The store is deliberately file-based: one JSON file per memory under
-// state/memory/. It is readable and exportable with ordinary tools, and the
-// memoryx provider exposes it to ax through the tool catalog.
 package memory
 
 import (
@@ -19,11 +14,8 @@ import (
 	"unicode"
 )
 
-// ErrNotFound is returned when a memory id does not exist or was deleted.
 var ErrNotFound = errors.New("memory not found")
 
-// Memory is one durable personal fact. Subject and Summary are the searchable
-// surface; Body holds details. SourceURIs point back to the original material.
 type Memory struct {
 	ID         string     `json:"id"`
 	Subject    string     `json:"subject"`
@@ -37,18 +29,14 @@ type Memory struct {
 	DeletedAt  *time.Time `json:"deleted_at,omitempty"`
 }
 
-// Store is a directory of memory JSON files.
 type Store struct {
 	Root string
 }
 
-// New returns a store rooted at dir. The directory is created on the first
-// write, so reads from a missing store simply return nothing.
 func New(dir string) *Store {
 	return &Store{Root: dir}
 }
 
-// List returns active memories, newest first. limit <= 0 means no limit.
 func (s *Store) List(limit int) ([]Memory, error) {
 	all, err := s.readAll()
 	if err != nil {
@@ -69,8 +57,6 @@ func (s *Store) List(limit int) ([]Memory, error) {
 	return trim(items, limit), nil
 }
 
-// Search ranks active memories by a simple lexical score. An empty query
-// returns the newest memories. limit <= 0 uses 5, capped at 20.
 func (s *Store) Search(query string, limit int) ([]Memory, error) {
 	if limit <= 0 {
 		limit = 5
@@ -109,7 +95,6 @@ func (s *Store) Search(query string, limit int) ([]Memory, error) {
 	return trim(items, limit), nil
 }
 
-// Get returns an active memory by id.
 func (s *Store) Get(id string) (Memory, error) {
 	item, err := s.get(id)
 	if err != nil {
@@ -121,9 +106,6 @@ func (s *Store) Get(id string) (Memory, error) {
 	return item, nil
 }
 
-// Upsert creates a memory, updates one with the same dedupe key, or updates
-// the memory named by in.ID. It returns the stored value and whether it was
-// newly created. A deleted memory with the same dedupe key is restored.
 func (s *Store) Upsert(in Memory) (Memory, bool, error) {
 	if err := normalize(&in); err != nil {
 		return Memory{}, false, err
@@ -173,8 +155,6 @@ func (s *Store) Upsert(in Memory) (Memory, bool, error) {
 	return in, created, nil
 }
 
-// Delete soft-deletes a memory. force removes the file. A missing memory is
-// ErrNotFound.
 func (s *Store) Delete(id string, force bool) error {
 	item, err := s.get(id)
 	if err != nil {
@@ -356,7 +336,7 @@ func (s *Store) write(item Memory) error {
 	if err := os.MkdirAll(s.Root, 0o700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(item, "", "  ")
+	data, err := json.MarshalIndent(item, "", " ")
 	if err != nil {
 		return err
 	}

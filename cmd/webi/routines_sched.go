@@ -10,9 +10,6 @@ import (
 	"github.com/3-lines-studio/ax/internal/routine"
 )
 
-// routineScheduler runs routines per channel. Definitions come from the host
-// bot.toml (or a channel's own bot.toml/routines), while every channel keeps
-// its own scheduler, run history and per-minute dedupe state.
 type routineScheduler struct {
 	store    *Store
 	hostRoot string

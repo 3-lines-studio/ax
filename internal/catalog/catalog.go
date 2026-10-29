@@ -8,7 +8,6 @@ import (
 	"sync"
 )
 
-// Catalog is the loaded index of all configured sources.
 type Catalog struct {
 	sources  []Source
 	tools    []Tool
@@ -21,7 +20,6 @@ type Catalog struct {
 	mu       sync.Mutex
 }
 
-// New builds an empty catalog. Load must be called before Search or Call.
 func New(sources []Source) *Catalog {
 	return &Catalog{
 		sources:  sources,
@@ -33,9 +31,6 @@ func New(sources []Source) *Catalog {
 	}
 }
 
-// Load lists every source concurrently. A source that fails is recorded in
-// the menu instead of failing the whole catalog: one broken MCP server must
-// not take down every other integration.
 func (c *Catalog) Load(ctx context.Context) {
 	c.mu.Lock()
 	if c.loaded {
@@ -103,7 +98,6 @@ func (c *Catalog) Load(ctx context.Context) {
 		}
 	}
 	sort.SliceStable(c.tools, func(i, j int) bool { return c.tools[i].ID < c.tools[j].ID })
-	// Rebuild the lookups after sorting.
 	c.byID = map[string]int{}
 	c.byName = map[string][]int{}
 	c.byServer = map[string][]int{}
@@ -114,7 +108,6 @@ func (c *Catalog) Load(ctx context.Context) {
 	}
 }
 
-// Close closes every source, returning the first error.
 func (c *Catalog) Close() error {
 	var first error
 	for _, source := range c.sources {
@@ -125,14 +118,12 @@ func (c *Catalog) Close() error {
 	return first
 }
 
-// Tools returns the loaded tools in stable order.
 func (c *Catalog) Tools() []Tool {
 	out := make([]Tool, len(c.tools))
 	copy(out, c.tools)
 	return out
 }
 
-// Servers returns one summary per configured source, in configuration order.
 func (c *Catalog) Servers() []ServerSummary {
 	out := make([]ServerSummary, 0, len(c.sources))
 	for _, source := range c.sources {
@@ -147,7 +138,6 @@ func (c *Catalog) Servers() []ServerSummary {
 	return out
 }
 
-// ServerSummary is the menu view of one source.
 type ServerSummary struct {
 	Name         string `json:"name"`
 	Description  string `json:"description,omitempty"`
@@ -156,13 +146,10 @@ type ServerSummary struct {
 	AuthRequired bool   `json:"auth_required,omitempty"`
 }
 
-// AuthStatus is an optional Source interface: a source whose last failure was
-// a missing login reports it so the menu can name the exact command.
 type AuthStatus interface {
 	RequiresAuth() bool
 }
 
-// Lookup finds a tool by exact id, or by a unique bare tool name.
 func (c *Catalog) Lookup(id string) (Tool, bool) {
 	id = strings.TrimSpace(id)
 	if index, ok := c.byID[id]; ok {
@@ -174,7 +161,6 @@ func (c *Catalog) Lookup(id string) (Tool, bool) {
 	return Tool{}, false
 }
 
-// Resolve is Lookup with suggestions when the id is unknown.
 func (c *Catalog) Resolve(id string) (Tool, error) {
 	if tool, ok := c.Lookup(id); ok {
 		return tool, nil
@@ -186,7 +172,6 @@ func (c *Catalog) Resolve(id string) (Tool, error) {
 	return Tool{}, fmt.Errorf("unknown tool %q; did you mean %s?", id, quoteList(suggestions))
 }
 
-// Call runs one tool by id.
 func (c *Catalog) Call(ctx context.Context, id string, args []byte) (Result, error) {
 	tool, err := c.Resolve(id)
 	if err != nil {
@@ -200,7 +185,6 @@ func (c *Catalog) Call(ctx context.Context, id string, args []byte) (Result, err
 	return Result{}, fmt.Errorf("tool %q belongs to unavailable server %q", id, tool.Server)
 }
 
-// Suggest returns the closest tool ids for a misspelled or partial name.
 func (c *Catalog) Suggest(query string, limit int) []string {
 	if limit <= 0 {
 		limit = 5
@@ -252,7 +236,6 @@ func (c *Catalog) Suggest(query string, limit int) []string {
 	return out
 }
 
-// SourceDescription returns the configured description for a server.
 func (c *Catalog) SourceDescription(name string) string {
 	for _, source := range c.sources {
 		if source.Name() == name {

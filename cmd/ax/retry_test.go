@@ -268,15 +268,12 @@ func TestRunStreamCancelImmediately(t *testing.T) {
 	}
 }
 
-// A message typed while a tool runs lands in the conversation before the next
-// model call, and the sink records it for the session log.
 func TestRunStreamAcceptsSteeringBetweenTurns(t *testing.T) {
 	steer := make(chan string, 1)
 	var requests []*Request
 	tool := Tool{
 		Name: "bash", Description: "d", Parameters: json.RawMessage(`{}`),
 		Run: func(arguments string, progress func(string)) string {
-			// The user types while the tool is running.
 			steer <- "actually, do it differently"
 			return "tool-output"
 		},
@@ -314,8 +311,6 @@ func TestRunStreamAcceptsSteeringBetweenTurns(t *testing.T) {
 	}
 }
 
-// Steering that arrives with nothing running is dropped, not queued into the
-// next turn of an unrelated run.
 func TestDrainSteeringIgnoresEmptyAndClosed(t *testing.T) {
 	sink := &recordingSink{}
 	closed := make(chan string)

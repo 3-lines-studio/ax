@@ -24,8 +24,6 @@ func runCommand(t *testing.T, dir, name string, args ...string) {
 	}
 }
 
-// fakeRepo is a checkout package.sh can "build" without a compiler: one
-// executable per program, and an ax that passes its selftest.
 func fakeRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
@@ -127,7 +125,7 @@ func TestPromoteBuildsAndActivates(t *testing.T) {
 	defer stopServe(t, cancel, done)
 	waitState(t, paths.state, 10*time.Second, func(s hostState) bool { return s.Child.Healthy })
 
-	if err := promote(root, promoteOptions{}); err != nil {
+	if err := promote(root, hostPathsFor(root), promoteOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,7 +168,7 @@ func TestPromoteDirtyCheckout(t *testing.T) {
 	defer stopServe(t, cancel, done)
 	waitState(t, paths.state, 10*time.Second, func(s hostState) bool { return s.Child.Healthy })
 
-	if err := promote(root, promoteOptions{}); err != nil {
+	if err := promote(root, hostPathsFor(root), promoteOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	rev := strings.TrimSpace(mustRun(t, repo, "git", "rev-parse", "--short=7", "HEAD"))
@@ -190,7 +188,7 @@ func TestPromoteNeedsServe(t *testing.T) {
 	t.Setenv("BOT_DATA", data)
 	repo := fakeRepo(t)
 	writePromoteBot(t, root, freeAddr(t), repo)
-	err := promote(root, promoteOptions{})
+	err := promote(root, hostPathsFor(root), promoteOptions{})
 	if err == nil || !strings.Contains(err.Error(), "not running") {
 		t.Fatalf("err = %v", err)
 	}
@@ -244,7 +242,7 @@ func TestActivateAndRollback(t *testing.T) {
 		t.Fatalf("previous = %q", second.Previous)
 	}
 
-	if err := rollback(root); err != nil {
+	if err := rollback(root, hostPathsFor(root)); err != nil {
 		t.Fatal(err)
 	}
 	third := waitState(t, paths.state, 10*time.Second, func(s hostState) bool {
@@ -267,7 +265,6 @@ func TestActivateWaitsForIdle(t *testing.T) {
 
 	addr := freeAddr(t)
 	writeServeBot(t, root, addr)
-	// Add the idle URL to the bot after writeServeBot wrote the table.
 	path := filepath.Join(root, "bot.toml")
 	content, err := os.ReadFile(path)
 	if err != nil {

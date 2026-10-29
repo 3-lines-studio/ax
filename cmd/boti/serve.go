@@ -23,21 +23,17 @@ import (
 	"github.com/3-lines-studio/ax/internal/botdir"
 )
 
-// serveConfig is bot.toml's [boti.serve] table: what the host runs and how it
-// knows the process is useful.
 type serveConfig struct {
 	Command  []string `toml:"command"`
 	Health   string   `toml:"health"`
 	Idle     string   `toml:"idle"`
 	Selftest []string `toml:"selftest"`
 	Repo     string   `toml:"repo"`
+	Data     string   `toml:"data"`
 }
 
 const defaultServeListen = "127.0.0.1:8377"
 
-// serveSettings applies the defaults for a browser bot: webi on loopback and
-// its /healthz. A custom command with no health URL is supervised by process
-// liveness only, which is what a transport without a port needs.
 func (bc botConfig) serveSettings() serveConfig {
 	cfg := bc.Boti.Serve
 	if len(cfg.Command) == 0 {
@@ -49,7 +45,6 @@ func (bc botConfig) serveSettings() serveConfig {
 	return cfg
 }
 
-// hostPaths is everything boti serve owns inside the bot's data directory.
 type hostPaths struct {
 	root   string
 	data   string
@@ -61,7 +56,10 @@ type hostPaths struct {
 }
 
 func newHostPaths(root string) hostPaths {
-	data := botdir.DataRoot(root)
+	return newHostPathsAt(root, botdir.DataRoot(root))
+}
+
+func newHostPathsAt(root, data string) hostPaths {
 	dir := filepath.Join(data, "state", "host")
 	return hostPaths{
 		root:   root,
@@ -74,8 +72,6 @@ func newHostPaths(root string) hostPaths {
 	}
 }
 
-// hostState is what `boti status` reads and the control socket serves. It holds
-// no secrets: a build id, pids, timestamps and the last error.
 type hostState struct {
 	PID       int        `json:"pid"`
 	Build     string     `json:"build"`
@@ -93,8 +89,6 @@ type childState struct {
 	Healthy bool      `json:"healthy"`
 }
 
-// host is one supervised transport. It owns the child process, the state file
-// and the control socket; it never builds anything (that is `boti promote`).
 type host struct {
 	paths hostPaths
 	cfg   serveConfig
@@ -110,7 +104,7 @@ type host struct {
 	restart  chan struct{}
 	recent   []time.Time
 	failed   map[string]bool
-	pending  int // epoch of the armed activation
+	pending  int
 	done     chan struct{}
 
 	startTimeout time.Duration
@@ -150,7 +144,6 @@ func newHost(root string, bc botConfig) (*host, error) {
 	if data, err := os.ReadFile(paths.state); err == nil {
 		_ = json.Unmarshal(data, &h.state)
 	}
-	// An armed activation does not survive the supervisor it was armed on.
 	h.state.Pending = ""
 	h.state.PID = os.Getpid()
 	h.state.Started = time.Now().UTC()
@@ -167,7 +160,7 @@ func (h *host) close() {
 
 func (h *host) save() {
 	h.mu.Lock()
-	data, err := json.MarshalIndent(h.state, "", "  ")
+	data, err := json.MarshalIndent(h.state, "", " ")
 	h.mu.Unlock()
 	if err != nil {
 		slog.Error("boti: marshal state", "err", err)
@@ -178,9 +171,6 @@ func (h *host) save() {
 	}
 }
 
-// build resolves the symlink a promotion switches. Without one the host runs
-// whatever is on PATH and reports "dev", which is what an unmanaged checkout
-// should say.
 func (h *host) build() (string, string, error) {
 	link := filepath.Join(h.paths.builds, "current")
 	target, err := os.Readlink(link)
@@ -195,7 +185,6 @@ func (h *host) build() (string, string, error) {
 	return id, bin, nil
 }
 
-// switchBuild points `current` at a build, atomically.
 func (h *host) switchBuild(id string) error {
 	if id == "" || strings.ContainsAny(id, "/\\") || id == "." || id == ".." {
 		return fmt.Errorf("invalid build id %q", id)
@@ -211,8 +200,6 @@ func (h *host) switchBuild(id string) error {
 	return nil
 }
 
-// signalRestart asks the loop to stop the child and start again. It never
-// blocks: a request while one is already queued is the same request.
 func (h *host) signalRestart() {
 	select {
 	case h.restart <- struct{}{}:
@@ -228,8 +215,6 @@ func (h *host) hasBuild(id string) bool {
 	return err == nil && info.IsDir()
 }
 
-// switchTo points the host at a build. The running child keeps the PATH it
-// started with; the next start uses the new one.
 func (h *host) switchTo(id string) error {
 	h.switchMu.Lock()
 	defer h.switchMu.Unlock()
@@ -262,8 +247,6 @@ func (h *host) switchTo(id string) error {
 	return nil
 }
 
-// arm waits for the bot to be idle before switching: a promotion that runs
-// inside a conversation must not interrupt the conversation that asked for it.
 func (h *host) arm(id string) {
 	h.mu.Lock()
 	h.pending++
@@ -305,8 +288,6 @@ func (h *host) waitIdle(epoch int, id string) {
 	h.signalRestart()
 }
 
-// idle reads the transport's own state; webi reports how many threads have a
-// live ax process, and zero is what a switch can safely interrupt.
 func (h *host) idle() bool {
 	resp, err := (&http.Client{Timeout: 2 * time.Second}).Get(h.cfg.Idle)
 	if err != nil {
@@ -354,9 +335,6 @@ func (h *host) spawn(id, bin string) (*childProc, error) {
 		}
 		env = setEnv(env, "PATH", path)
 	}
-	// exec.Command resolves a bare name with the *parent's* PATH, so resolve
-	// it against the build's PATH ourselves; the whole point of a build is
-	// that its bin directory wins.
 	name := command[0]
 	if !strings.ContainsRune(name, os.PathSeparator) {
 		resolved, err := lookPath(name, envValue(env, "PATH"))
@@ -372,8 +350,6 @@ func (h *host) spawn(id, bin string) (*childProc, error) {
 	cmd.Stderr = h.log
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	// The vault key is handed over on fd 3, never on the command line or the
-	// environment: a child reads it once and closes it.
 	var keyW *os.File
 	key := h.copyVaultKey()
 	if len(key) == 32 {
@@ -417,9 +393,6 @@ func (h *host) spawn(id, bin string) (*childProc, error) {
 	return proc, nil
 }
 
-// awaitHealthy polls the health URL until it answers, the child dies or the
-// start window closes. With no health URL the child is healthy once it is
-// running.
 func (h *host) awaitHealthy(ctx context.Context, proc *childProc) bool {
 	if h.cfg.Health == "" {
 		h.markHealthy()
@@ -468,8 +441,6 @@ func (h *host) clearChild() {
 	h.save()
 }
 
-// stop asks the child to exit and waits. The child may have its own runs in
-// flight; webi resumes them from the session log on the next start.
 func (h *host) stop(proc *childProc) {
 	select {
 	case <-proc.done:
@@ -487,9 +458,6 @@ func (h *host) stop(proc *childProc) {
 	h.clearChild()
 }
 
-// crashed records an exit and decides whether the host should fall back to the
-// previous build. A child that has never been healthy counts too: a build that
-// cannot start is exactly what a rollback is for.
 func (h *host) crashed(err error, reason string) {
 	if err != nil {
 		reason = fmt.Sprintf("%s: %v", reason, err)
@@ -541,7 +509,6 @@ func (h *host) sleep(ctx context.Context, wait time.Duration) bool {
 	}
 }
 
-// loop is the supervisor: start, verify, wait, repeat.
 func (h *host) loop(ctx context.Context) error {
 	defer close(h.done)
 	if err := h.control(ctx); err != nil {
@@ -602,9 +569,6 @@ func (h *host) loop(ctx context.Context) error {
 	}
 }
 
-// control serves status and restart over a unix socket in the bot's state
-// directory. A process running as this user can already signal the host; the
-// socket is there to make that a request instead of a guess.
 func (h *host) control(ctx context.Context) error {
 	_ = os.Remove(h.paths.sock)
 	listener, err := net.Listen("unix", h.paths.sock)
@@ -707,8 +671,6 @@ func writeJSON(w http.ResponseWriter, code int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-// hostEnv is the environment every host-started process gets: the bot itself,
-// its data root and the variables in [env].
 func hostEnv(paths hostPaths, bc botConfig) []string {
 	env := os.Environ()
 	env = setEnv(env, "BOT_ROOT", paths.root)
@@ -719,8 +681,6 @@ func hostEnv(paths hostPaths, bc botConfig) []string {
 	return env
 }
 
-// copyVaultKey returns the key the supervisor keeps across child restarts, or
-// nil when the vault is locked or was never unlocked in this process.
 func (h *host) copyVaultKey() []byte {
 	h.vaultMu.Lock()
 	defer h.vaultMu.Unlock()
@@ -801,7 +761,6 @@ func controlClient(sock string) *http.Client {
 	}
 }
 
-// runServe is the `boti serve` entry point.
 func runServe(ctx context.Context, root string) error {
 	bc, found, err := readBotConfig(root)
 	if err != nil {
@@ -810,7 +769,7 @@ func runServe(ctx context.Context, root string) error {
 	if !found {
 		fmt.Fprintf(os.Stderr, "boti: no bot.toml in %s; serving the default webi\n", root)
 	}
-	paths := newHostPaths(root)
+	paths := hostPathsFor(root)
 	if err := os.MkdirAll(paths.dir, 0o755); err != nil {
 		return err
 	}
@@ -830,8 +789,6 @@ func runServe(ctx context.Context, root string) error {
 	return h.loop(ctx)
 }
 
-// runHooks runs the bot's pre_run commands in order. `boti run` runs them once
-// before exec; `boti serve` runs them once before the first start.
 func runHooks(bc botConfig, env []string, stdout, stderr io.Writer) error {
 	for _, hook := range bc.PreRun {
 		if hook.Command == "" {
@@ -857,10 +814,7 @@ func openHostLog(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 }
 
-// --- commands --------------------------------------------------------------
-
-func status(root string, asJSON bool) error {
-	paths := newHostPaths(root)
+func status(root string, paths hostPaths, asJSON bool) error {
 	data, err := os.ReadFile(paths.state)
 	if err != nil {
 		return fmt.Errorf("no supervisor state in %s (is `boti serve` running?)", paths.dir)
@@ -916,8 +870,7 @@ func statusText(state hostState, alive bool) string {
 	return out.String()
 }
 
-func logs(root string, lines int) error {
-	paths := newHostPaths(root)
+func logs(root string, paths hostPaths, lines int) error {
 	text, err := tailFile(paths.log, lines)
 	if err != nil {
 		return fmt.Errorf("no log in %s (is `boti serve` running?)", paths.dir)
@@ -926,7 +879,6 @@ func logs(root string, lines int) error {
 	return nil
 }
 
-// tailFile returns the last lines of a file, newline terminated.
 func tailFile(path string, lines int) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -939,8 +891,7 @@ func tailFile(path string, lines int) (string, error) {
 	return strings.Join(all, "\n") + "\n", nil
 }
 
-func restart(root string) error {
-	paths := newHostPaths(root)
+func restart(root string, paths hostPaths) error {
 	resp, err := controlClient(paths.sock).Post("http://unix/restart", "application/json", nil)
 	if err != nil {
 		return fmt.Errorf("restart: %w", err)
@@ -953,8 +904,6 @@ func restart(root string) error {
 	return nil
 }
 
-// lookPath finds an executable in an explicit PATH, so the supervisor can
-// resolve a build's binary without touching the process environment.
 func lookPath(name, pathEnv string) (string, error) {
 	if strings.ContainsRune(name, os.PathSeparator) {
 		return name, nil
@@ -970,8 +919,6 @@ func lookPath(name, pathEnv string) (string, error) {
 	return "", fmt.Errorf("%s: %w", name, exec.ErrNotFound)
 }
 
-// lockFile keeps two processes from owning the same thing at once: a second
-// supervisor for a bot, or two promotions writing the same builds directory.
 func lockFile(path, busy string) (*os.File, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -991,7 +938,6 @@ func processAlive(pid int) bool {
 	return syscall.Kill(pid, 0) == nil
 }
 
-// writeFileAtomic replaces a file without ever leaving half of it on disk.
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(path)
 	temporary, err := os.CreateTemp(dir, ".boti-state-*")

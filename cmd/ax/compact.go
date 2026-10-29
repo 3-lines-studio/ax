@@ -11,27 +11,16 @@ import (
 	"github.com/3-lines-studio/ax/internal/axproto"
 )
 
-// Context compaction follows pixi's Auto-compact: when the projected prompt
-// crosses a fraction of the context window, the older half of the
-// conversation is summarized into the system prompt and the session log
-// records the cutoff. The log stays append-only; the summary is one more
-// entry.
 const (
-	// compactSummaryTokens bounds the summarizer's own output.
-	compactSummaryTokens = 8000
-	// compactTranscriptMax caps what the summarizer reads.
-	compactTranscriptMax  = 700_000
-	compactTranscriptHead = 150_000
-	// compactToolResultChars keeps tool output out of the transcript budget.
+	compactSummaryTokens   = 8000
+	compactTranscriptMax   = 700_000
+	compactTranscriptHead  = 150_000
 	compactToolResultChars = 2000
 
-	// Defaults copied from pixi: compact at half a one-million-token window.
 	defaultCompactAt     = 0.5
 	defaultContextWindow = 1_000_000
 )
 
-// continueNote gives the model a user turn to act on after a mid-run
-// compaction swallowed the current one.
 const continueNote = "Continue the task. The earlier conversation was compacted into the summary in the system prompt; that summary is accurate. Do not repeat work that is already done."
 
 const compactSystemPrompt = `You compress conversations between a user and an AI coding assistant into a faithful working summary. The summary replaces the original transcript in the assistant's context, so it must preserve everything needed to continue the work without re-reading the conversation.`
@@ -49,7 +38,6 @@ CONVERSATION:
 ` + transcript
 }
 
-// summarySection is appended to the system prompt after a compaction.
 func summarySection(summary string) string {
 	summary = strings.TrimSpace(summary)
 	if summary == "" {
@@ -60,8 +48,6 @@ func summarySection(summary string) string {
 		summary + "\n"
 }
 
-// compactThreshold is the prompt size, in tokens, that triggers compaction.
-// A zero or negative setting disables it.
 func compactThreshold(compactAt float64, contextWindow int) int {
 	if compactAt <= 0 || contextWindow <= 0 {
 		return 0
@@ -69,8 +55,6 @@ func compactThreshold(compactAt float64, contextWindow int) int {
 	return int(float64(contextWindow) * compactAt)
 }
 
-// estimateTokens approximates a prompt. There is no tokenizer in the binary;
-// chars/3 errs high for prose, which is the direction that compacts early.
 func estimateTokens(system string, msgs []Message) int {
 	chars := len(system)
 	images := 0
@@ -90,9 +74,6 @@ func estimateTokens(system string, msgs []Message) int {
 	return chars/3 + images*1024
 }
 
-// renderTranscript turns the history into the summarizer's input. Tool output
-// is compressed to findings; the current summary is prepended so a second
-// compaction keeps what the first one learned.
 func renderTranscript(summary string, msgs []Message) string {
 	var out strings.Builder
 	if summary = strings.TrimSpace(summary); summary != "" {
@@ -138,9 +119,6 @@ func truncateText(value string, limit int) string {
 	return string(runes[:limit]) + "…"
 }
 
-// summarizeTranscript asks the provider for a working summary. The caller
-// supplies a provider configured with thinking off and a small output budget:
-// a summary is prose, not a plan.
 func summarizeTranscript(ctx context.Context, provider Provider, model string, summary string, history []Message, cancel *atomic.Bool) (string, error) {
 	transcript := renderTranscript(summary, history)
 	if len(transcript) > compactTranscriptMax {
@@ -175,22 +153,17 @@ func summarizeTranscript(ctx context.Context, provider Provider, model string, s
 	return out, nil
 }
 
-// compactor records compactions in the session log and rebuilds the prompt.
 type compactor struct {
 	provider Provider
 	model    string
-	base     string // system prompt without the summary section
-	summary  string // summary currently in the prompt
+	base     string
+	summary  string
 	log      *sessionLog
 	runID    string
 	cancel   *atomic.Bool
 	emit     func(any)
 }
 
-// compact summarizes the projected history and returns what the next request
-// should send. midRun keeps a user turn (the continue note) so the model has
-// something to act on; before the first turn the pending user message is kept
-// instead.
 func (c *compactor) compact(ctx context.Context, history []Message, midRun bool) ([]Message, string, error) {
 	ctx, stop := context.WithTimeout(ctx, 5*time.Minute)
 	defer stop()

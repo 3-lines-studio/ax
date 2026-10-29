@@ -22,11 +22,8 @@ import (
 	"time"
 )
 
-// ErrLoginRequired means the server needs OAuth and no usable token is stored.
 var ErrLoginRequired = errors.New("login required")
 
-// AuthRequiredError names the server that needs an interactive login, so the
-// catalog can show a precise hint instead of a generic failure.
 type AuthRequiredError struct {
 	Server string
 }
@@ -35,10 +32,8 @@ func (e *AuthRequiredError) Error() string {
 	return fmt.Sprintf("mcp: server %q: authentication required; run ax mcp login %s", e.Server, e.Server)
 }
 
-// Unwrap lets errors.Is(err, ErrLoginRequired) match.
 func (e *AuthRequiredError) Unwrap() error { return ErrLoginRequired }
 
-// OAuthConfig is the pre-registered client information for a server.
 type OAuthConfig struct {
 	ClientID     string
 	ClientSecret string
@@ -46,7 +41,6 @@ type OAuthConfig struct {
 	RedirectPort int
 }
 
-// StoredToken is the durable OAuth state for one server.
 type StoredToken struct {
 	AccessToken   string    `json:"access_token"`
 	RefreshToken  string    `json:"refresh_token,omitempty"`
@@ -65,7 +59,6 @@ func (t StoredToken) expired() bool {
 	return !t.Expiry.IsZero() && time.Now().Add(time.Minute).After(t.Expiry)
 }
 
-// LoadToken reads a token file. A missing file is ErrLoginRequired.
 func LoadToken(path string) (StoredToken, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -84,13 +77,12 @@ func LoadToken(path string) (StoredToken, error) {
 	return token, nil
 }
 
-// SaveToken writes a token file atomically with mode 0600.
 func SaveToken(path string, token StoredToken) error {
 	dir := dirOf(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create token dir %s: %w", dir, err)
 	}
-	data, err := json.MarshalIndent(token, "", "  ")
+	data, err := json.MarshalIndent(token, "", " ")
 	if err != nil {
 		return err
 	}
@@ -124,7 +116,6 @@ func SaveToken(path string, token StoredToken) error {
 	return nil
 }
 
-// DeleteToken removes a stored token.
 func DeleteToken(path string) error {
 	err := os.Remove(path)
 	if err != nil && !os.IsNotExist(err) {
@@ -140,7 +131,6 @@ func dirOf(path string) string {
 	return "."
 }
 
-// OAuthTokenSource loads and refreshes one server's token.
 type OAuthTokenSource struct {
 	Path     string
 	Resource string
@@ -148,7 +138,6 @@ type OAuthTokenSource struct {
 	mu       sync.Mutex
 }
 
-// NewOAuthTokenSource builds a token source for a stored OAuth session.
 func NewOAuthTokenSource(path, resource string, client *http.Client) *OAuthTokenSource {
 	if client == nil {
 		client = defaultHTTPClient()
@@ -156,7 +145,6 @@ func NewOAuthTokenSource(path, resource string, client *http.Client) *OAuthToken
 	return &OAuthTokenSource{Path: path, Resource: resource, Client: client}
 }
 
-// Token returns a usable access token, refreshing it when needed.
 func (s *OAuthTokenSource) Token(ctx context.Context, force bool) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -180,14 +168,12 @@ func (s *OAuthTokenSource) Token(ctx context.Context, force bool) (string, error
 	return refreshed.AccessToken, nil
 }
 
-// ResourceMetadata is the OAuth Protected Resource Metadata document.
 type ResourceMetadata struct {
 	Resource             string   `json:"resource"`
 	AuthorizationServers []string `json:"authorization_servers"`
 	ScopesSupported      []string `json:"scopes_supported"`
 }
 
-// AuthServerMetadata is the OAuth Authorization Server Metadata document.
 type AuthServerMetadata struct {
 	Issuer                                     string   `json:"issuer"`
 	AuthorizationEndpoint                      string   `json:"authorization_endpoint"`
@@ -206,7 +192,6 @@ type clientRegistration struct {
 	TokenEndpointAuthMethod string `json:"token_endpoint_auth_method"`
 }
 
-// LoginOptions drives the interactive authorization flow.
 type LoginOptions struct {
 	ServerName string
 	ServerURL  string
@@ -220,7 +205,6 @@ type LoginOptions struct {
 	OpenURL    func(string) error
 }
 
-// Login runs discovery, client registration, PKCE and the token exchange.
 func Login(ctx context.Context, opts LoginOptions) (StoredToken, error) {
 	if opts.Client == nil {
 		opts.Client = defaultHTTPClient()
@@ -346,9 +330,6 @@ type callbackResult struct {
 	err   error
 }
 
-// waitCallback serves the loopback redirect. It speaks just enough HTTP/1.1 to
-// read one request and answer it, which keeps the MCP package out of
-// net/http's server (and its HTTP/2 bundle).
 func waitCallback(ctx context.Context, timeout time.Duration, listener net.Listener) (callbackResult, error) {
 	results := make(chan callbackResult, 1)
 	go func() {
@@ -365,8 +346,6 @@ func waitCallback(ctx context.Context, timeout time.Duration, listener net.Liste
 	select {
 	case result := <-results:
 		if result.err == nil {
-			// Give the browser a moment to read the page before the listener
-			// closes under it.
 			time.Sleep(100 * time.Millisecond)
 		}
 		return result, nil
@@ -624,12 +603,10 @@ func postTokenOnce(ctx context.Context, client *http.Client, endpoint string, re
 	return token, nil
 }
 
-// defaultHTTPClient is the fallback for callers that do not share a client.
 func defaultHTTPClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
 }
 
-// DiscoverResource finds the protected resource metadata for a server.
 func DiscoverResource(ctx context.Context, serverURL string, client *http.Client) (ResourceMetadata, error) {
 	if client == nil {
 		client = defaultHTTPClient()
@@ -689,7 +666,6 @@ func probeResourceMetadata(ctx context.Context, serverURL string, client *http.C
 }
 
 func parseWWWAuthenticate(header string) map[string]string {
-	// Drop the auth scheme ("Bearer") so the first parameter is parsed alone.
 	if scheme, rest, ok := strings.Cut(strings.TrimSpace(header), " "); ok && !strings.Contains(scheme, "=") {
 		header = rest
 	}
@@ -735,7 +711,6 @@ func splitHeader(header string) []string {
 	return parts
 }
 
-// DiscoverAuthServer tries OAuth and OIDC metadata endpoints for the issuer.
 func DiscoverAuthServer(ctx context.Context, issuers []string, client *http.Client) (AuthServerMetadata, error) {
 	if client == nil {
 		client = defaultHTTPClient()

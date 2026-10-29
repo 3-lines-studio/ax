@@ -20,8 +20,6 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
-// unsetenv removes a variable for the test and restores it after, so a host
-// that exports BOT_DATA does not change what the bot sees.
 func unsetenv(t *testing.T, key string) {
 	t.Helper()
 	old, ok := os.LookupEnv(key)
@@ -422,8 +420,6 @@ for p in "$@"; do : > "$bindir/$p"; chmod 0755 "$bindir/$p"; done
 	}
 }
 
-// The release is one archive per platform, so boti installs every missing tool
-// with one installer invocation instead of one download per tool.
 func TestInstallCallsTheInstallerOnce(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "bot.toml"), `tools = ["wax", "fsx"]
@@ -598,9 +594,6 @@ exit 7
 	if code != 7 {
 		t.Fatalf("exit code = %d, want 7\n%s", code, out)
 	}
-	// After chdir, the consumer's `pwd` reports the physical path; on macOS a
-	// tmpdir under /var/folders resolves to /private/var/folders. Resolve the
-	// root so the assertion holds on any platform.
 	physicalRoot := root
 	if pr, err := filepath.EvalSymlinks(root); err == nil {
 		physicalRoot = pr
@@ -815,8 +808,6 @@ func TestSelftestRunsTheEngine(t *testing.T) {
 	}
 }
 
-// A build that fails its selftest must put the previous binaries back, or a bad
-// release leaves a host that cannot start.
 func TestUpdateRollsBackOnFailedSelftest(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "bot.toml"), "tools = []\n")

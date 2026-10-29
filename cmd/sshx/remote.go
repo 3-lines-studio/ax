@@ -22,8 +22,6 @@ import (
 
 var temporaryID atomic.Uint64
 
-// remote is one SSH session plus its SFTP channel. Every tool call is one
-// process, so connecting once per call is the whole lifecycle.
 type remote struct {
 	cfg    config
 	client *ssh.Client
@@ -39,8 +37,9 @@ func dial(cfg config) (*remote, error) {
 	if err != nil {
 		return nil, fmt.Errorf("known_hosts %s: %w", cfg.knownHosts, err)
 	}
-	client, err := ssh.Dial("tcp", cfg.host, &ssh.ClientConfig{
-		User:            user(cfg.host),
+	address, login := splitHost(cfg.host)
+	client, err := ssh.Dial("tcp", address, &ssh.ClientConfig{
+		User:            login,
 		Auth:            auths,
 		HostKeyCallback: hostKey,
 		Timeout:         cfg.timeout,
@@ -65,17 +64,13 @@ func (r *remote) Close() error {
 	return r.client.Close()
 }
 
-// user is the login name: `user@host` or the local user when the connection
-// leaves it out.
-func user(host string) string {
-	if at := strings.LastIndex(host, "@"); at >= 0 {
-		return host[:at]
+func splitHost(raw string) (address, login string) {
+	if at := strings.LastIndex(raw, "@"); at >= 0 {
+		return raw[at+1:], raw[:at]
 	}
-	return os.Getenv("USER")
+	return raw, os.Getenv("USER")
 }
 
-// authMethods prefers an explicit key, then the agent, then the usual key
-// files. Nothing is prompted for: a provider process has no terminal.
 func authMethods(cfg config) ([]ssh.AuthMethod, func(), error) {
 	var methods []ssh.AuthMethod
 	closeAgent := func() {}
@@ -130,8 +125,6 @@ func readKey(path string) (ssh.Signer, error) {
 	return signer, nil
 }
 
-// resolve maps a tool path to a remote absolute path. Relative paths hang off
-// the configured root; absolute paths must stay inside it.
 func (r *remote) resolve(input string) (string, error) {
 	if input == "" {
 		return "", errors.New("path is required")
@@ -218,9 +211,6 @@ func (r *remote) edit(args editArgs) (string, error) {
 	return message, nil
 }
 
-// atomicWrite writes a temporary file next to the target, flushes it and
-// renames it into place. The rename is the POSIX one when the server supports
-// it, so an existing file is replaced, not followed.
 func (r *remote) atomicWrite(target string, content []byte) error {
 	dir := path.Dir(target)
 	if err := r.sftp.MkdirAll(dir); err != nil {
@@ -236,7 +226,6 @@ func (r *remote) atomicWrite(target string, content []byte) error {
 		_ = file.Close()
 		return err
 	}
-	// fsync@openssh.com is optional; a server without it still gets the rename.
 	_ = file.Sync()
 	if err := file.Close(); err != nil {
 		return err
@@ -302,8 +291,6 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
-// limitedBuffer keeps the last maxOutput bytes: a chatty command must not fill
-// memory or the model's context.
 type limitedBuffer struct {
 	data      []byte
 	truncated bool

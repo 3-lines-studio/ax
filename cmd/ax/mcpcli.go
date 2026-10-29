@@ -49,13 +49,13 @@ func runMCPCommand(fc fileConfig, bot *botCtx, args []string) {
 func mcpUsage() {
 	fmt.Fprint(os.Stderr, `usage: ax mcp <command> [flags]
 
-  serve [--stdio | --http ADDR]  expose search and execute over MCP
-  list [--json]            configured servers and their login state
-  add <name|url>           add a server to bot.toml (name from the registry)
-  import <path|url|dir>    import an mcp.json, plugin.json or Cursor plugin
-  login <server>           authorize a remote server with OAuth
-  logout <server>          forget a stored login
-  doctor [--refresh]       connect to every server and report what breaks
+ serve [--stdio | --http ADDR] expose search and execute over MCP
+ list [--json] configured servers and their login state
+ add <name|url> add a server to bot.toml (name from the registry)
+ import <path|url|dir> import an mcp.json, plugin.json or Cursor plugin
+ login <server> authorize a remote server with OAuth
+ logout <server> forget a stored login
+ doctor [--refresh] connect to every server and report what breaks
 
 Run "ax mcp add" without arguments to list the registry.
 `)
@@ -105,8 +105,6 @@ func mcpServeCommand(fc fileConfig, bot *botCtx, args []string) {
 	}
 }
 
-// resolveAllMCP lists the MCP servers among the bot's connections, in either
-// spelling: [[connection]] with an MCP kind, or the legacy [[mcp]] table.
 func resolveAllMCP(fc fileConfig, bot *botCtx) ([]resolvedMCP, error) {
 	conns, err := resolveConnections(fc, bot.Root, bot.Workspace, mcpAuthDir(bot))
 	if err != nil {
@@ -122,7 +120,6 @@ func resolveAllMCP(fc fileConfig, bot *botCtx) ([]resolvedMCP, error) {
 	return out, nil
 }
 
-// serverAuthState describes how a server authenticates, in one phrase.
 func serverAuthState(entry mcpEntry) string {
 	if entry.URL == "" {
 		return "stdio"
@@ -206,7 +203,7 @@ func mcpListCommand(fc fileConfig, bot *botCtx, args []string) {
 		out = append(out, item)
 	}
 	if asJSON {
-		data, err := json.MarshalIndent(out, "", "  ")
+		data, err := json.MarshalIndent(out, "", " ")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
@@ -233,8 +230,6 @@ func mcpListCommand(fc fileConfig, bot *botCtx, args []string) {
 	_ = writer.Flush()
 }
 
-// mcpEntryForName returns the table as the bot wrote it, which is what the auth
-// helpers inspect. Connections win over the legacy table with the same id.
 func mcpEntryForName(fc fileConfig, name string) mcpEntry {
 	for _, entry := range fc.connections {
 		if strings.EqualFold(strings.TrimSpace(entry.ID), name) {
@@ -394,14 +389,12 @@ func printRegistry(registry registryFile) {
 	fmt.Println("Known MCP servers (ax mcp add <name>):")
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	for _, entry := range registry.Servers {
-		fmt.Fprintf(writer, "  %s\t%s\n", entry.Name, entry.Description)
+		fmt.Fprintf(writer, " %s\t%s\n", entry.Name, entry.Description)
 	}
 	_ = writer.Flush()
 	fmt.Println("\nOr add any endpoint: ax mcp add https://example.com/mcp --name example")
 }
 
-// nameFromURL derives a short server name: api.githubcopilot.com/mcp/ becomes
-// githubcopilot, mcp.sentry.dev becomes sentry.
 func nameFromURL(rawURL string) string {
 	value := rawURL
 	for _, prefix := range []string{"https://", "http://"} {
@@ -428,8 +421,6 @@ func botTomlPath(bot *botCtx) string {
 	return filepath.Join(bot.Root, "bot.toml")
 }
 
-// addMCPEntries appends entries to bot.toml, refusing duplicate names unless
-// forced.
 func addMCPEntries(bot *botCtx, entries []mcpEntry, force bool) error {
 	existing, err := existingMCPNames(bot.Root)
 	if err != nil {
@@ -642,15 +633,11 @@ func mcpLogoutCommand(fc fileConfig, bot *botCtx, args []string) {
 }
 
 func mcpDoctorCommand(fc fileConfig, bot *botCtx, args []string) {
-	// Doctor always talks to the server: a cached tool list would hide the
-	// expired login or the dead process it is supposed to find.
 	refresh := true
 	only := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--refresh", "-refresh":
-			// Kept for symmetry with `ax catalog --refresh`; doctor always
-			// connects.
 		case "--server", "-server":
 			i++
 			if i >= len(args) {
@@ -693,7 +680,7 @@ func mcpDoctorCommand(fc fileConfig, bot *botCtx, args []string) {
 		_ = source.Close()
 		if err != nil {
 			failures++
-			status := "error    "
+			status := "error "
 			if errors.Is(err, mcp.ErrLoginRequired) {
 				status = "login    "
 				err = fmt.Errorf("run ax mcp login %s", item.name)

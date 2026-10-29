@@ -14,25 +14,12 @@ import (
 	"github.com/3-lines-studio/ax/internal/mcp"
 )
 
-// A connection is the unit of configuration: it names an integration, says how
-// to reach it and optionally narrows which of its tools the model may use. The
-// tools themselves are discovered from the provider, never listed by hand.
-//
-// Legacy spellings compile to the same thing, so the mapping is one-way and
-// old bots keep working:
-//
-//	tools = ["wax"]            -> connection{id: "wax", kind: "local"}
-//	[[mcp]] name = "github"    -> connection{id: "github", kind: "mcp"}
 const (
 	connLocal = "local"
 	connMCP   = "mcp"
 	connSSH   = "ssh"
 )
 
-// connectionKindNormal maps every accepted [[connection]] kind to the two
-// transports the catalog knows today. New transports (ssh, container, volume)
-// are a later phase: they change how a connection reaches its tools, not what
-// the model sees.
 func connectionKindNormal(kind string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "", "local", "provider":
@@ -46,7 +33,6 @@ func connectionKindNormal(kind string) (string, error) {
 	}
 }
 
-// connectionEntry is one [[connection]] table in bot.toml.
 type connectionEntry struct {
 	ID              string            `toml:"id"`
 	Kind            string            `toml:"kind"`
@@ -71,8 +57,6 @@ type connectionEntry struct {
 	Scopes          []string          `toml:"scopes"`
 }
 
-// mcpEntry flattens a connection into the [[mcp]] shape the transport already
-// understands, so the MCP code path is untouched.
 func (e connectionEntry) mcpEntry(id string) mcpEntry {
 	return mcpEntry{
 		Name:            id,
@@ -91,10 +75,6 @@ func (e connectionEntry) mcpEntry(id string) mcpEntry {
 	}
 }
 
-// trust levels. "auto" is the default: the connection exposes every tool it
-// declares. "read" keeps only the tools annotated read-only, which is the safe
-// default for an integration whose writes are not wanted (a repository on a
-// shared account, a production database).
 const (
 	trustAuto = "auto"
 	trustRead = "read"
@@ -111,27 +91,20 @@ func normaliseTrust(value string) (string, error) {
 	}
 }
 
-// connection is a resolved source: either a local provider command or an MCP
-// server config. A per-connection error keeps the integration visible in the
-// menu instead of aborting every other source.
 type connection struct {
 	id      string
 	kind    string
 	trust   string
 	compute bool
 	command string
-	workdir string   // local directory the provider process runs in
-	env     []string // nil inherits the parent environment
+	workdir string
+	env     []string
 	cfg     mcp.ServerConfig
-	entry   connectionEntry // as written in bot.toml, for ax conn list
+	entry   connectionEntry
 	caps    []string
 	err     error
 }
 
-// resolveConnections merges explicit [[connection]] tables with the legacy
-// tools/AX_TOOLS list and [[mcp]] tables. Explicit ids win, legacy ids keep the
-// names they had before (a provider named after its binary), so catalog ids and
-// stored sessions stay valid.
 func resolveConnections(fc fileConfig, botRoot, workdir, authDir string) ([]connection, error) {
 	var out []connection
 	used := map[string]bool{}
@@ -243,7 +216,6 @@ func resolveConnections(fc fileConfig, botRoot, workdir, authDir string) ([]conn
 	var legacy []mcpEntry
 	for _, entry := range fc.mcp {
 		if id := strings.ToLower(strings.TrimSpace(entry.Name)); id != "" && used[id] {
-			// An explicit [[connection]] with the same id already owns it.
 			return nil, fmt.Errorf("mcp: server name %q collides with a connection id", id)
 		}
 		legacy = append(legacy, entry)
@@ -262,10 +234,6 @@ func resolveConnections(fc fileConfig, botRoot, workdir, authDir string) ([]conn
 	return out, nil
 }
 
-// resolveLocalRoot turns a connection root into the local directory its
-// provider runs in. Relative paths are relative to the bot root, and a root that
-// does not exist is an error: a connection that silently runs somewhere else is
-// worse than one that refuses to start.
 func resolveLocalRoot(root, botRoot string) (string, error) {
 	if !filepath.IsAbs(root) {
 		root = filepath.Join(botRoot, root)
@@ -281,8 +249,6 @@ func resolveLocalRoot(root, botRoot string) (string, error) {
 	return root, nil
 }
 
-// resolveBotPath resolves a file that lives in the bot: secrets, keys, known
-// hosts. It must exist.
 func resolveBotPath(path, botRoot string) (string, error) {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(botRoot, path)
@@ -294,10 +260,6 @@ func resolveBotPath(path, botRoot string) (string, error) {
 	return path, nil
 }
 
-// connectionEnv builds the environment for a provider process. A connection
-// with no env of its own inherits the parent environment (nil); one that sets
-// anything gets exactly what it declared plus pass_env and the transport
-// variables, so a remote workspace cannot read host secrets it never asked for.
 func connectionEnv(entry connectionEntry, extra map[string]string) []string {
 	if len(entry.Env) == 0 && len(entry.PassEnv) == 0 && len(extra) == 0 {
 		return nil
@@ -320,18 +282,11 @@ func connectionEnv(entry connectionEntry, extra map[string]string) []string {
 	return env
 }
 
-// computeConfig is the bot's compute role: the connections whose tools become
-// the default core tools, and the directory they run in. It is the seam where a
-// local workspace becomes a remote one later: `root` is a path on whichever
-// backend the connection reaches, so nothing else in the engine has to change.
 type computeConfig struct {
 	ids  []string
 	root string
 }
 
-// resolveCompute validates the [[connection]] tables marked compute = true.
-// Several are allowed (fsx for files, bashx for the shell), but they must agree
-// on where the workspace lives.
 func resolveCompute(fc fileConfig, botRoot string) (computeConfig, error) {
 	var out computeConfig
 	for _, entry := range fc.connections {
@@ -352,8 +307,6 @@ func resolveCompute(fc fileConfig, botRoot string) (computeConfig, error) {
 			return computeConfig{}, fmt.Errorf("connection %q: %w", id, err)
 		}
 		if kind != connSSH {
-			// A remote root is a path on the other machine: it is passed to the
-			// connection, not stat'ed here.
 			resolved, err := resolveLocalRoot(root, botRoot)
 			if err != nil {
 				return computeConfig{}, fmt.Errorf("connection %q: %w", id, err)
@@ -368,8 +321,6 @@ func resolveCompute(fc fileConfig, botRoot string) (computeConfig, error) {
 	return out, nil
 }
 
-// normaliseCapabilities validates one connection's optional allowlist. An empty
-// list means "every tool this connection declares", which is the common case.
 func normaliseCapabilities(caps []string) ([]string, error) {
 	if len(caps) == 0 {
 		return nil, nil
@@ -396,16 +347,13 @@ func normaliseCapabilities(caps []string) ([]string, error) {
 	return out, nil
 }
 
-// connSource narrows a source to what its connection enables: the
-// `capabilities` allowlist, the `trust` level, or both. The menu only lists the
-// enabled tools and a call to a disabled one names the reason.
 type connSource struct {
 	inner    catalog.Source
 	id       string
 	trust    string
 	caps     map[string]bool
 	mu       sync.Mutex
-	enabled  map[string]bool // tool name -> allowed, filled by List
+	enabled  map[string]bool
 	declared int
 }
 
@@ -428,14 +376,11 @@ func (s *connSource) Name() string        { return s.inner.Name() }
 func (s *connSource) Description() string { return s.inner.Description() }
 func (s *connSource) Close() error        { return s.inner.Close() }
 
-// bare drops the connection prefix so both "search" and "web.search" reach the
-// inner source as the tool name it knows.
 func (s *connSource) bare(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	return strings.TrimPrefix(name, s.id+".")
 }
 
-// allowsCap reports whether the capabilities allowlist names this tool.
 func (s *connSource) allowsCap(bare string) bool {
 	if len(s.caps) == 0 {
 		return true
@@ -465,8 +410,6 @@ func (s *connSource) List(ctx context.Context) ([]catalog.Tool, error) {
 	s.enabled = enabled
 	s.declared = len(tools)
 	s.mu.Unlock()
-	// The filtered tool list is what the catalog indexes, so it must carry the
-	// count the menu prints.
 	return out, nil
 }
 
@@ -476,8 +419,6 @@ func (s *connSource) Call(ctx context.Context, name string, args json.RawMessage
 	enabled := s.enabled
 	s.mu.Unlock()
 	if enabled == nil {
-		// A call before the catalog listed this source: list once so trust and
-		// capabilities are enforced the same way.
 		if _, err := s.List(ctx); err != nil {
 			return catalog.Result{}, err
 		}
@@ -507,8 +448,6 @@ func (s *connSource) refusal(name string) error {
 	return fmt.Errorf("connection %q does not enable %q (enabled: %s)", s.id, name, strings.Join(enabled, ", "))
 }
 
-// RequiresAuth forwards the MCP login state so the menu can still say
-// "login required".
 func (s *connSource) RequiresAuth() bool {
 	if status, ok := s.inner.(catalog.AuthStatus); ok {
 		return status.RequiresAuth()

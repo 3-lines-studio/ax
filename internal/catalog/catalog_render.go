@@ -14,8 +14,6 @@ const (
 	maxMenuSamples     = 12
 )
 
-// Menu renders the whole index: every server, its tools and how to use the
-// two catalog tools. It is the fallback for an empty or unsuccessful search.
 func (c *Catalog) Menu() string {
 	var out strings.Builder
 	out.WriteString("# Catalog\n\n")
@@ -50,7 +48,7 @@ func (c *Catalog) Menu() string {
 			names = append(names[:maxMenuSamples], fmt.Sprintf("+%d more", len(names)-maxMenuSamples))
 		}
 		if len(names) > 0 {
-			fmt.Fprintf(&out, "  %s\n", strings.Join(names, ", "))
+			fmt.Fprintf(&out, " %s\n", strings.Join(names, ", "))
 		}
 	}
 	out.WriteString("\n## Use\n\n")
@@ -61,10 +59,6 @@ func (c *Catalog) Menu() string {
 	return out.String()
 }
 
-// Brief renders the tiny catalog summary that goes into the system prompt:
-// which servers exist, plus the ids and argument names of the tools worth
-// calling without a search. The descriptions and full schemas stay in the
-// catalog, one search away.
 func (c *Catalog) Brief(core []string) string {
 	var out strings.Builder
 	servers := c.Servers()
@@ -99,9 +93,6 @@ func (c *Catalog) Brief(core []string) string {
 	return out.String()
 }
 
-// schemaSignature names a tool's arguments for the prompt. The full types and
-// descriptions are in search({"tool":id}); the prompt only needs enough to call
-// a core tool directly.
 func schemaSignature(tool Tool) string {
 	var schema struct {
 		Properties map[string]json.RawMessage `json:"properties"`
@@ -129,7 +120,6 @@ func schemaSignature(tool Tool) string {
 	return "(" + strings.Join(parts, ", ") + ")"
 }
 
-// Search handles the search tool: menu, ranking, one server, or one tool.
 func (c *Catalog) Search(request SearchRequest) string {
 	limit := request.Limit
 	if limit <= 0 {
@@ -171,7 +161,6 @@ func (c *Catalog) search(query, server string, limit int) string {
 		if suggestions := c.Suggest(query, 5); len(suggestions) > 0 {
 			fmt.Fprintf(&out, "Closest names: %s\n\n", quoteList(suggestions))
 		}
-		// A query that names a server should still open that server.
 		for _, server := range c.Servers() {
 			if strings.EqualFold(server.Name, query) {
 				out.WriteString(c.serverMenu(server.Name, limit))
@@ -535,7 +524,7 @@ func prettyJSON(raw []byte) string {
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return string(raw)
 	}
-	data, err := json.MarshalIndent(value, "", "  ")
+	data, err := json.MarshalIndent(value, "", " ")
 	if err != nil {
 		return string(raw)
 	}

@@ -16,18 +16,16 @@ import (
 
 const (
 	maxStreamToolCalls = 64
-	maxRequestBody     = 48 << 20 // DeepSeek request body limit
+	maxRequestBody     = 48 << 20
 )
 
 type OpenAI struct {
-	BaseURL string
-	APIKey  string
-	// SessionPath resolves image blobs to data URLs at request time.
+	BaseURL     string
+	APIKey      string
 	SessionPath string
-	// Thinking is nil for auto: DeepSeek models think, others do not.
-	Thinking  *bool
-	Effort    string
-	MaxTokens int
+	Thinking    *bool
+	Effort      string
+	MaxTokens   int
 }
 
 func NewOpenAI(baseURL, apiKey string) OpenAI {
@@ -50,9 +48,6 @@ func (o OpenAI) deepSeek(model string) bool {
 	return strings.Contains(base, "deepseek") || strings.HasPrefix(strings.ToLower(model), "deepseek")
 }
 
-// thinkingFor reports whether thinking is enabled and whether the field should
-// be sent at all. Non-DeepSeek providers omit the field unless the caller set
-// it explicitly.
 func (o OpenAI) thinkingFor(model string) (enabled, explicit bool) {
 	if o.Thinking != nil {
 		return *o.Thinking, true
@@ -94,10 +89,6 @@ func (o OpenAI) buildRequest(req *Request, stream bool) (builtRequest, error) {
 			tc := m.ToolCallID
 			message.ToolCallID = &tc
 		}
-		// DeepSeek requires reasoning_content on every assistant message when
-		// the request carries tools. Legacy sessions did not store it; an
-		// empty string keeps those histories structurally valid. Other
-		// providers only see the field when there is real reasoning.
 		if m.Role == "assistant" && (m.ReasoningContent != "" || (hasTools && o.deepSeek(req.Model))) {
 			reasoning := m.ReasoningContent
 			message.ReasoningContent = &reasoning
@@ -115,9 +106,6 @@ func (o OpenAI) buildRequest(req *Request, stream bool) (builtRequest, error) {
 		request.StreamOptions = &oaStreamOptions{IncludeUsage: true}
 	}
 	enabled, explicit := o.thinkingFor(req.Model)
-	// A resumed session written before reasoning was recorded cannot satisfy
-	// DeepSeek's thinking-mode rule. In auto mode, drop to non-thinking for
-	// that request instead of failing the whole history.
 	if enabled && hasTools && o.Thinking == nil {
 		for _, message := range req.Messages {
 			if message.Role == "assistant" && message.ReasoningContent == "" {
@@ -218,8 +206,6 @@ func (o OpenAI) complete(req *Request) (Response, error) {
 	return o.runRequest(built, &atomic.Bool{}, nil)
 }
 
-// providerClient bounds the wait for response headers. The body can stream for
-// as long as the model needs; the context still cancels a run.
 var providerClient = &http.Client{Transport: func() *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = 3 * time.Minute
@@ -337,9 +323,6 @@ func watchCancel(ctx context.Context, cancelCtx context.CancelFunc, cancel *atom
 	}
 }
 
-// malformedStreamError means the provider sent a stream chunk that could not
-// be decoded. It is provider-data corruption, not a transport failure, so the
-// run fails rather than silently dropping the chunk.
 type malformedStreamError struct{ err error }
 
 func (e malformedStreamError) Error() string {

@@ -63,7 +63,7 @@ func runCatalogCommand(fc fileConfig, bot *botCtx, args []string) {
 			Servers []catalog.ServerSummary `json:"servers"`
 			Tools   []catalog.Tool          `json:"tools"`
 		}{Servers: cat.Servers(), Tools: cat.Tools()}
-		data, err := json.MarshalIndent(payload, "", "  ")
+		data, err := json.MarshalIndent(payload, "", " ")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)

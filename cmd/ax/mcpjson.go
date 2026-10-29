@@ -15,22 +15,12 @@ import (
 	"time"
 )
 
-// The mcp.json family is what Cursor, Claude Desktop and VS Code write:
-//
-//	{"mcpServers": {"github": {"type": "http", "url": "https://..."}}}
-//
-// Cursor plugins add a manifest at .cursor-plugin/plugin.json whose
-// mcpServers entry is a relative path to that file.
-
-// mcpSpecAuth is the auth block Cursor plugins use for pre-registered OAuth
-// clients. Secrets are always environment references, never literals.
 type mcpSpecAuth struct {
 	ClientID     string   `json:"CLIENT_ID"`
 	ClientSecret string   `json:"CLIENT_SECRET"`
 	Scopes       []string `json:"scopes"`
 }
 
-// mcpServerSpec is one server from an mcp.json document, normalised.
 type mcpServerSpec struct {
 	Name    string
 	Type    string
@@ -43,7 +33,6 @@ type mcpServerSpec struct {
 	Plugin  string
 }
 
-// pluginManifest is the part of .cursor-plugin/plugin.json that matters here.
 type pluginManifest struct {
 	Name        string          `json:"name"`
 	DisplayName string          `json:"displayName"`
@@ -55,7 +44,6 @@ type pluginManifest struct {
 	} `json:"variables"`
 }
 
-// mcpImport is the result of reading one mcp.json, plugin or URL.
 type mcpImport struct {
 	Specs     []mcpServerSpec
 	Required  []string
@@ -63,7 +51,6 @@ type mcpImport struct {
 	PluginDir string
 }
 
-// loadMCPImport reads a path (file or directory), or an http(s) URL.
 func loadMCPImport(target string, client *http.Client) (mcpImport, error) {
 	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
 		return loadMCPImportURL(target, client)
@@ -117,7 +104,7 @@ func loadPluginManifest(path string) (mcpImport, error) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return mcpImport{}, fmt.Errorf("%s: %w", path, err)
 	}
-	dir := filepath.Dir(filepath.Dir(path)) // <plugin>/.cursor-plugin/plugin.json
+	dir := filepath.Dir(filepath.Dir(path))
 	result := mcpImport{Source: path, PluginDir: dir, Required: manifest.Variables.Required}
 	if len(manifest.MCPServers) == 0 {
 		return mcpImport{}, fmt.Errorf("%s: plugin declares no mcpServers", path)
@@ -183,9 +170,6 @@ func loadMCPImportURL(rawURL string, client *http.Client) (mcpImport, error) {
 	return mcpImport{Specs: specs, Required: required, Source: rawURL}, nil
 }
 
-// parseMCPDocument accepts the shapes found in the wild: an mcpServers object,
-// an array of named servers, a string pointing at another document, and the
-// VS Code "servers" spelling. baseDir resolves relative references.
 func parseMCPDocument(data []byte, baseDir string) ([]mcpServerSpec, []string, error) {
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(data, &root); err != nil {
@@ -196,7 +180,6 @@ func parseMCPDocument(data []byte, baseDir string) ([]mcpServerSpec, []string, e
 		raw, ok = root["servers"]
 	}
 	if !ok {
-		// A bare map of servers, or a single server object.
 		_, isServer := root["url"]
 		if _, isCommand := root["command"]; !isServer && !isCommand {
 			raw = data
@@ -317,8 +300,6 @@ func decodeMCPServer(raw json.RawMessage) (mcpServerSpec, error) {
 	}, nil
 }
 
-// mcpEntriesFromSpecs converts imported servers into bot.toml entries. Skipped
-// servers are returned with the reason so the CLI can explain them.
 func mcpEntriesFromSpecs(specs []mcpServerSpec) (entries []mcpEntry, skipped []string) {
 	used := map[string]bool{}
 	for _, spec := range specs {
@@ -362,7 +343,6 @@ func mcpEntriesFromSpecs(specs []mcpServerSpec) (entries []mcpEntry, skipped []s
 	return entries, skipped
 }
 
-// envName returns the variable a ${VAR} or ${VAR:-...} reference names.
 func envName(value string) string {
 	value = strings.TrimSpace(value)
 	if !strings.HasPrefix(value, "${") || !strings.HasSuffix(value, "}") {
@@ -391,7 +371,6 @@ func compactEnv(values map[string]string) map[string]string {
 	return out
 }
 
-// normalizeServerName makes an imported name usable as a catalog id.
 func normalizeServerName(name string) string {
 	var out strings.Builder
 	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
@@ -409,8 +388,6 @@ func normalizeServerName(name string) string {
 	return value
 }
 
-// renderMCPEntry writes one [[connection]] table. A server is a connection
-// with an MCP kind; the older `[[mcp]]` spelling is still read, never written.
 func renderMCPEntry(entry mcpEntry) string {
 	var out strings.Builder
 	out.WriteString("[[connection]]\n")
@@ -507,8 +484,6 @@ func tomlInlineTable(values map[string]string) string {
 	return "{ " + strings.Join(parts, ", ") + " }"
 }
 
-// appendMCPEntries adds [[mcp]] tables to bot.toml, creating the file when the
-// bot does not have one yet. Existing content is never rewritten.
 func appendMCPEntries(path string, entries []mcpEntry) error {
 	if len(entries) == 0 {
 		return nil
@@ -524,7 +499,7 @@ func appendMCPEntries(path string, entries []mcpEntry) error {
 	}
 	var out bytes.Buffer
 	if len(existing) == 0 {
-		out.WriteString("# Bot configuration. See docs/botdir.md for every key.\n")
+		out.WriteString("# Bot configuration.\n")
 	} else {
 		out.Write(existing)
 		if !bytes.HasSuffix(existing, []byte("\n")) {
@@ -535,8 +510,6 @@ func appendMCPEntries(path string, entries []mcpEntry) error {
 	return os.WriteFile(path, out.Bytes(), 0o644)
 }
 
-// existingMCPNames reads the ids already configured in a bot root, in either
-// spelling, so `ax mcp add` does not add a second copy.
 func existingMCPNames(root string) (map[string]bool, error) {
 	botConfig, err := loadBotConfig(root)
 	if err != nil {

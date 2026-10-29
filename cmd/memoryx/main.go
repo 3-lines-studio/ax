@@ -1,6 +1,3 @@
-// memoryx exposes the bot's personal memory store through the Unix tool
-// convention. It is a local provider indexed by ax's catalog next to fsx,
-// bashx and skillx.
 package main
 
 import (

@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// ax's runtime section reads these to know which channel/thread/user it is
-// serving; the channel prompt is instructions and must reach it too.
 func TestRunEnvCarriesTheRunContext(t *testing.T) {
 	env := runEnv(
 		Thread{ID: "t1", Title: "hola"},

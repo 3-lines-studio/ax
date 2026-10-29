@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// A wrong PIN costs the attacker a scrypt run, but an oracle without a cap is
-// still a slow leak. Failures are counted per client and back off.
 const (
 	pinThreshold = 5
 	pinBaseWait  = 30 * time.Second

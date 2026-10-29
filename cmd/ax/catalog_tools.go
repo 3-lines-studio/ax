@@ -12,25 +12,25 @@ import (
 )
 
 const searchSchema = `{
-  "type": "object",
-  "properties": {
-    "query": {"type": "string", "description": "What you want to do, in natural language."},
-    "server": {"type": "string", "description": "Only look in this server."},
-    "tool": {"type": "string", "description": "Exact tool id to get its full schema and an example call."},
-    "limit": {"type": "integer", "minimum": 1, "maximum": 20}
-  }
+ "type": "object",
+ "properties": {
+ "query": {"type": "string", "description": "What you want to do, in natural language."},
+ "server": {"type": "string", "description": "Only look in this server."},
+ "tool": {"type": "string", "description": "Exact tool id to get its full schema and an example call."},
+ "limit": {"type": "integer", "minimum": 1, "maximum": 20}
+ }
 }`
 
 const executeSchema = `{
-  "type": "object",
-  "properties": {
-    "tool": {"type": "string", "description": "Tool id from search, e.g. fsx.read or github.create_issue."},
-    "arguments": {
-      "type": ["object", "string"],
-      "description": "JSON arguments matching the tool schema. A JSON-encoded string is accepted too."
-    }
-  },
-  "required": ["tool", "arguments"]
+ "type": "object",
+ "properties": {
+ "tool": {"type": "string", "description": "Tool id from search, e.g. fsx.read or github.create_issue."},
+ "arguments": {
+ "type": ["object", "string"],
+ "description": "JSON arguments matching the tool schema. A JSON-encoded string is accepted too."
+ }
+ },
+ "required": ["tool", "arguments"]
 }`
 
 const maxSearchOutput = 24 * 1024

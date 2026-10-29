@@ -13,8 +13,6 @@ import (
 	"testing"
 )
 
-// scriptedProvider answers every request through reply and records what the
-// engine sent.
 type scriptedProvider struct {
 	mu       sync.Mutex
 	requests []*Request
@@ -75,7 +73,6 @@ func TestDeriveSessionCompactionDropsOrphanedToolResults(t *testing.T) {
 		{Type: entryMessage, Message: &assistant},
 		{Type: entryToolResult, Call: &call, Output: "out"},
 		{Type: entryMessage, Message: &tool},
-		// The cutoff lands after the call but before its result.
 		{Type: entryCompaction, Upto: 2, Summary: "s"},
 		{Type: entryMessage, Message: &next},
 	}
@@ -105,7 +102,7 @@ func TestRunStreamCompactsBeforeTheFirstRequest(t *testing.T) {
 	var calls []bool
 	opts := &runOptions{
 		model:         "m",
-		system:        strings.Repeat("s", 900), // ~300 tokens, over the threshold
+		system:        strings.Repeat("s", 900),
 		maxTurns:      1,
 		compactAt:     0.5,
 		contextWindow: 100,
@@ -248,7 +245,6 @@ func TestCompactorMidRunKeepsAContinueTurn(t *testing.T) {
 	if entries[1].Type != entryMessage || entries[1].Message == nil || entries[1].Message.Content != continueNote {
 		t.Fatalf("continue entry = %+v", entries[1])
 	}
-	// A resumed run sees the summary plus the continue turn, nothing else.
 	state := deriveSession(entries)
 	if state.Summary != "SUMMARY" || len(state.Messages) != 1 || state.Messages[0].Content != continueNote {
 		t.Fatalf("state = %+v", state)

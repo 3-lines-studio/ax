@@ -18,9 +18,8 @@ import (
 	"github.com/3-lines-studio/ax/internal/axrun"
 )
 
-// Settings are the per-install overrides webi passes to ax.
 type Settings struct {
-	Name      string  `json:"name,omitempty"` // how the UI labels the person typing
+	Name      string  `json:"name,omitempty"`
 	Model     string  `json:"model,omitempty"`
 	BaseURL   string  `json:"base_url,omitempty"`
 	Effort    string  `json:"effort,omitempty"`
@@ -32,7 +31,7 @@ type Server struct {
 	store    *Store
 	cfg      axrun.Config
 	static   http.Handler
-	settings string // path to settings.json
+	settings string
 	vault    *Vault
 	resume   resumeState
 	started  time.Time
@@ -113,8 +112,6 @@ func (s *Server) Handler() http.Handler {
 
 var errThreadRunning = errors.New("the thread is already running")
 
-// reserveRun closes the gap between "is it running?" and "start it": two
-// messages arriving together must not spawn two ax processes on one session.
 func (s *Server) reserveRun(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -130,8 +127,6 @@ func (s *Server) releaseRun(id string) {
 	delete(s.starting, id)
 	s.mu.Unlock()
 }
-
-// --- SSE -------------------------------------------------------------------
 
 func (s *Server) subscribe() chan []byte {
 	ch := make(chan []byte, 64)
@@ -194,8 +189,6 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
-
-// --- state -----------------------------------------------------------------
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	settings := s.loadSettings()
@@ -276,7 +269,7 @@ func (s *Server) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 	if len([]rune(req.Name)) > 40 {
 		req.Name = string([]rune(req.Name)[:40])
 	}
-	data, _ := json.MarshalIndent(req, "", "  ")
+	data, _ := json.MarshalIndent(req, "", " ")
 	if err := writeFileAtomic(s.settings, data, 0o600); err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -293,8 +286,6 @@ func (s *Server) handleDirs(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		// The picker turns a missing folder into a "Create <path>" button, so
-		// "does not exist" has to stay distinguishable from "not allowed".
 		if os.IsNotExist(err) {
 			writeErr(w, 404, "no such directory: "+root)
 			return
@@ -314,9 +305,6 @@ func (s *Server) handleDirs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"path": root, "parent": parent, "dirs": dirs})
 }
 
-// handleMkdir creates the folder a channel will run in. The picker sends an
-// absolute path: either the name typed under the folder on screen or a path
-// the user typed that does not exist yet.
 func (s *Server) handleMkdir(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path string `json:"path"`
@@ -356,11 +344,6 @@ func (s *Server) handleMkdir(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"path": path})
 }
 
-// --- channels --------------------------------------------------------------
-
-// cleanWorkdir validates the bot root a channel points at. The folder must
-// exist: creating it is the picker's job, and a typo should fail loudly instead
-// of becoming an empty tool catalog.
 func cleanWorkdir(path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -471,8 +454,6 @@ func (s *Server) handleCreateThread(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, thread)
 }
 
-// --- threads ---------------------------------------------------------------
-
 func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
 	thread, err := s.store.Thread(r.PathValue("id"))
 	if err != nil {
@@ -538,8 +519,6 @@ func (s *Server) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.running(thread.ID) {
-		// While ax is running, a message steers the run instead of starting a
-		// new one: it lands before the next model call of the same turn loop.
 		if len(req.Images) > 0 {
 			writeErr(w, 409, "images cannot be attached to a steering message; wait for the run to finish")
 			return
@@ -560,8 +539,6 @@ func (s *Server) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	// Start first: if another request won the race there is no run, and the
-	// message should not appear in the thread.
 	if err := s.startRun(thread, req.Text, images); err != nil {
 		if errors.Is(err, errThreadRunning) {
 			writeErr(w, 409, err.Error())
@@ -598,7 +575,6 @@ func (s *Server) prepareImages(thread Thread, ids []string) ([]string, error) {
 	return paths, nil
 }
 
-// startRun launches ax for one user turn and streams its events to the UI.
 func (s *Server) startRun(thread Thread, prompt string, images []string) error {
 	return s.launch(thread, axrun.Job{
 		Session: s.store.SessionPath(thread.ID),
@@ -607,9 +583,6 @@ func (s *Server) startRun(thread Thread, prompt string, images []string) error {
 	}, prompt)
 }
 
-// startResume continues a run whose ax process died, with the prompt ax writes
-// itself from the session log. Title generation is skipped: the thread already
-// has a name by the time it can be interrupted.
 func (s *Server) startResume(thread Thread) error {
 	return s.launch(thread, axrun.Job{
 		Session: s.store.SessionPath(thread.ID),
@@ -617,9 +590,6 @@ func (s *Server) startResume(thread Thread) error {
 	}, "")
 }
 
-// runEnv is the context ax gets for one run: the channel/thread identity, the
-// user's name and the channel instructions. Paths and secrets are separate;
-// this is what the model needs to know where it is.
 func runEnv(thread Thread, channel Channel, user string) []string {
 	env := []string{
 		"AX_WEB_THREAD=" + thread.ID,
@@ -655,8 +625,6 @@ func (s *Server) launch(thread Thread, job axrun.Job, prompt string) error {
 	cfg.BotRoot = s.channelRoot(channel)
 	cfg.Model = firstNonEmpty(settings.Model, cfg.Model)
 	cfg.BaseURL = firstNonEmpty(settings.BaseURL, cfg.BaseURL)
-	// A channel is a bot: its runtime data lives at its root, not at the
-	// host's BOT_DATA. Without this every channel would share one workspace.
 	env := runEnv(thread, channel, settings.Name)
 	vaultEnv, cleanupVault, err := s.vault.Env(channel.VaultScope)
 	if err != nil {
@@ -821,8 +789,6 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
-// --- blobs -----------------------------------------------------------------
-
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
 	data, err := io.ReadAll(r.Body)
@@ -854,8 +820,6 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	}
 	s.static.ServeHTTP(w, r)
 }
-
-// --- helpers ---------------------------------------------------------------
 
 func readJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(target); err != nil {

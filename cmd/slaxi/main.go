@@ -363,9 +363,6 @@ func executeJob(cfg config, j job) (string, error) {
 	return runAX(cfg, j)
 }
 
-// runAX is the whole engine contract of this transport: one ax process per
-// message, its NDJSON events folded into the reply Slack shows. internal/axrun
-// does the same for webi, so both transports behave alike.
 func runAX(cfg config, j job) (string, error) {
 	result, err := axrun.RunOne(context.Background(), axrun.Config{
 		AXPath:  cfg.axPath,

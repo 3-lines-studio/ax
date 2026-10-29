@@ -20,8 +20,6 @@ type mcpRequest struct {
 	Params  json.RawMessage `json:"params"`
 }
 
-// serveMCP exposes search and execute as an MCP stdio server. The same two
-// tools the engine shows its model are thus available to any MCP host.
 func serveMCP(input io.Reader, output io.Writer, tools []Tool) error {
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 64<<10), maxMCPMessage)

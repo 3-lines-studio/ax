@@ -1,16 +1,4 @@
 #!/bin/sh
-# Build release artifacts.
-#
-#   scripts/package.sh all              # every program, current platform
-#   scripts/package.sh ax fsx           # selected programs, current platform
-#   scripts/package.sh --dest DIR ax    # host binaries into DIR, named <program>
-#   scripts/package.sh --release all    # every program, all release targets
-#
-# Local runs write one loose binary per program into dist/ (plus its .sha256),
-# which is what scripts/check-size.sh and the harness use. `--release` builds
-# linux/x86-64, linux/arm64 and darwin/arm64 from any host (CGO disabled) and
-# packs them into one archive per platform, dist/ax-<os>-<arch>.tar.gz, plus
-# dist/SHA256SUMS. One tag, three downloads, no per-program assets.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -49,7 +37,6 @@ case "${1:-}" in
 esac
 
 if [ "$release" = true ]; then
-    # os:goarch:artifact-arch
     targets="linux:amd64:x86_64 linux:arm64:aarch64 darwin:arm64:aarch64"
 else
     os=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -141,7 +128,6 @@ for target in $targets; do
     done
     if [ "$release" = true ]; then
         archive="dist/ax-$goos-$arch.tar.gz"
-        # shellcheck disable=SC2086
         tar -czf "$archive" -C "$stage" $binaries
         rm -rf "$stage"
         printf '%s\n' "$archive"

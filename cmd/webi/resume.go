@@ -10,18 +10,10 @@ import (
 	"time"
 )
 
-// isSessionBusy reports whether ax refused to resume because another process
-// still writes the log. The lock is the liveness signal: if it is held, the run
-// survived the restart and needs no resume.
 func isSessionBusy(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "already in use")
 }
 
-// A run whose ax process died leaves a `run_start` with no `run_end` in the
-// thread's session. ax can continue it (`--resume`); webi decides when: once at
-// startup and then on a timer, so a crash or a deploy does not strand work.
-
-// resumeInterval is how often the sweep looks for interrupted runs.
 const resumeInterval = 30 * time.Second
 
 type sessionMark struct {
@@ -30,14 +22,11 @@ type sessionMark struct {
 	open    bool
 }
 
-// resumeState caches the open/closed verdict per session file: scanning every
-// log on every tick would re-read megabytes of history for nothing.
 type resumeState struct {
 	mu    sync.Mutex
 	marks map[string]sessionMark
 }
 
-// StartResumeLoop sweeps now and then every interval until ctx is done.
 func (s *Server) StartResumeLoop(interval time.Duration) {
 	s.resumeOpenRuns()
 	ticker := time.NewTicker(interval)
@@ -48,8 +37,6 @@ func (s *Server) StartResumeLoop(interval time.Duration) {
 	}()
 }
 
-// resumeOpenRuns starts one ax --resume per interrupted thread that is not
-// already running here.
 func (s *Server) resumeOpenRuns() {
 	for _, channel := range s.store.Channels() {
 		for _, thread := range s.store.Threads(channel.ID) {
@@ -67,9 +54,6 @@ func (s *Server) resumeOpenRuns() {
 			}
 			if err := s.startResume(thread); err != nil {
 				if isSessionBusy(err) {
-					// The previous process is still alive and holds the
-					// session flock; the next sweep looks again. Not a
-					// failure, and not worth a warning every 30 seconds.
 					slog.Debug("webi: run is alive, not resuming", "thread", thread.ID)
 					continue
 				}
@@ -81,8 +65,6 @@ func (s *Server) resumeOpenRuns() {
 	}
 }
 
-// sessionOpen reports whether the log ends inside a run. The answer is cached
-// by size and mtime, so an untouched log costs one stat per sweep.
 func (s *Server) sessionOpen(path string) (bool, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -110,8 +92,6 @@ func (s *Server) sessionOpen(path string) (bool, error) {
 	return open, nil
 }
 
-// scanOpenRun walks the log and answers whether the last run lifecycle entry is
-// a start. Broken lines are skipped: a torn tail must not stop the sweep.
 func scanOpenRun(path string) (bool, error) {
 	file, err := os.Open(path)
 	if err != nil {

@@ -9,6 +9,12 @@ import (
 	"github.com/3-lines-studio/ax/internal/botdir"
 )
 
+func TestMain(m *testing.M) {
+	os.Unsetenv("BOT_ROOT")
+	os.Unsetenv("BOT_DATA")
+	os.Exit(m.Run())
+}
+
 func TestParseJobUsesThread(t *testing.T) {
 	data := []byte(`{"team_id":"T1","event":{"type":"app_mention","channel":"C1","text":"<@U1> fix it","ts":"1.1","thread_ts":"1.0"},"authorizations":[{"user_id":"U1"}]}`)
 	job, ok := parseJob(data)

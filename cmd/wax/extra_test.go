@@ -479,6 +479,7 @@ func TestRunSuccess(t *testing.T) {
 }
 
 func TestMainDescribeInProcess(t *testing.T) {
+	isolate(t)
 	oldArgs := os.Args
 	os.Args = []string{"wax", "describe"}
 	defer func() { os.Args = oldArgs }()
@@ -511,6 +512,7 @@ func TestMainDescribeInProcess(t *testing.T) {
 }
 
 func TestCliDescribe(t *testing.T) {
+	isolate(t)
 	out, errOut, code := runCLI(t, []string{"describe"}, "")
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%s", code, errOut)

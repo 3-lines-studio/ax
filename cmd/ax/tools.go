@@ -19,7 +19,7 @@ import (
 
 const maxOutput = 16 * 1024
 const maxDescribeOutput = 64 * 1024
-const defaultToolTimeout = 300 // seconds
+const defaultToolTimeout = 300
 
 type externalToolSpec = axproto.ToolSpec
 
@@ -88,8 +88,6 @@ func validToolName(name string) bool {
 	return true
 }
 
-// tailBuffer keeps the last limit bytes of a stream without growing with it.
-// Tool output can be arbitrarily large; the model only ever sees the tail.
 type tailBuffer struct {
 	buf   []byte
 	limit int
@@ -115,9 +113,6 @@ func (b *tailBuffer) String() string { return string(b.buf) }
 
 func (b *tailBuffer) Truncated() bool { return b.total > len(b.buf) }
 
-// limitedBuffer accepts at most limit bytes and remembers when it overflowed,
-// so discovery can reject an oversized describe stream instead of parsing a
-// silent truncation.
 type limitedBuffer struct {
 	buf      []byte
 	limit    int
@@ -178,9 +173,6 @@ func tryExternalTools(commands string, workdir string) ([]Tool, error) {
 	return tools, nil
 }
 
-// discoverProvider asks a provider for its tool descriptors. A non-nil env is
-// the connection's environment: it replaces the inherited one for the child, so
-// a remote workspace sees only what its connection configured.
 func discoverProvider(ctx context.Context, command, workdir string, env []string) ([]Tool, error) {
 	describe := exec.CommandContext(ctx, command, "describe")
 	describe.Dir = workdir
@@ -270,8 +262,6 @@ func runExternalTool(ctx context.Context, command, name, arguments, workdir stri
 
 	cmd := exec.CommandContext(runCtx, command, "run", name)
 	cmd.Dir = workdir
-	// Secrets asked for during the run join the environment of every later
-	// call, never the conversation.
 	if extra := secrets.env(); len(extra) > 0 {
 		if len(env) > 0 {
 			cmd.Env = append(append([]string(nil), env...), extra...)

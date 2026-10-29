@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// The host exports BOT_DATA for the bot it serves; these tests read paths from
-// the package, so they must not inherit it from whoever runs the suite.
 func TestMain(m *testing.M) {
 	_ = os.Unsetenv("BOT_ROOT")
 	_ = os.Unsetenv("BOT_DATA")
@@ -153,7 +151,6 @@ func TestResolveUsesBotDataRoot(t *testing.T) {
 		t.Error("workspace must be created under BOT_DATA, not the bot root")
 	}
 
-	// Definition paths stay on the bot root even when BOT_DATA is set.
 	_ = os.MkdirAll(filepath.Join(root, "skills"), 0o755)
 	_ = os.WriteFile(filepath.Join(root, "bot.md"), []byte("hi"), 0o644)
 	ctx = Resolve(root)

@@ -15,19 +15,12 @@ type ToolCall struct {
 	Arguments string `json:"Arguments"`
 }
 
-// ContentPart is one block of a multimodal message. Text parts carry Text;
-// image parts carry an Image reference. When Parts is non-empty it is the
-// authoritative content; Content is kept as the plain-text rendering so older
-// readers and logs stay useful.
 type ContentPart struct {
 	Type  string    `json:"Type"`
 	Text  string    `json:"Text,omitempty"`
 	Image *ImageRef `json:"Image,omitempty"`
 }
 
-// ImageRef points at an image without embedding it in the session log. A
-// Blob is a sha256 in the session's blob directory; a URL is either an
-// http(s) link or a data: URL. Exactly one of Blob and URL is set.
 type ImageRef struct {
 	URL       string `json:"URL,omitempty"`
 	Blob      string `json:"Blob,omitempty"`
@@ -45,7 +38,6 @@ type Message struct {
 	ToolCallID       string        `json:"ToolCallID,omitempty"`
 }
 
-// Text returns the plain-text content of the message, including text parts.
 func (m Message) Text() string {
 	if len(m.ContentParts) == 0 {
 		return m.Content
@@ -62,7 +54,6 @@ func (m Message) Text() string {
 	return out.String()
 }
 
-// HasImages reports whether the message carries image parts.
 func (m Message) HasImages() bool {
 	for _, part := range m.ContentParts {
 		if part.Type == "image" && part.Image != nil {
@@ -95,9 +86,7 @@ type runSink interface {
 	tokens(input, output, cached int)
 	assistant(turn int, msg Message, usage Usage)
 	tool(turn int, msg Message)
-	// steer records a user message that arrived while the run was going.
 	steer(msg Message)
-	// secretRequest announces that a tool needs a value only the host can give.
 	secretRequest(call ToolCall, ask secretAsk)
 }
 
@@ -107,15 +96,10 @@ type runOptions struct {
 	tools    []Tool
 	maxTurns int
 
-	// Context compaction. compactAt is a fraction of contextWindow; zero
-	// disables it. compact rewrites the history and the system prompt.
 	compactAt     float64
 	contextWindow int
 	compact       func(ctx context.Context, history []Message, midRun bool) ([]Message, string, error)
 
-	// steer carries messages typed while the run is already going. The loop
-	// drains it at each turn boundary: after the tools of a batch finish and
-	// before the next model call, never in the middle of either.
 	steer <-chan string
 }
 
@@ -146,12 +130,10 @@ type Tool struct {
 	ReadOnly    bool
 	Destructive bool
 	OpenWorld   bool
-	Timeout     int // seconds; 0 means the engine default
-	// Run is the legacy in-process entry point. External providers use
-	// RunContext so the engine can cancel or time out the process.
-	Run        func(arguments string, progress func(string)) string
-	RunContext func(ctx context.Context, arguments string, progress func(string)) string
-	Validate   func(arguments string) error
+	Timeout     int
+	Run         func(arguments string, progress func(string)) string
+	RunContext  func(ctx context.Context, arguments string, progress func(string)) string
+	Validate    func(arguments string) error
 }
 
 type Provider interface {

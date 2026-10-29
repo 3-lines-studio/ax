@@ -16,9 +16,6 @@ import (
 	"time"
 )
 
-// serveMCPHTTP exposes the same two tools over the MCP streamable HTTP
-// transport. The server is stateless: every POST carries one JSON-RPC
-// message, and a client that wants a session can send any id it likes.
 func serveMCPHTTP(addr string, tools []Tool) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -52,7 +49,6 @@ func mcpHTTPHandler(tools []Tool) http.Handler {
 			httpError(w, http.StatusMethodNotAllowed, "use POST")
 			return
 		}
-		// A browser page on another origin must not drive a local server.
 		if !mcpOriginAllowed(r) {
 			httpError(w, http.StatusForbidden, "origin not allowed")
 			return
@@ -74,8 +70,6 @@ func mcpHTTPHandler(tools []Tool) http.Handler {
 		}
 		result, rpcErr := handleMCPRequest(r.Context(), request, tools)
 		if len(request.ID) == 0 || string(request.ID) == "null" {
-			// A notification has no response body; 202 keeps streamable HTTP
-			// clients happy.
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
@@ -87,9 +81,6 @@ func mcpHTTPHandler(tools []Tool) http.Handler {
 	})
 }
 
-// mcpOriginAllowed rejects a request whose Origin names a different host, the
-// DNS-rebinding case the MCP spec asks local servers to block. Clients that
-// are not browsers send no Origin and are always allowed.
 func mcpOriginAllowed(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {

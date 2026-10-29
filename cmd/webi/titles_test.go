@@ -73,7 +73,6 @@ func TestGenerateTitleStoresTheModelAnswer(t *testing.T) {
 	if seen["model"] != "deepseek-flash" || seen["stream"] != false {
 		t.Fatalf("request = %+v", seen)
 	}
-	// A later run must not rename the thread.
 	srv.generateTitle(thread, "another prompt", "another answer")
 	again, _ := srv.store.Thread(thread.ID)
 	if again.Title != "Ship the ssh backend" {
@@ -118,8 +117,6 @@ func TestTitleKeyFallsBackToTheBotSecret(t *testing.T) {
 	}
 }
 
-// fakeAXPath is fakeAX without the session scaffolding: the title tests never
-// start a run.
 func fakeAXPath(t *testing.T) string {
 	t.Helper()
 	path, _ := fakeAX(t)

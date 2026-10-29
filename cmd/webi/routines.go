@@ -27,18 +27,12 @@ type routineView struct {
 	Last        *routine.RunResult `json:"last,omitempty"`
 }
 
-// botTarget is one bot directory the UI can read: the bot root when no
-// channel is given, or one channel.
 type botTarget struct {
 	Paths       botdir.Paths
 	Channel     string
 	ChannelName string
 }
 
-// resolveChannelRoot picks the bot root for a channel. The host's bot.toml is
-// the default for every channel; a folder that has its own bot.toml is a
-// standalone bot and keeps overriding it. Channels no longer need a bot.toml
-// just to have tools.
 func resolveChannelRoot(hostRoot string, channel Channel) string {
 	if botdir.Exists(filepath.Join(channel.Workdir, "bot.toml")) {
 		return channel.Workdir
@@ -49,10 +43,6 @@ func resolveChannelRoot(hostRoot string, channel Channel) string {
 	return channel.Workdir
 }
 
-// resolveChannelPaths keeps definition paths (bot.md, skills, host routines)
-// on the bot root and runtime paths (workspace, state) on the channel. A
-// channel may add its own routines/ without a full bot.toml; those win over
-// the host's.
 func resolveChannelPaths(hostRoot string, channel Channel) botdir.Paths {
 	paths := botdir.ResolveData(resolveChannelRoot(hostRoot, channel), channel.Workdir)
 	if routines := filepath.Join(channel.Workdir, "routines"); botdir.IsDir(routines) {
@@ -142,8 +132,6 @@ func (s *Server) handleRoutines(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"routines": views})
 }
 
-// publishRoutine pushes a finished run to every open UI. The client decides
-// whether to show a notification; the browser never polls for it.
 func (s *Server) publishRoutine(channel Channel, item routine.Routine, result routine.RunResult) {
 	s.publish(map[string]any{
 		"type": "routine",
@@ -213,8 +201,6 @@ func (s *Server) handleRoutineLog(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"run": last, "log": tailFile(last.Log)})
 }
 
-// handleRoutineCurrent returns the run in progress, so the UI can tail it
-// while the POST that started it is still open.
 func (s *Server) handleRoutineCurrent(w http.ResponseWriter, req *http.Request) {
 	target, err := s.botTarget(req.URL.Query().Get("channel"))
 	if err != nil {
@@ -281,8 +267,6 @@ func (s *Server) handleRoutineRunLog(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"run": result, "log": tailFile(result.Log)})
 }
 
-// tailFile reads at most maxRoutineLog bytes from the end of a run log, so a
-// chatty routine cannot blow up the API response.
 func tailFile(path string) string {
 	file, err := os.Open(path)
 	if err != nil {

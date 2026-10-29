@@ -14,6 +14,12 @@ import (
 	"unicode/utf8"
 )
 
+func TestMain(m *testing.M) {
+	os.Unsetenv("BOT_ROOT")
+	os.Unsetenv("BOT_DATA")
+	os.Exit(m.Run())
+}
+
 func TestDescribeValid(t *testing.T) {
 	var descriptor map[string]any
 	if err := json.Unmarshal([]byte(describe), &descriptor); err != nil {

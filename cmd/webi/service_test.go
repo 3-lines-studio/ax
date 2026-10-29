@@ -89,7 +89,7 @@ func TestRunSetup(t *testing.T) {
 	_ = listener.Close()
 
 	root := filepath.Join(home, "bots", "me")
-	if err := runSetup(setupOptions{Root: root, Listen: "127.0.0.1:" + strconv.Itoa(port), AXPath: "ax"}); err != nil { // Wait 0: the fake service does not bind
+	if err := runSetup(setupOptions{Root: root, Listen: "127.0.0.1:" + strconv.Itoa(port), AXPath: "ax"}); err != nil {
 		t.Fatal(err)
 	}
 	unit, err := os.ReadFile(filepath.Join(home, ".config", "systemd", "user", serviceName))

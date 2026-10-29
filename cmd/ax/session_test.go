@@ -233,8 +233,6 @@ func TestDeriveLegacyToolMessage(t *testing.T) {
 	}
 }
 
-// An interrupted call is kept in the history as an error and named in the
-// resume turn, so the model verifies instead of replaying.
 func TestDeriveSessionNamesInterruptedCalls(t *testing.T) {
 	entries := []sessionEntry{
 		{Type: entryRunStart, RunID: "r1"},

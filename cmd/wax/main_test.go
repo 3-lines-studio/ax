@@ -112,10 +112,6 @@ func TestFetchRendered(t *testing.T) {
 	if _, err := chromiumPath(); err != nil {
 		t.Skip(err)
 	}
-	// A cold Chromium on a CI runner can take longer than the page fetch. The
-	// launch is environmental, the rendering is not: warm it up first and skip
-	// when the browser cannot start, so a slow runner does not fail a test that
-	// says nothing about the code.
 	warmChromium(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -156,8 +152,6 @@ func TestFetchRendered(t *testing.T) {
 	}
 }
 
-// warmChromium starts the browser once, with a generous timeout, and skips the
-// test when it cannot. Everything after runs against a live instance.
 func warmChromium(t *testing.T) {
 	t.Helper()
 	chromium, err := chromiumPath()

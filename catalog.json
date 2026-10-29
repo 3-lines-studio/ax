@@ -9,8 +9,7 @@
       "role": "Headless agent engine",
       "description": "A minimal headless LLM coding-agent harness for scripts and Unix-style clients.",
       "protocol": "--events JSONL",
-      "depends_on": [],
-      "doc": "cmd/ax/README.md"
+      "depends_on": []
     },
     {
       "name": "boti",
@@ -21,8 +20,7 @@
       "depends_on": [
         "ax",
         "slaxi"
-      ],
-      "doc": "cmd/boti/README.md"
+      ]
     },
     {
       "name": "slaxi",
@@ -32,8 +30,7 @@
       "protocol": "Slack Events API",
       "depends_on": [
         "ax"
-      ],
-      "doc": "cmd/slaxi/README.md"
+      ]
     },
     {
       "name": "wax",
@@ -41,8 +38,7 @@
       "role": "Web search and fetch",
       "description": "Searches the web (DeepSeek Search) and fetches pages as Markdown, for ax and other LLM tools.",
       "protocol": "describe/run",
-      "depends_on": [],
-      "doc": "cmd/wax/README.md"
+      "depends_on": []
     },
     {
       "name": "bqx",
@@ -50,8 +46,7 @@
       "role": "BigQuery tool",
       "description": "Read-only BigQuery queries for ax.",
       "protocol": "describe/run",
-      "depends_on": [],
-      "doc": "cmd/bqx/README.md"
+      "depends_on": []
     },
     {
       "name": "pgx",
@@ -59,8 +54,7 @@
       "role": "PostgreSQL tool",
       "description": "Read-only PostgreSQL queries for ax.",
       "protocol": "describe/run",
-      "depends_on": [],
-      "doc": "cmd/pgx/README.md"
+      "depends_on": []
     },
     {
       "name": "slackx",
@@ -68,8 +62,7 @@
       "role": "Slack file-upload tool",
       "description": "Uploads files to Slack for ax.",
       "protocol": "describe/run",
-      "depends_on": [],
-      "doc": "cmd/slackx/README.md"
+      "depends_on": []
     },
     {
       "name": "browserx",
@@ -77,8 +70,7 @@
       "role": "Chromium tool",
       "description": "Visible Chromium browser tool for ax.",
       "protocol": "describe/run",
-      "depends_on": [],
-      "doc": "cmd/browserx/README.md"
+      "depends_on": []
     },
     {
       "name": "bashx",
@@ -86,8 +78,7 @@
       "role": "Bash tool",
       "description": "Runs non-interactive shell commands for ax.",
       "protocol": "describe/run",
-      "depends_on": [],
-      "doc": "cmd/bashx/README.md"
+      "depends_on": []
     },
     {
       "name": "fsx",
@@ -95,8 +86,7 @@
       "role": "Filesystem tools",
       "description": "Reads, writes and edits files inside the workspace.",
       "protocol": "describe/run",
-      "depends_on": [],
-      "doc": "cmd/fsx/README.md"
+      "depends_on": []
     },
     {
       "name": "sshx",
@@ -104,8 +94,7 @@
       "role": "Remote filesystem and shell",
       "description": "Reads, writes, edits and runs commands on a remote host over SSH, so a bot can work on a remote workspace with the same tool names as fsx and bashx.",
       "protocol": "describe/run",
-      "depends_on": [],
-      "doc": "cmd/sshx/README.md"
+      "depends_on": []
     },
     {
       "name": "skillx",
@@ -113,8 +102,7 @@
       "role": "Agent Skills provider",
       "description": "Exposes Agent Skills to ax.",
       "protocol": "describe/run",
-      "depends_on": [],
-      "doc": "cmd/skillx/README.md"
+      "depends_on": []
     },
     {
       "name": "memoryx",
@@ -122,8 +110,7 @@
       "role": "Personal memory",
       "description": "Durable personal facts as readable JSON files under state/memory, exposed as search/get/verify/upsert/delete tools for ax.",
       "protocol": "describe/run",
-      "depends_on": [],
-      "doc": "cmd/memoryx/README.md"
+      "depends_on": []
     },
     {
       "name": "attachx",
@@ -131,17 +118,7 @@
       "role": "Conversation attachment tool",
       "description": "Copies workspace files into the bot's artifact directory so a transport can deliver them to the user.",
       "protocol": "describe/run",
-      "depends_on": [],
-      "doc": "cmd/attachx/README.md"
-    },
-    {
-      "name": "botdir",
-      "kind": "spec",
-      "role": "Botdir specification",
-      "description": "The portable directory interface for bots. Not a binary: every other piece conforms to it.",
-      "protocol": "",
-      "depends_on": [],
-      "doc": "docs/botdir/BOTDIR.md"
+      "depends_on": []
     },
     {
       "name": "webi",
@@ -151,8 +128,7 @@
       "protocol": "sse + /api",
       "depends_on": [
         "ax"
-      ],
-      "doc": "cmd/webi/README.md"
+      ]
     }
   ]
 }

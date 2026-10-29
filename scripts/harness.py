@@ -1,25 +1,3 @@
-#!/usr/bin/env python3
-"""Black-box end-to-end harness for ax.
-
-Drives the real binary the way a user would: a hermetic HOME and
-XDG_CONFIG_HOME, a scripted mock OpenAI-compatible endpoint, one-shot CLI
-runs, and a PTY session for the interactive TUI. Stdlib only.
-
-Usage:
-    python3 scripts/harness.py [--bin bin/ax] [--filter name] [--list]
-
-Every case gets a fresh temp HOME. Failures keep their temp dir and print
-its path. The mock server answers /chat/completions from a scenario: the
-Nth request gets scenario[N], the rest repeat the last entry. Each entry is
-one of:
-
-    {"status": 429, "body": "..."}                 error response
-    {"stream": [chunk, ...]}                       SSE (when stream:true)
-    {"body": {...}}                                plain JSON response
-
-A chunk is a raw OpenAI SSE payload dict. Helpers: content_chunk, tool_chunk,
-usage_chunk. The /models endpoint returns two fake models.
-"""
 import fcntl
 import http.server
 import json
@@ -45,23 +23,17 @@ ANSI_RE = re.compile(
     r"|\x1b"
 )
 
-
 def strip_ansi(b):
     if isinstance(b, bytes):
         b = b.decode("utf-8", "replace")
     return ANSI_RE.sub("", b)
 
-
 def check(cond, msg):
     if not cond:
         raise AssertionError(msg)
 
-
-# --- mock OpenAI-compatible endpoint -------------------------------------
-
 def content_chunk(text, finish=None):
     return {"choices": [{"delta": {"content": text}, "finish_reason": finish}]}
-
 
 def tool_chunk(name, args, cid="call_1", finish="tool_calls"):
     return {
@@ -82,10 +54,8 @@ def tool_chunk(name, args, cid="call_1", finish="tool_calls"):
         ]
     }
 
-
 def usage_chunk(inp, out):
     return {"usage": {"prompt_tokens": inp, "completion_tokens": out}}
-
 
 ANSWER_SCENARIO = [
     {"stream": [content_chunk("# Done\n\nThe **plan** worked.\n", "stop"), usage_chunk(20, 8)]}
@@ -133,7 +103,6 @@ REWIND_SCENARIO = [
     {"stream": [content_chunk("FIRST ANSWER", "stop"), usage_chunk(5, 3)]},
     {"stream": [content_chunk("SECOND ANSWER", "stop"), usage_chunk(5, 3)]},
 ]
-
 
 class MockServer:
     def __init__(self, scenario, chunk_delay=0.01):
@@ -244,9 +213,6 @@ class MockServer:
 
         return H
 
-
-# --- hermetic environment -------------------------------------------------
-
 class Harness:
     def __init__(self, root):
         self.root = Path(root)
@@ -302,7 +268,13 @@ class Harness:
             }
         )
         e.pop("TMUX", None)
+        # Hermetic means no ambient credentials: a shell carrying the real
+        # DEEPSEEK_API_KEY would win over the config and the sk-test key below.
         e.pop("OPENAI_API_KEY", None)
+        e.pop("DEEPSEEK_API_KEY", None)
+        for name in list(e):
+            if name.startswith(("BOT_", "AX_WEB_")):
+                e.pop(name, None)
         if api_key is not None:
             e["OPENAI_API_KEY"] = api_key
         if extra:
@@ -372,9 +344,6 @@ class Harness:
             args = ["-base", base] + (args or [])
         return Tui(ax, self.env(api_key=api_key, extra=extra_env), args or [], cwd=str(self.work), cols=cols, rows=rows)
 
-
-# --- PTY driver for the TUI ----------------------------------------------
-
 KEYS = {
     "enter": b"\r",
     "esc": b"\x1b",
@@ -386,7 +355,6 @@ KEYS = {
     "shift_enter": b"\x1b[13;2u",
     "eof": b"\x04",
 }
-
 
 class Tui:
     def __init__(self, ax, env, args, cwd, cols=100, rows=30):
@@ -403,8 +371,6 @@ class Tui:
         self._thread.start()
 
     def _pump(self):
-        # The TUI repaints constantly; if the master is not drained the PTY
-        # output buffer fills and the TUI blocks on write, never reading keys.
         while not self._stop.is_set():
             r, _, _ = select.select([self.master], [], [], 0.05)
             if not r:
@@ -476,28 +442,20 @@ class Tui:
         except OSError:
             pass
 
-
-# --- test cases ----------------------------------------------------------
-
 CASES = []
-
 
 def case(fn):
     CASES.append(fn)
     return fn
 
-
 def body_msg(server, i, role):
     return [m for m in server.requests[i]["json"]["messages"] if m["role"] == role]
-
 
 def read_events(p):
     return [json.loads(line) for line in p.stdout.splitlines()]
 
-
 def last_result(events):
     return [e for e in events if e.get("type") == "result"][-1]
-
 
 def bash_provider(h):
     sh = h.root / "bashprovider"
@@ -518,7 +476,6 @@ sys.exit(1)
     sh.chmod(0o755)
     return sh
 
-
 @case
 def oneshot_prints_answer(h, ax):
     with h.mock(ANSWER_SCENARIO) as srv:
@@ -536,7 +493,6 @@ def oneshot_prints_answer(h, ax):
             "auth header wrong: %s" % srv.requests[0]["headers"],
         )
 
-
 @case
 def oneshot_stdin(h, ax):
     with h.mock(ANSWER_SCENARIO) as srv:
@@ -547,7 +503,6 @@ def oneshot_stdin(h, ax):
             body_msg(srv, 0, "user")[-1]["content"] == "hello from stdin",
             "stdin prompt not sent",
         )
-
 
 @case
 def oneshot_events(h, ax):
@@ -560,8 +515,6 @@ def oneshot_events(h, ax):
         check(any(e.get("type") == "usage" for e in events), "no usage event")
         check(events[-1] == {"type": "done", "outcome": "done"}, "bad final event")
 
-
-
 @case
 def oneshot_explicit_session(h, ax):
     session = h.root / "thread.jsonl"
@@ -572,7 +525,6 @@ def oneshot_explicit_session(h, ax):
         check(session.is_file(), "session was not written")
         users = body_msg(srv, 1, "user")
         check([m["content"] for m in users] == ["first", "second"], "session context lost")
-
 
 @case
 def oneshot_tool_loop(h, ax):
@@ -597,7 +549,6 @@ def oneshot_tool_loop(h, ax):
             any("hello" in m.get("content", "") for m in tool_msgs),
             "tool result not fed back: %s" % tool_msgs,
         )
-
 
 @case
 def oneshot_catalog_search(h, ax):
@@ -629,7 +580,6 @@ def oneshot_catalog_search(h, ax):
             "search result not fed back: %s" % tool_msgs,
         )
 
-
 @case
 def oneshot_direct_tools(h, ax):
     with h.mock(DIRECT_SCENARIO) as srv:
@@ -641,7 +591,6 @@ def oneshot_direct_tools(h, ax):
         )
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
         check((h.work / "direct.txt").read_text() == "direct", "direct tool did not run")
-
 
 @case
 def mcp_add_from_registry(h, ax):
@@ -657,7 +606,6 @@ def mcp_add_from_registry(h, ax):
     check(len(servers) == 1 and servers[0]["name"] == "sentry", "listed: %s" % servers)
     check(servers[0]["auth"] == "oauth", "auth kind wrong: %s" % servers)
     check(servers[0]["status"] == "login required", "status wrong: %s" % servers)
-
 
 @case
 def mcp_import_document(h, ax):
@@ -679,21 +627,16 @@ def mcp_import_document(h, ax):
     again = h.oneshot(ax, ["mcp", "import", str(path)])
     check("already configured" in again.stderr, "second import: %s" % again.stderr[-500:])
 
-
 COMPACT_SCENARIO = [
-    # First turn: a tool call and a prompt that is already over half the window.
     {
         "stream": [
             tool_chunk("execute", {"tool": "bashprovider.bash", "arguments": {"command": "echo busy"}}),
             usage_chunk(8000, 5),
         ]
     },
-    # The summarizer's own request.
     {"stream": [content_chunk("SUMMARY: the user asked for work; a tool ran.", "stop"), usage_chunk(50, 12)]},
-    # The run continues with the summary in the system prompt.
     {"stream": [content_chunk("# Done\n\nCompacted and finished.\n", "stop"), usage_chunk(60, 8)]},
 ]
-
 
 @case
 def connections_list_and_doctor(h, ax):
@@ -717,7 +660,6 @@ def connections_list_and_doctor(h, ax):
     check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
     check("1 declared, 1 on" in p.stdout, "doctor = %s" % p.stdout)
     check("ready" in p.stdout, "doctor = %s" % p.stdout)
-
 
 @case
 def oneshot_connection_id_reaches_the_model(h, ax):
@@ -754,7 +696,6 @@ def oneshot_connection_id_reaches_the_model(h, ax):
         )
         check((h.work / "workspace" / "conn.txt").read_text().strip() == "via-connection", "the tool did not run")
 
-
 @case
 def oneshot_compute_connection_sets_the_workspace(h, ax):
     provider = bash_provider(h)
@@ -778,7 +719,6 @@ def oneshot_compute_connection_sets_the_workspace(h, ax):
         check((ws / "conn.txt").read_text().strip() == "via-connection", "tool did not run in the compute root")
         check(not (h.work / "workspace" / "conn.txt").exists(), "tool ran in the default workspace")
 
-
 @case
 def oneshot_compute_root_must_exist(h, ax):
     h.write_config(
@@ -791,7 +731,6 @@ def oneshot_compute_root_must_exist(h, ax):
     p = h.oneshot(ax, ["hello"], stdin=b"")
     check(p.returncode != 0, "a missing compute root must fail")
     check("root" in p.stderr and "missing" in p.stderr, "stderr = %s" % p.stderr)
-
 
 @case
 def oneshot_steering(h, ax):
@@ -816,7 +755,6 @@ def oneshot_steering(h, ax):
     entries = [json.loads(line) for line in session.read_text().splitlines() if line.strip()]
     user_entries = [e["message"]["Content"] for e in entries if e["type"] == "message" and e["message"]["Role"] == "user"]
     check(user_entries == ["use tools", "also mention the tests"], "session users = %s" % user_entries)
-
 
 @case
 def oneshot_resume(h, ax):
@@ -849,7 +787,6 @@ def oneshot_resume(h, ax):
     check(again.returncode == 2, "resuming a finished session must fail: %s" % again.returncode)
     check("no interrupted run" in again.stderr, "stderr = %s" % again.stderr)
 
-
 @case
 def selftest_passes_and_fails(h, ax):
     h.write_config("[[connection]]\nid = \"shell\"\nkind = \"local\"\ncommand = \"%s\"\n" % bash_provider(h))
@@ -861,7 +798,6 @@ def selftest_passes_and_fails(h, ax):
     p = h.oneshot(ax, ["selftest"], stdin=b"")
     check(p.returncode == 1, "a broken compute root must fail: %s" % p.returncode)
     check("fail:" in p.stdout, "stdout = %s" % p.stdout)
-
 
 @case
 def oneshot_secret_request(h, ax):
@@ -914,7 +850,6 @@ sys.exit(1)
     check('"ask"' not in log, "the envelope was written to the session")
     check("s3cret-value" not in log, "the secret leaked into the session log")
 
-
 @case
 def oneshot_auto_compaction(h, ax):
     session = h.root / "compact.jsonl"
@@ -949,7 +884,6 @@ def oneshot_auto_compaction(h, ax):
         "session log has no compaction entry",
     )
 
-
 @case
 def oneshot_tool_workdir(h, ax):
     with h.mock(WRITE_FILE_SCENARIO) as srv:
@@ -961,7 +895,6 @@ def oneshot_tool_workdir(h, ax):
         )
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
         check((h.work / "out.txt").read_text() == "hi", "tool ran in wrong dir")
-
 
 @case
 def oneshot_flags_and_config(h, ax):
@@ -978,7 +911,6 @@ def oneshot_flags_and_config(h, ax):
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
         check(srv.requests[0]["json"]["model"] == "cfg-model", "config model ignored")
 
-
 @case
 def oneshot_config_api_key(h, ax):
     h.write_secret("api-key", "cfg-key")
@@ -990,7 +922,6 @@ def oneshot_config_api_key(h, ax):
             "config key not used",
         )
 
-
 @case
 def oneshot_env_beats_config(h, ax):
     h.write_secret("api-key", "cfg-key")
@@ -1001,7 +932,6 @@ def oneshot_env_beats_config(h, ax):
             srv.requests[0]["headers"].get("Authorization") == "Bearer env-key",
             "env key should win over config",
         )
-
 
 @case
 def oneshot_retry(h, ax):
@@ -1017,7 +947,6 @@ def oneshot_retry(h, ax):
         statuses = [r["headers"].get("Content-Length") for r in srv.requests]
         check(statuses, "requests recorded without bodies")
 
-
 @case
 def oneshot_retry_exhausted(h, ax):
     scenario = [{"status": 429, "body": '{"error":{"message":"rate limited"}}'}] * 3
@@ -1029,7 +958,6 @@ def oneshot_retry_exhausted(h, ax):
         check("429" in err["message"] and "rate limited" in err["message"], "error event: %s" % err)
         check(len(srv.requests) == 3, "expected 3 attempts, got %d" % len(srv.requests))
 
-
 @case
 def oneshot_provider_down(h, ax):
     p = h.oneshot(ax, ["--events", "hi"], base="http://127.0.0.1:1")
@@ -1038,20 +966,17 @@ def oneshot_provider_down(h, ax):
     check(any(e.get("type") == "error" for e in events), "no error event: %s" % p.stdout[-500:])
     check(events[-1] == {"type": "done", "outcome": "failed"}, "bad final event: %s" % events[-1])
 
-
 @case
 def oneshot_bad_flag(h, ax):
     p = h.oneshot(ax, ["-nope"])
     check(p.returncode == 2, "expected exit 2, got %s" % p.returncode)
     check("flag provided but not defined" in p.stderr, "stderr: %s" % p.stderr[-500:])
 
-
 @case
 def oneshot_help(h, ax):
     p = h.oneshot(ax, ["--help"])
     check(p.returncode == 0, "expected exit 0, got %s" % p.returncode)
     check("Usage: ax" in p.stderr, "stderr: %s" % p.stderr[-500:])
-
 
 @case
 def oneshot_user_command(h, ax):
@@ -1063,9 +988,6 @@ def oneshot_user_command(h, ax):
             body_msg(srv, 0, "user")[-1]["content"] == "stage everything now",
             "user command not expanded",
         )
-
-
-
 
 @case
 def oneshot_bot_config_and_prompt(h, ax):
@@ -1079,7 +1001,6 @@ def oneshot_bot_config_and_prompt(h, ax):
         sys_msgs = [m for m in req["messages"] if m["role"] == "system"]
         check(any("bot instructions" in m.get("content", "") for m in sys_msgs), "bot.md not in system")
 
-
 @case
 def oneshot_bot_unknown_keys(h, ax):
     h.write_config('model = "bot-model"\n\n[slack]\nmention_only = true\nnewkey = "x"\n')
@@ -1087,7 +1008,6 @@ def oneshot_bot_unknown_keys(h, ax):
         p = h.oneshot(ax, ["hi"], base=srv.base_url)
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
         check(srv.requests[0]["json"]["model"] == "bot-model", "model lost with unknown keys")
-
 
 @case
 def oneshot_bot_workspace(h, ax):
@@ -1103,7 +1023,6 @@ def oneshot_bot_workspace(h, ax):
         )
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
         check((ws / "out.txt").read_text() == "hi", "tool did not run in workspace")
-
 
 @case
 def oneshot_bot_workspace_split(h, ax):
@@ -1121,7 +1040,6 @@ def oneshot_bot_workspace_split(h, ax):
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
         check((ws / "out.txt").read_text() == "hi", "tool did not run in BOT_DATA workspace")
         check(not (h.work / "workspace" / "out.txt").exists(), "tool wrote to bot root workspace instead of BOT_DATA")
-
 
 def main(argv):
     ax = "bin/ax"
@@ -1174,7 +1092,6 @@ def main(argv):
         return 1
     print("all %d cases passed" % len(CASES))
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))

@@ -1,6 +1,3 @@
-// Command webi is the browser transport for ax. It serves a static UI, keeps
-// channels (bot directories) and threads (ax sessions), and streams one ax
-// process per message, exactly like slaxi does for Slack.
 package main
 
 import (
@@ -34,7 +31,7 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: webi [flags] [setup]")
 		fmt.Fprintln(os.Stderr)
-		fmt.Fprintln(os.Stderr, "  setup   install a systemd user unit, start the UI and open it")
+		fmt.Fprintln(os.Stderr, " setup install a systemd user unit, start the UI and open it")
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "flags:")
 		flag.PrintDefaults()
@@ -81,7 +78,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
-	// The first channel is the bot root itself, so a fresh install works.
 	channels := store.Channels()
 	if len(channels) == 1 && channels[0].Workdir == state {
 		channels[0].Workdir = paths.Root
@@ -111,10 +107,8 @@ func main() {
 	}
 	srv.token = token
 
-	// A promotion restarts webi; the key the host kept saves the PIN.
 	srv.adoptVaultKey()
 
-	// A run that outlived the last process is picked up here, not by the user.
 	srv.StartResumeLoop(resumeInterval)
 
 	server := &http.Server{
@@ -142,8 +136,6 @@ func main() {
 	}
 }
 
-// buildID labels the process for /healthz and the UI. The host that supervises
-// a build sets AX_BUILD (boti serve does); a plain checkout reports "dev".
 func buildID() string {
 	if v := strings.TrimSpace(os.Getenv("AX_BUILD")); v != "" {
 		return v
@@ -202,7 +194,6 @@ func readSession(path string) ([]map[string]any, error) {
 				continue
 			}
 			if entry.Resume && msg.Role == "user" {
-				// The resume turn is ax talking to the model, not the user.
 				events = append(events, map[string]any{"t": "resume", "ts": eventTime(entry.At)})
 				continue
 			}
