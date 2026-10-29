@@ -358,6 +358,24 @@ func (s *Server) handleMkdir(w http.ResponseWriter, r *http.Request) {
 
 // --- channels --------------------------------------------------------------
 
+// cleanWorkdir validates the bot root a channel points at. The folder must
+// exist: creating it is the picker's job, and a typo should fail loudly instead
+// of becoming an empty tool catalog.
+func cleanWorkdir(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("workdir is required")
+	}
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("workdir must be absolute: %s", path)
+	}
+	path = filepath.Clean(path)
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		return "", fmt.Errorf("workdir is not a directory: %s", path)
+	}
+	return path, nil
+}
+
 func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name    string `json:"name"`
@@ -366,13 +384,9 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	workdir := strings.TrimSpace(req.Workdir)
-	if workdir == "" {
-		writeErr(w, 400, "workdir is required")
-		return
-	}
-	if info, err := os.Stat(workdir); err != nil || !info.IsDir() {
-		writeErr(w, 400, "workdir is not a directory: "+workdir)
+	workdir, err := cleanWorkdir(req.Workdir)
+	if err != nil {
+		writeErr(w, 400, err.Error())
 		return
 	}
 	id, err := randomID()
@@ -396,12 +410,21 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name   *string `json:"name"`
-		Prompt *string `json:"prompt"`
-		Pinned *bool   `json:"pinned"`
+		Name    *string `json:"name"`
+		Workdir *string `json:"workdir"`
+		Prompt  *string `json:"prompt"`
+		Pinned  *bool   `json:"pinned"`
 	}
 	if !readJSON(w, r, &req) {
 		return
+	}
+	if req.Workdir != nil {
+		workdir, err := cleanWorkdir(*req.Workdir)
+		if err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		channel.Workdir = workdir
 	}
 	if req.Name != nil {
 		channel.Name = strings.TrimSpace(*req.Name)
