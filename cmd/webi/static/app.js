@@ -1025,10 +1025,27 @@ function imagesHTML(ids) {
     '<img src="/api/blobs/' + esc(id) + '" alt="image" loading="lazy"></a>').join('') + '</div>';
 }
 
+function artifactsHTML(items) {
+  if (!items || !items.length) return '';
+  return '<div class="artifacts">' + items.map((a) =>
+    '<a class="artifact" href="/api/threads/' + esc(S.threadId) + '/artifacts/' + esc(a.id) + '"' +
+    ' download="' + esc(a.name || a.id) + '" rel="noopener">' +
+    '<span class="artifact-name">' + esc(a.name || a.id) + '</span>' +
+    (a.size ? '<span class="artifact-size">' + esc(fmtSize(a.size)) + '</span>' : '') +
+    '</a>').join('') + '</div>';
+}
+
+function fmtSize(n) {
+  if (n >= 1 << 20) return (n / (1 << 20)).toFixed(1) + ' MB';
+  if (n >= 1 << 10) return (n / (1 << 10)).toFixed(1) + ' KB';
+  return n + ' B';
+}
+
 function messageHTML(m) {
   if (m.t === 'usage') return '';
   if (m.t === 'compaction') return '<div class="divider">context compacted</div>';
   if (m.t === 'resume') return '<div class="divider">run resumed after an interruption</div>';
+  if (m.t === 'artifacts') return artifactsHTML(m.artifacts);
   if (m.t === 'error') {
     return '<div class="msg error"><div class="avatar">!</div><div class="body-wrap">' +
       '<div class="head"><span class="who">error</span><span class="time">' + fmtTime(m.ts) + '</span></div>' +
@@ -1037,7 +1054,7 @@ function messageHTML(m) {
   const isUser = m.t === 'user';
   const name = isUser ? authorName(m) : 'ax';
   const body = (isUser ? '<p>' + esc(m.text).replace(/\n/g, '<br>') + '</p>' : md(m.text));
-  return bubbleShell(isUser ? 'user' : 'assistant', name, m.ts, imagesHTML(m.images) + body);
+  return bubbleShell(isUser ? 'user' : 'assistant', name, m.ts, imagesHTML(m.images) + body + artifactsHTML(m.artifacts));
 }
 
 function liveHTML(id, text) {
@@ -1390,6 +1407,9 @@ function handleEvent(ev) {
       trackRoutine(ev.routine);
       if (routineView === 'list') loadRoutines();
       break;
+    case 'artifact':
+      if (ev.thread === S.threadId) onArtifact(ev);
+      break;
     case 'step':
       break;
   }
@@ -1441,6 +1461,26 @@ function onMessage(ev) {
   S.messages.push(m);
   renderMessages(false);
   renderWorking();
+  updateJumpLatest();
+}
+
+function onArtifact(ev) {
+  const item = ev.artifact;
+  if (!item || !item.id) return;
+  const last = S.messages[S.messages.length - 1];
+  // Attach to the assistant bubble being written when possible, so the file
+  // lands where the reader expects it instead of in its own block.
+  if (last && last.t === 'assistant') {
+    last.artifacts = (last.artifacts || []).concat([item]);
+  } else {
+    const tail = S.messages[S.messages.length - 1];
+    if (tail && tail.t === 'artifacts') {
+      tail.artifacts.push(item);
+    } else {
+      S.messages.push({ t: 'artifacts', ts: new Date().toISOString(), artifacts: [item] });
+    }
+  }
+  renderMessages(false);
   updateJumpLatest();
 }
 

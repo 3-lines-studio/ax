@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -106,6 +107,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/threads/{id}/compact", s.handleCompact)
 	mux.HandleFunc("POST /api/blobs", s.handleUpload)
 	mux.HandleFunc("GET /api/blobs/{id}", s.handleBlob)
+	mux.HandleFunc("GET /api/threads/{id}/artifacts/{name}", s.handleArtifact)
 	mux.HandleFunc("GET /", s.handleStatic)
 	return securityHeaders(mux)
 }
@@ -590,11 +592,14 @@ func (s *Server) startResume(thread Thread) error {
 	}, "")
 }
 
-func runEnv(thread Thread, channel Channel, user string) []string {
+func runEnv(thread Thread, channel Channel, user string, artifacts string) []string {
 	env := []string{
 		"AX_WEB_THREAD=" + thread.ID,
 		"AX_WEB_CHANNEL=" + channel.ID,
 		"BOT_DATA=" + channel.Workdir,
+	}
+	if artifacts != "" {
+		env = append(env, "AX_ARTIFACT_DIR="+artifacts)
 	}
 	if channel.Name != "" {
 		env = append(env, "AX_WEB_CHANNEL_NAME="+channel.Name)
@@ -625,7 +630,7 @@ func (s *Server) launch(thread Thread, job axrun.Job, prompt string) error {
 	cfg.BotRoot = s.channelRoot(channel)
 	cfg.Model = firstNonEmpty(settings.Model, cfg.Model)
 	cfg.BaseURL = firstNonEmpty(settings.BaseURL, cfg.BaseURL)
-	env := runEnv(thread, channel, settings.Name)
+	env := runEnv(thread, channel, settings.Name, s.store.ArtifactsDir(thread.ID))
 	vaultEnv, cleanupVault, err := s.vault.Env(channel.VaultScope)
 	if err != nil {
 		s.releaseRun(thread.ID)
@@ -709,6 +714,14 @@ func (s *Server) forwardEvent(threadID string, event axrun.Event) {
 				"total_tokens":        usage.Input + usage.Output,
 			},
 			"ts": time.Now().UTC(),
+		}})
+	case "tool_done":
+		spec, ok := parseArtifactOutput(event.Output)
+		if !ok {
+			return
+		}
+		s.publish(map[string]any{"type": "artifact", "thread": threadID, "artifact": map[string]any{
+			"id": spec.ID, "name": spec.Name, "media_type": spec.MediaType, "size": spec.Size,
 		}})
 	case "compaction":
 		s.publish(map[string]any{"type": "compact", "thread": threadID, "upto": event.Upto})
@@ -802,6 +815,16 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"id": id, "url": "/api/blobs/" + id})
+}
+
+func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
+	path, ok := s.store.ArtifactPath(r.PathValue("id"), r.PathValue("name"))
+	if !ok {
+		writeErr(w, 404, "unknown artifact")
+		return
+	}
+	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(filepath.Base(path)))
+	http.ServeFile(w, r, path)
 }
 
 func (s *Server) handleBlob(w http.ResponseWriter, r *http.Request) {
