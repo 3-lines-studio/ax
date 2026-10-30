@@ -164,13 +164,18 @@ func TestRuntimeSectionNamesTheEngineAndHost(t *testing.T) {
 		"User: Don",
 		"Model: deepseek-flash at https://api.deepseek.com",
 		"context 1000000 tokens",
-		"compact at 50%",
 		"tools: catalog",
 		"Session: /tmp/s.jsonl",
-		"Time: 2026-10-29T16:00:00Z",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("runtime section missing %q:\n%s", want, got)
 		}
+	}
+	clock := clockSection(rt.Now)
+	if !strings.Contains(clock, "Time: 2026-10-29T16:00:00Z") {
+		t.Errorf("clock section = %q", clock)
+	}
+	if strings.Contains(got, "compact at") {
+		t.Errorf("the stable prompt must not carry the compaction threshold: %s", got)
 	}
 }

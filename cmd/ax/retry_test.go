@@ -102,7 +102,7 @@ func TestRequestStreamSuccessForwardsEvents(t *testing.T) {
 	p := &fakeProvider{handles: []*StreamHandle{h}}
 	sink := &recordingSink{}
 
-	gotResp, gotCalls, err := requestStream(p, &runOptions{model: "m"}, []Message{}, &atomic.Bool{}, sink)
+	gotResp, gotCalls, err := requestStream(p, &runOptions{model: "m"}, []Message{}, &atomic.Bool{}, sink, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestRequestStreamSuccessForwardsEvents(t *testing.T) {
 func TestRequestStreamNoRetryAfterForwardedEvents(t *testing.T) {
 	h := handleWithResponse(Response{}, newTransport("conn reset"), StreamEvent{Kind: eventContent, Text: "partial"})
 	p := &fakeProvider{handles: []*StreamHandle{h}}
-	_, _, err := requestStream(p, &runOptions{}, []Message{}, &atomic.Bool{}, &recordingSink{})
+	_, _, err := requestStream(p, &runOptions{}, []Message{}, &atomic.Bool{}, &recordingSink{}, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -139,7 +139,7 @@ func TestRequestStreamRetriesTransportOnce(t *testing.T) {
 	h1 := handleWithResponse(Response{}, newTransport("conn reset"))
 	h2 := handleWithResponse(Response{Message: Message{Role: "assistant", Content: "ok"}}, nil, StreamEvent{Kind: eventDone})
 	p := &fakeProvider{handles: []*StreamHandle{h1, h2}}
-	got, _, err := requestStream(p, &runOptions{}, []Message{}, &atomic.Bool{}, &recordingSink{})
+	got, _, err := requestStream(p, &runOptions{}, []Message{}, &atomic.Bool{}, &recordingSink{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestRequestStreamRetriesHTTP500Once(t *testing.T) {
 	h1 := handleWithResponse(Response{}, newHTTP(500, "boom"))
 	h2 := handleWithResponse(Response{Message: Message{Role: "assistant", Content: "ok"}}, nil, StreamEvent{Kind: eventDone})
 	p := &fakeProvider{handles: []*StreamHandle{h1, h2}}
-	got, _, err := requestStream(p, &runOptions{}, []Message{}, &atomic.Bool{}, &recordingSink{})
+	got, _, err := requestStream(p, &runOptions{}, []Message{}, &atomic.Bool{}, &recordingSink{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestRequestStreamRetriesHTTP500Once(t *testing.T) {
 func TestRequestStreamDoesNotRetryProviderError(t *testing.T) {
 	h := handleWithResponse(Response{}, newProvider("bad gateway"))
 	p := &fakeProvider{handles: []*StreamHandle{h}}
-	_, _, err := requestStream(p, &runOptions{}, []Message{}, &atomic.Bool{}, &recordingSink{})
+	_, _, err := requestStream(p, &runOptions{}, []Message{}, &atomic.Bool{}, &recordingSink{}, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -182,7 +182,7 @@ func TestRequestStreamDoesNotRetryProviderError(t *testing.T) {
 func TestRequestStreamDoesNotRetryHTTP400(t *testing.T) {
 	h := handleWithResponse(Response{}, newHTTP(400, "bad request"))
 	p := &fakeProvider{handles: []*StreamHandle{h}}
-	_, _, err := requestStream(p, &runOptions{}, []Message{}, &atomic.Bool{}, &recordingSink{})
+	_, _, err := requestStream(p, &runOptions{}, []Message{}, &atomic.Bool{}, &recordingSink{}, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -196,7 +196,7 @@ func TestRequestStreamCancelInterruptsBackoff(t *testing.T) {
 	cancel.Store(true)
 	h := handleWithResponse(Response{}, newTransport("conn reset"))
 	p := &fakeProvider{handles: []*StreamHandle{h}}
-	_, _, err := requestStream(p, &runOptions{}, []Message{}, cancel, &recordingSink{})
+	_, _, err := requestStream(p, &runOptions{}, []Message{}, cancel, &recordingSink{}, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}

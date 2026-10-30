@@ -321,11 +321,9 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 	}
 	defer closeCatalog()
 	compactAt, contextWindow := resolveCompact(cfg, fc)
-	system := resolveSystem(cfg, tools, bot, cat, coreToolIDs(fc, cat), compactAt, contextWindow)
-	baseSystem := system
-	if state.Summary != "" {
-		system += summarySection(state.Summary)
-	}
+	stable, volatile := resolveSystemParts(cfg, tools, bot, cat, coreToolIDs(fc, cat), compactAt, contextWindow)
+	confirmed := append([]Message(nil), state.Messages...)
+	system := stable + summarySection(state.Summary) + volatile
 	base := cfg.base
 	model := cfg.model
 	userMessage := buildUserMessage(expandPromptCommand(strings.Join(prompt, " "), axRoot()), images)
@@ -342,6 +340,11 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 			Type: entryRunStart, RunID: runID, Prompt: userMessage.Text(),
 			Model: model, BaseURL: base, Tools: toolNames(tools),
 		}); err != nil {
+			_ = log.close()
+			closeCatalog()
+			eventFailure(err.Error())
+		}
+		if err := log.append(sessionEntry{Type: entryPrefix, RunID: runID, Prefix: stable + volatile}); err != nil {
 			_ = log.close()
 			closeCatalog()
 			eventFailure(err.Error())
@@ -371,10 +374,16 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 	if provider.MaxTokens == 0 {
 		provider.MaxTokens = fc.maxTokens
 	}
+	foldTools := contextWindow > 0
+	provider.FoldTools = &foldTools
 
 	sink := &eventSink{
 		log: log, runID: runID, model: model,
 		calls: map[string]ToolCall{},
+	}
+	strategy := kvcacheAppend
+	if foldTools {
+		strategy = kvcacheChained
 	}
 	var compact func(context.Context, []Message, bool) ([]Message, string, error)
 	if compactAt > 0 && contextWindow > 0 {
@@ -382,12 +391,17 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 		summarizer.SessionPath = cfg.session
 		thinking := false
 		summarizer.Thinking = &thinking
+		summarizer.FoldTools = &foldTools
 		summarizer.Effort = "none"
 		summarizer.MaxTokens = compactSummaryTokens
 		engine := &compactor{
 			provider: summarizer,
 			model:    model,
-			base:     baseSystem,
+			base:     stable,
+			volatile: volatile,
+			window:   contextWindow,
+			context:  estimateTokens(system, history),
+			tail:     clockSection(time.Now().UTC()),
 			summary:  state.Summary,
 			log:      log,
 			runID:    runID,
@@ -397,14 +411,20 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 		compact = engine.compact
 	}
 	end := runStream(context.Background(), provider, &runOptions{
-		model:         model,
-		system:        system,
-		tools:         tools,
-		maxTurns:      int(^uint(0) >> 1),
-		compactAt:     compactAt,
-		contextWindow: contextWindow,
-		compact:       compact,
-		steer:         steer,
+		model:           model,
+		system:          system,
+		stable:          stable,
+		summary:         state.Summary,
+		volatile:        volatile,
+		tools:           tools,
+		maxTurns:        int(^uint(0) >> 1),
+		compactAt:       compactAt,
+		contextWindow:   contextWindow,
+		estimateContext: estimateTokens(system, history),
+		compact:         compact,
+		steer:           steer,
+		strategy:        strategy,
+		confirmed:       confirmed,
 	}, history, &cancel, sink)
 
 	outcomeName := outcomeString(end.outcome)
@@ -447,6 +467,11 @@ func oneShotEvents(cfg cliConfig, fc fileConfig, bot *botCtx, prompt []string) {
 		closeCatalog()
 		os.Exit(1)
 	}
+}
+
+func contextWindowFor(cfg cliConfig, fc fileConfig) int {
+	_, window := resolveCompact(cfg, fc)
+	return window
 }
 
 func resolveCompact(cfg cliConfig, fc fileConfig) (float64, int) {
@@ -769,9 +794,6 @@ func runtimeSection(rt runtimeInfo) string {
 		if rt.ContextWindow > 0 {
 			fmt.Fprintf(&out, "; context %d tokens", rt.ContextWindow)
 		}
-		if rt.CompactAt > 0 {
-			fmt.Fprintf(&out, " (compact at %.0f%%)", rt.CompactAt*100)
-		}
 		if rt.ToolMode != "" {
 			fmt.Fprintf(&out, "; tools: %s", rt.ToolMode)
 		}
@@ -783,33 +805,36 @@ func runtimeSection(rt runtimeInfo) string {
 	if rt.Module != "" {
 		fmt.Fprintf(&out, "Source module: %s (checkout: the repo in bot.toml [boti.serve], if set).\n", rt.Module)
 	}
-	now := rt.Now
-	if now.IsZero() {
-		now = time.Now()
-	}
-	fmt.Fprintf(&out, "Time: %s. Use tools to check live state before guessing.\n", now.UTC().Format(time.RFC3339))
 	return out.String()
 }
 
+func clockSection(now time.Time) string {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return fmt.Sprintf("Time: %s. Use tools to check live state before guessing.\n", now.UTC().Format(time.RFC3339))
+}
+
 func resolveSystem(cfg cliConfig, tools []Tool, bot *botCtx, cat *catalog.Catalog, core []string, compactAt float64, contextWindow int) string {
+	stable, volatile := resolveSystemParts(cfg, tools, bot, cat, core, compactAt, contextWindow)
+	return stable + volatile
+}
+
+func resolveSystemParts(cfg cliConfig, tools []Tool, bot *botCtx, cat *catalog.Catalog, core []string, compactAt float64, contextWindow int) (string, string) {
 	if cfg.system != "" {
-		return cfg.system
+		return cfg.system, ""
 	}
 	rt := newRuntimeInfo(cfg, bot, compactAt, contextWindow)
+	var stable string
 	if cat != nil {
-		return buildCatalogSystemPrompt(bot.Workspace, bot, cat, core, rt)
+		stable = buildCatalogSystemPrompt(bot.Workspace, bot, cat, core)
+	} else {
+		stable = buildSystemPrompt(tools, bot.Workspace, bot)
 	}
-	return buildSystemPrompt(tools, bot.Workspace, bot, rt)
+	return stable, clockSection(rt.Now)
 }
 
-func runtimeOrEnv(rt []runtimeInfo, bot *botCtx) runtimeInfo {
-	if len(rt) > 0 {
-		return rt[0]
-	}
-	return newRuntimeInfo(cliConfig{}, bot, defaultCompactAt, defaultContextWindow)
-}
-
-func buildCatalogSystemPrompt(dir string, bot *botCtx, cat *catalog.Catalog, core []string, rt ...runtimeInfo) string {
+func buildCatalogSystemPrompt(dir string, bot *botCtx, cat *catalog.Catalog, core []string) string {
 	var out strings.Builder
 	out.WriteString("You are an expert assistant operating inside ax. Use tools to find facts; do not guess.\n\n")
 	fmt.Fprintf(&out, "Current working directory: %s\n", dir)
@@ -838,7 +863,6 @@ func buildCatalogSystemPrompt(dir string, bot *botCtx, cat *catalog.Catalog, cor
 		out.WriteString("\n\n## Channel instructions\n")
 		out.WriteString(ci)
 	}
-	out.WriteString(runtimeSection(runtimeOrEnv(rt, bot)))
 	return out.String()
 }
 
@@ -853,7 +877,7 @@ func coreEditTool(core []string, cat *catalog.Catalog) string {
 	return ""
 }
 
-func buildSystemPrompt(tools []Tool, dir string, bot *botCtx, rt ...runtimeInfo) string {
+func buildSystemPrompt(tools []Tool, dir string, bot *botCtx) string {
 	var out strings.Builder
 	out.WriteString("You are an expert assistant operating inside ax.\n\nAvailable tools:\n")
 	for _, tool := range tools {
@@ -881,7 +905,6 @@ func buildSystemPrompt(tools []Tool, dir string, bot *botCtx, rt ...runtimeInfo)
 		out.WriteString("\n\n## Channel instructions\n")
 		out.WriteString(ci)
 	}
-	out.WriteString(runtimeSection(runtimeOrEnv(rt, bot)))
 	return out.String()
 }
 

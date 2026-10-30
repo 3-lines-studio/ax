@@ -96,11 +96,18 @@ type runOptions struct {
 	tools    []Tool
 	maxTurns int
 
-	compactAt     float64
-	contextWindow int
-	compact       func(ctx context.Context, history []Message, midRun bool) ([]Message, string, error)
+	stable   string
+	summary  string
+	volatile string
 
-	steer <-chan string
+	compactAt       float64
+	contextWindow   int
+	estimateContext int
+	compact         func(ctx context.Context, history []Message, midRun bool) ([]Message, string, error)
+
+	steer     <-chan string
+	strategy  kvcacheStrategy
+	confirmed []Message
 }
 
 type outcome int

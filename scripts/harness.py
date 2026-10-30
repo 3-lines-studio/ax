@@ -448,8 +448,10 @@ def case(fn):
     CASES.append(fn)
     return fn
 
+# ax declares its tools in the system prompt and opens sessions with a one-token
+# priming request, so the turn n request is request[2*n].
 def body_msg(server, i, role):
-    return [m for m in server.requests[i]["json"]["messages"] if m["role"] == role]
+    return [m for m in server.requests[2 * i]["json"]["messages"] if m["role"] == role]
 
 def read_events(p):
     return [json.loads(line) for line in p.stdout.splitlines()]
@@ -486,7 +488,7 @@ def oneshot_prints_answer(h, ax):
         check(events[-1] == {"type": "done", "outcome": "done"}, "bad final event")
         content = [m["Content"] for m in last_result(events)["messages"] if m["Role"] == "assistant"]
         check(any("Done" in c for c in content), "assistant result missing: %s" % content)
-        check(len(srv.requests) == 1, "expected 1 request, got %d" % len(srv.requests))
+        check(len(srv.requests) == 2, "expected 2 requests, got %d" % len(srv.requests))
         check(body_msg(srv, 0, "user")[-1]["content"] == "hello", "prompt not sent")
         check(
             srv.requests[0]["headers"].get("Authorization") == "Bearer sk-test",
@@ -543,7 +545,7 @@ def oneshot_tool_loop(h, ax):
         )
         content = [m["Content"] for m in last_result(events)["messages"] if m["Role"] == "assistant"]
         check(any("Done" in c for c in content), "assistant result missing: %s" % content)
-        check(len(srv.requests) == 2, "expected 2 requests, got %d" % len(srv.requests))
+        check(len(srv.requests) == 4, "expected 4 requests, got %d" % len(srv.requests))
         tool_msgs = body_msg(srv, 1, "tool")
         check(
             any("hello" in m.get("content", "") for m in tool_msgs),
@@ -585,11 +587,20 @@ def oneshot_direct_tools(h, ax):
     with h.mock(DIRECT_SCENARIO) as srv:
         p = h.oneshot(
             ax,
-            ["-tool-mode", "direct", "write directly"],
+            ["-tool-mode", "direct", "--events", "write directly"],
             base=srv.base_url,
             extra_env={"AX_TOOLS": str(bash_provider(h))},
         )
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
+        events = read_events(p)
+        check(
+            any(e.get("type") == "tool_start" and e.get("name") == "bash" for e in events),
+            "no tool_start for the direct tool: %s" % [e.get("type") for e in events],
+        )
+        check(
+            any(e.get("type") == "tool_result" and "direct" in (e.get("output") or "") for e in events),
+            "direct tool result missing",
+        )
         check((h.work / "direct.txt").read_text() == "direct", "direct tool did not run")
 
 @case
@@ -673,7 +684,7 @@ def oneshot_connection_id_reaches_the_model(h, ax):
     with h.mock(CONNECTION_SCENARIO) as srv:
         p = h.oneshot(ax, ["--events", "run something"], base=srv.base_url)
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
-        body = json.dumps(srv.requests[0]["json"]["messages"])
+        body = json.dumps(body_msg(srv, 0, "system"))
         check("Catalog servers: shell (1)" in body, "connection missing from the prompt: %s" % body[:1000])
         tool_msgs = body_msg(srv, 1, "tool")
         check(
@@ -749,7 +760,7 @@ def oneshot_steering(h, ax):
             any(e.get("type") == "steer" and "tests" in e.get("text", "") for e in events),
             "no steer event: %s" % [e.get("type") for e in events],
         )
-        users = [m["content"] for m in body_msg(srv, 1, "user")]
+        users = [m["content"] for m in body_msg(srv, 2, "user")]
         check(users == ["use tools", "also mention the tests"], "user turns = %s" % users)
         check(events[-1] == {"type": "done", "outcome": "done"}, "bad final event")
     entries = [json.loads(line) for line in session.read_text().splitlines() if line.strip()]
@@ -775,7 +786,7 @@ def oneshot_resume(h, ax):
         check(len(resumed) == 1, "no resume event: %s" % [e.get("type") for e in events])
         check(resumed[0]["run"] == "r1", "resume run = %s" % resumed[0])
         check(resumed[0]["interrupted"] == ["bashprovider.bash"], "resume interrupted = %s" % resumed[0])
-        users = [m["content"] for m in body_msg(srv, 0, "user")]
+        users = [m["content"] for m in body_msg(srv, 1, "user")]
         check(len(users) == 2, "user turns = %s" % users)
         check("Resume the interrupted run" in users[-1], "no resume turn: %s" % users[-1])
         check("bashprovider.bash" in users[-1], "interrupted target missing: %s" % users[-1])
@@ -877,7 +888,7 @@ def oneshot_auto_compaction(h, ax):
             any("Summary of the earlier conversation" in s for s in systems),
             "summary missing from the system prompt",
         )
-        check(len(srv.requests) == 3, "expected 3 requests, got %d" % len(srv.requests))
+        check(len(srv.requests) == 6, "expected 6 requests, got %d" % len(srv.requests))
     entries = [json.loads(line) for line in session.read_text().splitlines() if line.strip()]
     check(
         any(e.get("type") == "compaction" and e.get("upto") for e in entries),
@@ -943,9 +954,17 @@ def oneshot_retry(h, ax):
     with h.mock(scenario) as srv:
         p = h.oneshot(ax, ["hi"], base=srv.base_url)
         check(p.returncode == 0, "exit %s: %s" % (p.returncode, p.stderr[-500:]))
-        check(len(srv.requests) == 3, "expected 3 requests, got %d" % len(srv.requests))
+        check(len(srv.requests) == 4, "expected 4 requests, got %d" % len(srv.requests))
         statuses = [r["headers"].get("Content-Length") for r in srv.requests]
         check(statuses, "requests recorded without bodies")
+        retried = srv.requests[3]["json"]["messages"]
+        first = srv.requests[1]["json"]["messages"]
+        check(
+            [m["content"] for m in retried[: len(first) - 1]] == [m["content"] for m in first[: len(first) - 1]],
+            "the retry rewrote the cached prefix: %s" % retried,
+        )
+        check(len(retried) == len(first) + 1 and "previous attempt failed" in retried[-1]["content"],
+              "the retry must append its note: %s" % retried)
 
 @case
 def oneshot_retry_exhausted(h, ax):
@@ -956,7 +975,7 @@ def oneshot_retry_exhausted(h, ax):
         events = read_events(p)
         err = [e for e in events if e.get("type") == "error"][-1]
         check("429" in err["message"] and "rate limited" in err["message"], "error event: %s" % err)
-        check(len(srv.requests) == 3, "expected 3 attempts, got %d" % len(srv.requests))
+        check(len(srv.requests) == 4, "expected 4 attempts, got %d" % len(srv.requests))
 
 @case
 def oneshot_provider_down(h, ax):
