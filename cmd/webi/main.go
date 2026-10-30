@@ -170,6 +170,7 @@ func readSession(path string) ([]map[string]any, error) {
 			Upto    int             `json:"upto"`
 			At      int64           `json:"at,omitempty"`
 			Resume  bool            `json:"resume,omitempty"`
+			Output  string          `json:"output,omitempty"`
 			Usage   *struct {
 				Input        int    `json:"input"`
 				Output       int    `json:"output"`
@@ -221,6 +222,17 @@ func readSession(path string) ([]map[string]any, error) {
 					"model":               entry.Usage.Model,
 				},
 				"ts": eventTime(entry.At),
+			})
+		case "tool_result":
+			spec, ok := parseArtifactOutput(entry.Output)
+			if !ok {
+				continue
+			}
+			events = append(events, map[string]any{
+				"t": "artifacts", "ts": eventTime(entry.At),
+				"artifacts": []map[string]any{{
+					"id": spec.ID, "name": spec.Name, "media_type": spec.MediaType, "size": spec.Size,
+				}},
 			})
 		case "compaction":
 			events = append(events, map[string]any{"t": "compaction", "upto": entry.Upto, "ts": eventTime(entry.At)})

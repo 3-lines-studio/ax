@@ -10,6 +10,7 @@ func TestRunEnvCarriesTheRunContext(t *testing.T) {
 		Thread{ID: "t1", Title: "hola"},
 		Channel{ID: "c1", Name: "general", Workdir: "/w", Prompt: "be brief"},
 		"  Don  ",
+		"/state/threads/t1/artifacts",
 	)
 	got := map[string]string{}
 	for _, entry := range env {
@@ -23,6 +24,7 @@ func TestRunEnvCarriesTheRunContext(t *testing.T) {
 		"AX_WEB_CHANNEL_NAME": "general",
 		"AX_WEB_USER":         "Don",
 		"AX_WEB_PROMPT":       "be brief",
+		"AX_ARTIFACT_DIR":     "/state/threads/t1/artifacts",
 		"BOT_DATA":            "/w",
 	}
 	for key, value := range want {
@@ -33,10 +35,11 @@ func TestRunEnvCarriesTheRunContext(t *testing.T) {
 }
 
 func TestRunEnvOmitsEmptyFields(t *testing.T) {
-	env := runEnv(Thread{ID: "t1"}, Channel{ID: "c1", Workdir: "/w"}, "")
+	env := runEnv(Thread{ID: "t1"}, Channel{ID: "c1", Workdir: "/w"}, "", "")
 	for _, entry := range env {
 		if strings.HasPrefix(entry, "AX_WEB_USER=") || strings.HasPrefix(entry, "AX_WEB_PROMPT=") ||
-			strings.HasPrefix(entry, "AX_WEB_THREAD_TITLE=") || strings.HasPrefix(entry, "AX_WEB_CHANNEL_NAME=") {
+			strings.HasPrefix(entry, "AX_WEB_THREAD_TITLE=") || strings.HasPrefix(entry, "AX_WEB_CHANNEL_NAME=") ||
+			strings.HasPrefix(entry, "AX_ARTIFACT_DIR=") {
 			t.Errorf("empty field leaked: %q", entry)
 		}
 	}
