@@ -53,16 +53,21 @@ func runCompactCommand(cfg cliConfig, fc fileConfig, bot *botCtx, args []string)
 	summarizer.Effort = "none"
 	summarizer.MaxTokens = compactSummaryTokens
 
+	provider := Summarizer{provider: summarizer, model: cfg.model, cancel: &atomic.Bool{}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	summary, err := summarizeTranscript(ctx, summarizer, cfg.model, state.Summary, state.Messages, &atomic.Bool{})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
-	}
 	upto := len(state.Messages)
 	if index := lastUserIndex(state.Messages); index > 0 {
 		upto = index
+	}
+	window := contextWindowFor(cfg, fc)
+	if window > 0 && estimateTokens("", state.Messages) > window {
+		window = estimateTokens("", state.Messages)
+	}
+	summary, err := provider.summarize(ctx, state.Messages[:upto], state.Summary, "", window)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
 	}
 	if !dryRun {
 		log, err := openSessionLog(path)

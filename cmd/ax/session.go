@@ -20,6 +20,7 @@ const (
 	entryToolIntent       = "tool_intent"
 	entryToolResult       = "tool_result"
 	entryCompaction       = "compaction"
+	entryPrefix           = "prefix"
 )
 
 const interruptedToolOutput = "error: tool call interrupted: the result was never recorded and its side effects are unknown."
@@ -45,6 +46,7 @@ type sessionEntry struct {
 
 	Upto    int      `json:"upto,omitempty"`
 	Summary string   `json:"summary,omitempty"`
+	Prefix  string   `json:"prefix,omitempty"`
 	Model   string   `json:"model,omitempty"`
 	BaseURL string   `json:"base_url,omitempty"`
 	Tools   []string `json:"tools,omitempty"`
@@ -64,6 +66,7 @@ type usageInfo struct {
 type sessionState struct {
 	Messages    []Message
 	Summary     string
+	Prefix      string
 	OpenRun     bool
 	LastRunID   string
 	LastPartial *Message
@@ -166,6 +169,8 @@ func deriveSession(entries []sessionEntry) sessionState {
 				state.Messages = state.Messages[1:]
 			}
 			state.Summary = entry.Summary
+		case entryPrefix:
+			state.Prefix = entry.Prefix
 		case entryRunStart:
 			state.OpenRun = true
 			state.LastRunID = entry.RunID

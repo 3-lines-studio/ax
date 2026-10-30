@@ -26,6 +26,7 @@ type OpenAI struct {
 	Thinking    *bool
 	Effort      string
 	MaxTokens   int
+	FoldTools   *bool
 }
 
 func NewOpenAI(baseURL, apiKey string) OpenAI {
@@ -46,6 +47,44 @@ type resultPair struct {
 func (o OpenAI) deepSeek(model string) bool {
 	base := strings.ToLower(o.BaseURL)
 	return strings.Contains(base, "deepseek") || strings.HasPrefix(strings.ToLower(model), "deepseek")
+}
+
+func (o OpenAI) foldTools() bool {
+	return o.FoldTools != nil && *o.FoldTools
+}
+
+func renderToolDeclarations(tools []Tool) string {
+	var out strings.Builder
+	out.WriteString("\n\n## Tools in this run\n")
+	out.WriteString("Call each tool through execute({\"tool\":\"<id>\",\"arguments\":{...}}), because this run declares no tools of its own.\n")
+	for _, t := range tools {
+		fmt.Fprintf(&out, "\n### %s\n", t.Name)
+		out.WriteString(t.Description)
+		out.WriteString("\nParameters: ")
+		params := t.Parameters
+		if len(params) == 0 {
+			params = []byte(`{"type":"object"}`)
+		}
+		out.Write(params)
+		out.WriteString("\n")
+	}
+	return out.String()
+}
+
+func foldTools(msgs []oaMessage, tools []Tool) []oaMessage {
+	declarations := renderToolDeclarations(tools)
+	index := -1
+	for i, msg := range msgs {
+		if msg.Role == "system" {
+			index = i
+		}
+	}
+	if index < 0 {
+		return append([]oaMessage{{Role: "system", Content: declarations}}, msgs...)
+	}
+	content, _ := msgs[index].Content.(string)
+	msgs[index].Content = content + declarations
+	return msgs
 }
 
 func (o OpenAI) thinkingFor(model string) (enabled, explicit bool) {
@@ -100,6 +139,10 @@ func (o OpenAI) buildRequest(req *Request, stream bool) (builtRequest, error) {
 		tools = append(tools, oaTool{Type: "function", Function: oaToolFunction{
 			Name: t.Name, Description: t.Description, Parameters: t.Parameters,
 		}})
+	}
+	if o.foldTools() && len(req.Tools) > 0 {
+		msgs = foldTools(msgs, req.Tools)
+		tools = nil
 	}
 	request := oaRequest{Model: req.Model, Messages: msgs, Tools: tools, Stream: stream}
 	if stream {

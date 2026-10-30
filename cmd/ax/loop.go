@@ -12,42 +12,47 @@ import (
 
 const maxRetries = 2
 
+const retryNote = "The previous attempt failed before producing any output. Continue as if it had not happened."
+
 func runStream(ctx context.Context, provider Provider, opts *runOptions, msgs []Message, cancel *atomic.Bool, sink runSink) runEnd {
 	history := append([]Message(nil), msgs...)
 	usage := Usage{}
-	lastPrompt := 0
-	compactedAt := -1
+	cache := newKvcache(opts)
+	contextTokens := estimateTokens(opts.system, history)
+	if opts.estimateContext > 0 {
+		contextTokens = opts.estimateContext
+	}
 	for turn := 0; turn < opts.maxTurns; turn++ {
 		if cancel.Load() {
 			return runEnd{messages: history, usage: usage, outcome: outcomeCancelled}
 		}
 		history = drainSteering(opts.steer, history, sink)
-		if opts.compact != nil && len(history) > compactedAt {
-			if threshold := compactThreshold(opts.compactAt, opts.contextWindow); threshold > 0 &&
-				(lastPrompt > threshold || estimateTokens(opts.system, history) > threshold) {
+		if opts.compact != nil {
+			if threshold := compactThreshold(opts.compactAt, opts.contextWindow); threshold > 0 && contextTokens > threshold {
 				next, system, err := opts.compact(ctx, history, turn > 0)
 				if err != nil {
 					return runEnd{messages: history, usage: usage, outcome: outcomeFailed, failMsg: err.Error()}
 				}
 				history, opts.system = next, system
-				lastPrompt = 0
-				compactedAt = len(history)
+				contextTokens = estimateTokens(opts.system, history)
+				cache.compacted()
 			}
 		}
-		resp, calls, err := requestStream(provider, opts, history, cancel, sink)
+		resp, calls, err := requestStream(provider, opts, history, cancel, sink, cache)
 		if err != nil {
 			if cancel.Load() {
 				return runEnd{messages: history, usage: usage, outcome: outcomeCancelled}
 			}
 			return runEnd{messages: history, usage: usage, outcome: outcomeFailed, failMsg: err.Error()}
 		}
-		lastPrompt = resp.Usage.Input + resp.Usage.Output
+		contextTokens = resp.Usage.Input + resp.Usage.Output
 		usage = Usage{
 			Input:       usage.Input + resp.Usage.Input,
 			Output:      usage.Output + resp.Usage.Output,
 			CachedInput: usage.CachedInput + resp.Usage.CachedInput,
 		}
 		history = append(history, resp.Message)
+		cache.sent()
 		sink.assistant(turn, history[len(history)-1], resp.Usage)
 		sink.assistantDone()
 		if len(calls) == 0 {
@@ -92,32 +97,59 @@ func drainSteering(steer <-chan string, history []Message, sink runSink) []Messa
 	}
 }
 
-func requestStream(provider Provider, opts *runOptions, history []Message, cancel *atomic.Bool, sink runSink) (Response, []ToolCall, error) {
-	req := &Request{Model: opts.model, System: opts.system, Messages: history, Tools: opts.tools}
+func streamOnce(provider Provider, req *Request, cancel *atomic.Bool, sink runSink) (Response, []ToolCall, int, error) {
+	handle := provider.stream(req, cancel)
+	var calls []ToolCall
+	forwarded := 0
+	for ev := range handle.Events() {
+		switch ev.Kind {
+		case eventContent:
+			forwarded++
+			if sink != nil {
+				sink.assistantDelta(ev.Text)
+			}
+		case eventReasoning:
+			forwarded++
+			if sink != nil {
+				sink.reasoningDelta(ev.Reasoning)
+			}
+		case eventToolCall:
+			forwarded++
+			if ev.Call != nil {
+				calls = append(calls, *ev.Call)
+			}
+		case eventTokens:
+			if sink != nil {
+				sink.tokens(ev.Usage.Input, ev.Usage.Output, ev.Usage.CachedInput)
+			}
+		case eventDone:
+		}
+	}
+	resp, err := handle.Join()
+	return resp, calls, forwarded, err
+}
+
+func sendTurn(provider Provider, opts *runOptions, history []Message, tail string, cancel *atomic.Bool, sink runSink, cache *kvcacheState) (Response, []ToolCall, int, error) {
+	if cache.needsPrime(opts) {
+		if _, _, _, err := streamOnce(provider, cache.primeRequest(opts, history), cancel, nil); err != nil {
+			return Response{}, nil, 0, err
+		}
+	}
+	return streamOnce(provider, cache.request(opts, history, tail), cancel, sink)
+}
+
+func requestStream(provider Provider, opts *runOptions, history []Message, cancel *atomic.Bool, sink runSink, cache *kvcacheState) (Response, []ToolCall, error) {
+	if cache == nil {
+		cache = newKvcache(opts)
+	}
 	attempt := 0
 	for {
-		handle := provider.stream(req, cancel)
-		var calls []ToolCall
-		forwarded := 0
-		for ev := range handle.Events() {
-			switch ev.Kind {
-			case eventContent:
-				forwarded++
-				sink.assistantDelta(ev.Text)
-			case eventReasoning:
-				forwarded++
-				sink.reasoningDelta(ev.Reasoning)
-			case eventToolCall:
-				forwarded++
-				if ev.Call != nil {
-					calls = append(calls, *ev.Call)
-				}
-			case eventTokens:
-				sink.tokens(ev.Usage.Input, ev.Usage.Output, ev.Usage.CachedInput)
-			case eventDone:
-			}
+		tail := ""
+		if attempt > 0 {
+			tail = retryNote
 		}
-		resp, err := handle.Join()
+		cache.observe(opts, history)
+		resp, calls, forwarded, err := sendTurn(provider, opts, history, tail, cancel, sink, cache)
 		if err == nil {
 			switch resp.StopReason {
 			case "insufficient_system_resource", "aborted":

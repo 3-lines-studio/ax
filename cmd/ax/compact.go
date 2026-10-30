@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -14,8 +16,11 @@ import (
 const (
 	compactSummaryTokens   = 8000
 	compactTranscriptMax   = 700_000
+	compactWindowMargin    = 50
 	compactTranscriptHead  = 150_000
-	compactToolResultChars = 2000
+	compactToolResultChars = 4000
+	compactOmitToolChars   = 2000
+	compactEstimateDivisor = 4
 
 	defaultCompactAt     = 0.5
 	defaultContextWindow = 1_000_000
@@ -23,20 +28,111 @@ const (
 
 const continueNote = "Continue the task. The earlier conversation was compacted into the summary in the system prompt; that summary is accurate. Do not repeat work that is already done."
 
-const compactSystemPrompt = `You compress conversations between a user and an AI coding assistant into a faithful working summary. The summary replaces the original transcript in the assistant's context, so it must preserve everything needed to continue the work without re-reading the conversation.`
+const compactSystemPrompt = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
 
-func compactUserPrompt(transcript string) string {
-	return `Summarize the following conversation for an AI coding assistant that must continue the work afterwards.
+Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`
 
-Rules:
-- Write factual, dense prose in sections: Goal, Decisions, Changes made (with file paths), Current state, Open tasks, Important commands, Facts and preferences stated by the user.
-- Keep exact file paths, command lines, error messages and identifiers that matter.
-- Do not invent anything. Do not include tool-call transcripts verbatim; compress them into findings.
-- Keep it under 3000 words.
+const compactSummaryPrompt = `<conversation>
+`
 
-CONVERSATION:
-` + transcript
-}
+const compactSummaryFormat = `
+</conversation>
+
+Create a structured context checkpoint summary that another LLM will use to continue the work.
+
+Use this EXACT format:
+
+## Goal
+[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
+
+## Constraints & Preferences
+- [Any constraints, preferences, or requirements mentioned by user]
+- [Or "(none)" if none were mentioned]
+
+## Progress
+### Done
+- [x] [Completed tasks/changes]
+
+### In Progress
+- [ ] [Current work]
+
+### Blocked
+- [Issues preventing progress, if any]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale]
+
+## Next Steps
+1. [Ordered list of what should happen next]
+
+## Critical Context
+- [Any data, examples, or references needed to continue]
+- [Or "(none)" if not applicable]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages.`
+
+const compactUpdateFormat = `
+</conversation>
+
+<previous-summary>
+`
+
+const compactUpdateRules = `
+</previous-summary>
+
+The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
+
+Update the existing structured summary with new information. RULES:
+- PRESERVE all existing information from the previous summary
+- ADD new progress, decisions, and context from the new messages
+- UPDATE the Progress section: move items from "In Progress" to "Done" when completed
+- UPDATE "Next Steps" based on what was accomplished
+- PRESERVE exact file paths, function names, and error messages
+- If something is no longer relevant, you may remove it
+
+Use this EXACT format:
+
+## Goal
+[Preserve existing goals, add new ones if the task expanded]
+
+## Constraints & Preferences
+- [Preserve existing, add new ones discovered]
+
+## Progress
+### Done
+- [x] [Include previously done items AND newly completed items]
+
+### In Progress
+- [ ] [Current work - update based on progress]
+
+### Blocked
+- [Current blockers - remove if resolved]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale] (preserve all previous, add new)
+
+## Next Steps
+1. [Update based on current state]
+
+## Critical Context
+- [Preserve important context, add new if needed]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages.`
+
+const compactTurnPrefixPrompt = `The messages above are earlier context from an ongoing conversation. Later messages are stored separately and do not need to be reconstructed.
+
+Create a concise checkpoint of the user's request and the progress shown above. This checkpoint will be placed before the later messages so the conversation can continue with the necessary context.
+
+## Original Request
+[What did the user ask for?]
+
+## Progress So Far
+- [Key decisions and work completed in these messages]
+
+## Context Needed to Continue
+- [Information from these messages needed to understand the later work]
+
+Only summarize information explicitly present above. Do not infer or recreate later messages.`
 
 func summarySection(summary string) string {
 	summary = strings.TrimSpace(summary)
@@ -66,73 +162,228 @@ func estimateTokens(system string, msgs []Message) int {
 			}
 			chars += len(part.Text)
 		}
-		chars += len(msg.Content) + 16
+		chars += len(msg.Content) + len(msg.ReasoningContent) + 16
 		for _, call := range msg.ToolCalls {
 			chars += len(call.Name) + len(call.Arguments) + 16
 		}
 	}
-	return chars/3 + images*1024
+	return chars/compactEstimateDivisor + images*1024
 }
 
-func renderTranscript(summary string, msgs []Message) string {
-	var out strings.Builder
-	if summary = strings.TrimSpace(summary); summary != "" {
-		out.WriteString("SUMMARY OF EVEN EARLIER CONVERSATION:\n")
-		out.WriteString(summary)
-		out.WriteString("\n\n")
+func compactMessageText(msg Message) string {
+	if text := msg.Text(); text != "" {
+		return text
 	}
-	for _, msg := range msgs {
-		switch msg.Role {
-		case "system":
+	return msg.Content
+}
+
+const compactFileToolPrefixes = "read,edit,read_file,write,write_file,edit_file,patch,apply_patch,multiedit,str_replace"
+
+func compactToolPaths(call ToolCall) (path string, write bool) {
+	var args struct {
+		Path     string `json:"path"`
+		File     string `json:"file_path"`
+		Filename string `json:"filename"`
+		Filepath string `json:"filepath"`
+	}
+	if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
+		return "", false
+	}
+	path = firstNonEmpty(args.Path, args.File, args.Filename, args.Filepath)
+	if path == "" {
+		return "", false
+	}
+	prefixes := strings.Split(compactFileToolPrefixes, ",")
+	last := call.Name
+	if index := strings.LastIndex(last, "."); index >= 0 {
+		last = last[index+1:]
+	}
+	for _, prefix := range prefixes {
+		if !strings.HasPrefix(last, prefix) {
 			continue
-		case "user":
-			out.WriteString("USER: ")
-			out.WriteString(msg.Text())
-			out.WriteString("\n\n")
-		case "assistant":
-			if text := strings.TrimSpace(msg.Text()); text != "" {
-				out.WriteString("ASSISTANT: ")
-				out.WriteString(text)
-				out.WriteString("\n\n")
+		}
+		for _, writer := range []string{"write", "edit", "patch", "apply", "str_replace"} {
+			if strings.HasPrefix(last, writer) {
+				return path, true
 			}
-			for _, call := range msg.ToolCalls {
-				out.WriteString("TOOL CALL ")
-				out.WriteString(call.Name)
-				out.WriteString("(")
-				out.WriteString(truncateText(call.Arguments, 400))
-				out.WriteString(")\n")
+		}
+		return path, false
+	}
+	return "", false
+}
+
+func compactFileLists(msgs []Message) (read []string, modified []string) {
+	reads := map[string]bool{}
+	writes := map[string]bool{}
+	for _, msg := range msgs {
+		for _, call := range msg.ToolCalls {
+			path, write := compactToolPaths(call)
+			if path == "" {
+				continue
 			}
-		case "tool":
-			out.WriteString("TOOL RESULT: ")
-			out.WriteString(truncateText(msg.Content, compactToolResultChars))
-			out.WriteString("\n\n")
+			if write {
+				writes[path] = true
+			} else {
+				reads[path] = true
+			}
 		}
 	}
-	return out.String()
+	for path := range writes {
+		delete(reads, path)
+	}
+	for path := range reads {
+		read = append(read, path)
+	}
+	for path := range writes {
+		modified = append(modified, path)
+	}
+	sort.Strings(read)
+	sort.Strings(modified)
+	return read, modified
+}
+
+func compactFilesSection(read, modified []string) string {
+	var sections []string
+	if len(read) > 0 {
+		sections = append(sections, "<read-files>\n"+strings.Join(read, "\n")+"\n</read-files>")
+	}
+	if len(modified) > 0 {
+		sections = append(sections, "<modified-files>\n"+strings.Join(modified, "\n")+"\n</modified-files>")
+	}
+	if len(sections) == 0 {
+		return ""
+	}
+	return "\n\n" + strings.Join(sections, "\n\n")
+}
+
+func renderTranscript(msgs []Message) string {
+	var parts []string
+	for _, msg := range msgs {
+		switch msg.Role {
+		case "user":
+			if text := compactMessageText(msg); text != "" {
+				parts = append(parts, "[User]: "+text)
+			}
+		case "assistant":
+			if text := strings.TrimSpace(msg.Text()); text != "" {
+				parts = append(parts, "[Assistant]: "+text)
+			}
+			if len(msg.ToolCalls) > 0 {
+				calls := make([]string, 0, len(msg.ToolCalls))
+				for _, call := range msg.ToolCalls {
+					calls = append(calls, call.Name+"("+call.Arguments+")")
+				}
+				parts = append(parts, "[Assistant tool calls]: "+truncateText(strings.Join(calls, "; "), compactToolResultChars))
+			}
+		case "tool":
+			if content := strings.TrimSpace(msg.Content); content != "" {
+				parts = append(parts, "[Tool result]: "+truncateText(content, compactToolResultChars))
+			}
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func truncateText(value string, limit int) string {
-	runes := []rune(value)
-	if limit <= 0 || len(runes) <= limit {
+	if limit <= 0 || len(value) <= limit {
 		return value
 	}
-	return string(runes[:limit]) + "…"
+	return value[:limit] + fmt.Sprintf("\n\n[... %d more characters truncated]", len(value)-limit)
 }
 
-func summarizeTranscript(ctx context.Context, provider Provider, model string, summary string, history []Message, cancel *atomic.Bool) (string, error) {
-	transcript := renderTranscript(summary, history)
-	if len(transcript) > compactTranscriptMax {
-		head := compactTranscriptHead
-		tail := compactTranscriptMax - head
-		transcript = transcript[:head] + "\n\n[... middle of the conversation omitted ...]\n\n" + transcript[len(transcript)-tail:]
+func compactPrompt(transcript, previous, tail string) string {
+	var out strings.Builder
+	out.WriteString(compactSummaryPrompt)
+	out.WriteString(transcript)
+	if previous = strings.TrimSpace(previous); previous != "" {
+		out.WriteString(compactUpdateFormat)
+		out.WriteString(previous)
+		out.WriteString(compactUpdateRules)
+	} else {
+		out.WriteString(compactSummaryFormat)
 	}
+	out.WriteString(tail)
+	return out.String()
+}
+
+func transcriptBudget(window int) int {
+	if window <= 0 {
+		return 0
+	}
+	budget := (window - compactWindowMargin - 2*compactSummaryTokens) * compactEstimateDivisor
+	if budget < compactTranscriptHead {
+		budget = compactTranscriptHead
+	}
+	return budget
+}
+
+func splitTranscript(transcript string, budget int) []string {
+	if budget <= 0 || len(transcript) <= budget {
+		return []string{transcript}
+	}
+	lines := strings.Split(transcript, "\n\n")
+	var chunks []string
+	var current strings.Builder
+	for _, line := range lines {
+		for len(line) > budget {
+			if current.Len() > 0 {
+				chunks = append(chunks, current.String())
+				current.Reset()
+			}
+			chunks = append(chunks, line[:budget])
+			line = line[budget:]
+		}
+		if len(line) == 0 {
+			continue
+		}
+		if current.Len() > 0 && current.Len()+len(line)+2 > budget {
+			chunks = append(chunks, current.String())
+			current.Reset()
+		}
+		if current.Len() > 0 {
+			current.WriteString("\n\n")
+		}
+		current.WriteString(line)
+	}
+	if current.Len() > 0 {
+		chunks = append(chunks, current.String())
+	}
+	if len(chunks) == 0 {
+		return []string{transcript}
+	}
+	return chunks
+}
+
+type Summarizer struct {
+	provider Provider
+	model    string
+	cancel   *atomic.Bool
+}
+
+func (s *Summarizer) summarize(ctx context.Context, msgs []Message, previous, tail string, window int) (string, error) {
+	if len(msgs) == 0 {
+		return previous, nil
+	}
+	chunks := splitTranscript(renderTranscript(msgs), transcriptBudget(window))
+	for _, chunk := range chunks {
+		text, err := s.request(ctx, compactPrompt(chunk, previous, tail))
+		if err != nil {
+			return "", err
+		}
+		previous = text
+	}
+	return previous, nil
+}
+
+func (s *Summarizer) request(ctx context.Context, prompt string) (string, error) {
+	cancel := s.cancel
 	if cancel == nil {
 		cancel = &atomic.Bool{}
 	}
-	handle := provider.stream(&Request{
-		Model:    model,
+	handle := s.provider.stream(&Request{
+		Model:    s.model,
 		System:   compactSystemPrompt,
-		Messages: []Message{{Role: "user", Content: compactUserPrompt(transcript)}},
+		Messages: []Message{{Role: "user", Content: prompt}},
 	}, cancel)
 	var content strings.Builder
 	for ev := range handle.Events() {
@@ -157,6 +408,10 @@ type compactor struct {
 	provider Provider
 	model    string
 	base     string
+	volatile string
+	window   int
+	context  int
+	tail     string
 	summary  string
 	log      *sessionLog
 	runID    string
@@ -167,19 +422,35 @@ type compactor struct {
 func (c *compactor) compact(ctx context.Context, history []Message, midRun bool) ([]Message, string, error) {
 	ctx, stop := context.WithTimeout(ctx, 5*time.Minute)
 	defer stop()
-	summary, err := summarizeTranscript(ctx, c.provider, c.model, c.summary, history, c.cancel)
+	window := c.window
+	if c.context > window {
+		window = c.context
+	}
+	upto := len(history)
+	kept := []Message{{Role: "user", Content: continueNote}}
+	if !midRun {
+		if index := lastUserIndex(history); index > 0 {
+			upto = index
+			kept = append([]Message(nil), history[index:]...)
+		}
+	}
+	summary, err := (&Summarizer{
+		provider: c.provider, model: c.model, cancel: c.cancel,
+	}).summarize(ctx, history[:upto], c.summary, c.tail, window)
 	if err != nil {
-		return nil, "", fmt.Errorf("context is over the compact_at threshold and compaction failed: %w", err)
+		note := fmt.Sprintf("Context compaction failed: %v. The full history is kept.", err)
+		if ctx.Err() != nil {
+			return append([]Message(nil), history...), c.unchanged(), nil
+		}
+		if c.log != nil {
+			if appendErr := c.log.append(sessionEntry{Type: entryMessage, RunID: c.runID, Message: &Message{Role: "user", Content: note}}); appendErr != nil {
+				return nil, "", appendErr
+			}
+		}
+		return append([]Message(nil), history...), c.unchanged(), nil
 	}
-	kept := history
-	upto := 0
-	if midRun {
-		kept = []Message{{Role: "user", Content: continueNote}}
-		upto = len(history)
-	} else if index := lastUserIndex(history); index > 0 {
-		kept = history[index:]
-		upto = index
-	}
+	read, modified := compactFileLists(history[:upto])
+	summary += compactFilesSection(read, modified)
 	if c.log != nil {
 		if err := c.log.append(sessionEntry{Type: entryCompaction, RunID: c.runID, Upto: upto, Summary: summary}); err != nil {
 			return nil, "", err
@@ -195,7 +466,15 @@ func (c *compactor) compact(ctx context.Context, history []Message, midRun bool)
 	if c.emit != nil {
 		c.emit(map[string]any{"type": axproto.TypeCompaction, "upto": upto, "summary": summary})
 	}
-	return append([]Message(nil), kept...), c.base + summarySection(summary), nil
+	return append([]Message(nil), kept...), c.system(summary), nil
+}
+
+func (c *compactor) system(summary string) string {
+	return c.base + summarySection(summary) + c.volatile
+}
+
+func (c *compactor) unchanged() string {
+	return c.base + summarySection(c.summary) + c.volatile
 }
 
 func lastUserIndex(msgs []Message) int {

@@ -101,11 +101,13 @@ func TestRunStreamCompactsBeforeTheFirstRequest(t *testing.T) {
 	provider := &scriptedProvider{reply: agentReply("answer")}
 	var calls []bool
 	opts := &runOptions{
-		model:         "m",
-		system:        strings.Repeat("s", 900),
-		maxTurns:      1,
-		compactAt:     0.5,
-		contextWindow: 100,
+		model:           "m",
+		system:          strings.Repeat("s", 900),
+		maxTurns:        1,
+		compactAt:       0.5,
+		contextWindow:   100,
+		estimateContext: 2000,
+		stable:          "condensed system",
 		compact: func(ctx context.Context, history []Message, midRun bool) ([]Message, string, error) {
 			calls = append(calls, midRun)
 			return []Message{{Role: "user", Content: "kept"}}, "condensed system", nil
@@ -200,7 +202,7 @@ func TestCompactorRecordsCutoffAndEvent(t *testing.T) {
 	if state.Summary != "WORKING SUMMARY" || len(state.Messages) != 1 || state.Messages[0].Content != "second" {
 		t.Fatalf("state = %+v", state)
 	}
-	if !strings.Contains(provider.requests[0].Messages[0].Content, "CONVERSATION:") {
+	if !strings.Contains(provider.requests[0].Messages[0].Content, "<conversation>") || !strings.Contains(provider.requests[0].Messages[0].Content, "[User]: first") {
 		t.Errorf("summarizer prompt = %q", provider.requests[0].Messages[0].Content)
 	}
 	if provider.requests[0].System != compactSystemPrompt {
@@ -302,7 +304,7 @@ func TestCompactCommandAppendsSummary(t *testing.T) {
 	if last.Type != entryCompaction || last.Upto != 2 || last.Summary != "COMPACTED" {
 		t.Fatalf("entry = %+v", last)
 	}
-	if !strings.Contains(body, "CONVERSATION:") || !strings.Contains(body, "first task") {
+	if !strings.Contains(body, "u003cconversation") || !strings.Contains(body, "first task") {
 		t.Errorf("summarizer request = %q", body)
 	}
 }
